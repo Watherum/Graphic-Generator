@@ -1,0 +1,51 @@
+
+#{Event Name} {Event Number} {Round} - {Player1 name} ({char1, char2, char3}) Vs {Player2 name} ({char1, char2, char3}) Smash Ultimate - SSBU
+
+Sample Event 1 Round 1 - Player 1 (Banjo & Kazooie) Vs Player 2 (Mega Man) Smash Ultimate - SSBU
+Sample Event 1 Round 2 - Player 1 (Bayonetta) Vs Player 2 (Meta Knight) Smash Ultimate - SSBU
+Sample Event 1 Round 3 - Player 1 (Bowser) Vs Player 2 (Mewtwo) Smash Ultimate - SSBU
+Sample Event 1 Round 4 - Player 1 (Bowser Jr) Vs Player 2 (Min Min) Smash Ultimate - SSBU
+Sample Event 1 Round 5 - Player 1 (Byleth) Vs Player 2 (Mr Game and Watch) Smash Ultimate - SSBU
+Sample Event 1 Round 6 - Player 1 (Captain Falcon) Vs Player 2 (Ness) Smash Ultimate - SSBU
+Sample Event 1 Round 7 - Player 1 (Chrom) Vs Player 2 (Olimar) Smash Ultimate - SSBU
+Sample Event 1 Round 8 - Player 1 (Cloud) Vs Player 2 (Pac-Man) Smash Ultimate - SSBU
+Sample Event 1 Round 9 - Player 1 (Corrin) Vs Player 2 (Palutena) Smash Ultimate - SSBU
+Sample Event 1 Round 10 - Player 1 (Daisy) Vs Player 2 (Peach) Smash Ultimate - SSBU
+Sample Event 1 Round 11 - Player 1 (Dark Pit) Vs Player 2 (Pichu) Smash Ultimate - SSBU
+Sample Event 1 Round 12 - Player 1 (Dark Samus) Vs Player 2 (Pikachu) Smash Ultimate - SSBU
+Sample Event 1 Round 13 - Player 1 (Diddy Kong) Vs Player 2 (Piranha Plant) Smash Ultimate - SSBU
+Sample Event 1 Round 14 - Player 1 (Donkey Kong) Vs Player 2 (Pit) Smash Ultimate - SSBU
+Sample Event 1 Round 15 - Player 1 (Hero) Vs Player 2 (Pokemon Trainer) Smash Ultimate - SSBU
+Sample Event 1 Round 16 - Player 1 (Dr Mario) Vs Player 2 (Richter) Smash Ultimate - SSBU
+Sample Event 1 Round 17 - Player 1 (Duck Hunt) Vs Player 2 (Ridley) Smash Ultimate - SSBU
+Sample Event 1 Round 18 - Player 1 (Falco) Vs Player 2 (ROB) Smash Ultimate - SSBU
+Sample Event 1 Round 19 - Player 1 (Fox) Vs Player 2 (Robin) Smash Ultimate - SSBU
+Sample Event 1 Round 21 - Player 1 (Ganondorf) Vs Player 2 (Rosalina and Luma) Smash Ultimate - SSBU
+Sample Event 1 Round 22 - Player 1 (Greninja) Vs Player 2 (Roy) Smash Ultimate - SSBU
+Sample Event 1 Round 23 - Player 1 (Ice Climbers) Vs Player 2 (Ryu) Smash Ultimate - SSBU
+Sample Event 1 Round 24 - Player 1 (Ike) Vs Player 2 (Samus) Smash Ultimate - SSBU
+Sample Event 1 Round 25 - Player 1 (Incineroar) Vs Player 2 (Sephiroth) Smash Ultimate - SSBU
+Sample Event 1 Round 26 - Player 1 (Inkling) Vs Player 2 (Sheik) Smash Ultimate - SSBU
+Sample Event 1 Round 27 - Player 1 (Isabelle) Vs Player 2 (Shulk) Smash Ultimate - SSBU
+Sample Event 1 Round 28 - Player 1 (Jigglypuff) Vs Player 2 (Simon) Smash Ultimate - SSBU
+Sample Event 1 Round 29 - Player 1 (Joker) Vs Player 2 (Snake) Smash Ultimate - SSBU
+Sample Event 1 Round 31 - Player 1 (Ken) Vs Player 2 (Sonic) Smash Ultimate - SSBU
+Sample Event 1 Round 32 - Player 1 (King Dedede) Vs Player 2 (Steve) Smash Ultimate - SSBU
+Sample Event 1 Round 33 - Player 1 (King K Rool) Vs Player 2 (Terry) Smash Ultimate - SSBU
+Sample Event 1 Round 34 - Player 1 (Kirby) Vs Player 2 (Toon Link) Smash Ultimate - SSBU
+Sample Event 1 Round 35 - Player 1 (Link) Vs Player 2 (Villager) Smash Ultimate - SSBU
+Sample Event 1 Round 36 - Player 1 (Little Mac) Vs Player 2 (Wario) Smash Ultimate - SSBU
+Sample Event 1 Round 37 - Player 1 (Lucario) Vs Player 2 (Wii Fit Trainer) Smash Ultimate - SSBU
+Sample Event 1 Round 38 - Player 1 (Lucas) Vs Player 2 (Wolf) Smash Ultimate - SSBU
+Sample Event 1 Round 39 - Player 1 (Lucina) Vs Player 2 (Yoshi) Smash Ultimate - SSBU
+Sample Event 1 Round 40 - Player 1 (Luigi) Vs Player 2 (Young Link) Smash Ultimate - SSBU
+Sample Event 1 Round 41 - Player 1 (Mario) Vs Player 2 (Zelda) Smash Ultimate - SSBU
+Sample Event 1 Round 42 - Player 1 (Marth) Vs Player 2 (Zero Suit Samus) Smash Ultimate - SSBU
+Sample Event 1 Round 43 - Player 1 (Mii Brawler) Vs Player 2 (Mii Gunner) Smash Ultimate - SSBU
+Sample Event 1 Round 44 - Player 1 (Mii Swordsman) Vs Player 2 (Pyra) Smash Ultimate - SSBU
+Sample Event 1 Round 45 - Player 1 (Bayonetta 2) Vs Player 2 (Byleth 2) Smash Ultimate - SSBU
+Sample Event 1 Round 46 - Player 1 (Cloud 2) Vs Player 2 (Corrin 2) Smash Ultimate - SSBU
+Sample Event 1 Round 47 - Player 1 (Hero 2) Vs Player 2 (Joker 7) Smash Ultimate - SSBU
+Sample Event 1 Round 48 - Player 1 (Hero 3) Vs Player 2 (Pokemon Trainer 2) Smash Ultimate - SSBU
+Sample Event 1 Round 49 - Player 1 (Hero 4) Vs Player 2 (Robin 2) Smash Ultimate - SSBU
+

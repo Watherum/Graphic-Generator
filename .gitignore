@@ -1,0 +1,26 @@
+.idea
+__pycache__
+venv
+Graphic Generator/Resources/Character_Renders_Source/Input_Folder
+Graphic Generator/Resources/Character_Renders_Source/Output_Folder
+Graphic Generator/Youtube_Thumbnails/*
+*.log
+*.zip
+build
+dist
+*.spec
+CLAUDE.md
+Melee Generator/Youtube_Thumbnails/*
+Rivals 2 Generator/Youtube_Thumbnails/*
+Ultimate Generator/Youtube_Thumbnails/*
+Melee Generator/Vod_Names/*
+Rivals 2 Generator/Vod_Names/*
+Ultimate Generator/Vod_Names/*
+Rivals 2 Generator/Resources/Fonts/HKModular-Bold.otf
+Rivals 2 Generator/Resources/Fonts/HKModular-BoldRounded.otf
+Rivals 2 Generator/Top_8_Infos/*
+Rivals 2 Generator/Top_8_Results/*
+Melee Generator/Top_8_Infos/*
+Melee Generator/Top_8_Results/*
+Ultimate Generator/Top_8_Infos/*
+Ultimate Generator/Top_8_Results/*
