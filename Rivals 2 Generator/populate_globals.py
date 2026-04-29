@@ -498,7 +498,7 @@ def setGlobalsIFN(weekly_event):
     properties['background_file'] = os.path.join("Resources", 'Overlays', 'Background_IFN.png')
     properties['foreground_file'] = os.path.join("Resources", 'Overlays', 'Foreground_IFN.png')
     # Center-point shift for canvas for characters
-    properties['center_shift_1'] = (-0.00, +0.25) # Universal character shift
+    properties['center_shift_1'] = (-0.00, +0.00) # Universal character shift
     # Center-point shift for canvas for characters
     properties['center_shift_2_1'] = (-0.00, +0.00)  # Two character shift
     properties['center_shift_2_2'] = (-0.32, +0.00)
