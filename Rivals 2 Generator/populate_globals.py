@@ -854,7 +854,7 @@ def setGlobalsAbyss_Top8():
     properties['char_offset4'] = (0.5, 0.18)  # Offset for 4
     properties['char_offset5'] = (0.1, 0.57)  # Offset for 5
     properties['char_offset6'] = (0.26, 0.57)  # Offset for 6
-    properties['char_offset7'] = (0.435, 0.57)  # Offset for 7
+    properties['char_offset7'] = (0.43, 0.57)  # Offset for 7
     properties['char_offset8'] = (0.6, 0.57)  # Offset for 8
     # Scale for the characters
     properties['char_scale1'] = (1.0, 1.0)  # Offset for 1
@@ -880,7 +880,7 @@ def setGlobalsAbyss_Top8():
     properties['font_player_size'] = 50
     properties['font_player_size1'] = 50
     properties['font_player_size2'] = 35
-    properties['font_player_size3'] = 55
+    properties['font_player_size3'] = 35
     properties['font_player_size4'] = 45
     properties['font_player_size5'] = 33
     properties['font_player_size6'] = 40
