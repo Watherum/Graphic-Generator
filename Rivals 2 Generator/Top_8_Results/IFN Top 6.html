@@ -61,22 +61,22 @@
 
     <div id="canvas" class="loading">
         <!-- Background first so it renders behind everything -->
-        <img src="../Resources/Top8_HTML/Immortal Fight Night/IFN Background.png" alt=""/>
-        <img src="../Resources/Top8_HTML/Immortal Fight Night/IFN Player Boxes.png" alt=""/>
+        <img src="../Resources/Top8_HTML/Immortal Fight Night Top 6/IFN Background.png" alt=""/>
+        <img src="../Resources/Top8_HTML/Immortal Fight Night Top 6/IFN Top 6 Player Boxes.png" alt=""/>
 
         <!-- Character renders (sit between the box layers and the text overlay) -->
         <img id="place-1-render" class="render" style="top: 32%;  left: 3%;    height: 55%;" alt=""/>
-        <img id="place-2-render" class="render" style="top: 27%;  left: 33%;   height: 37%;" alt=""/>
-        <img id="place-3-render" class="render" style="top: 27%;  left: 54%;   height: 37%;" alt=""/>
-        <img id="place-4-render" class="render" style="top: 27%;  left: 76%;   height: 37%;" alt=""/>
-        <img id="place-5-render" class="render" style="top: 65%;  left: 33%;   height: 26%;" alt=""/>
-        <img id="place-6-render" class="render" style="top: 65%;  left: 50%;   height: 26%;" alt=""/>
-        <img id="place-7-render" class="render" style="top: 65%;  left: 66%;   height: 26%;" alt=""/>
-        <img id="place-8-render" class="render" style="top: 65%;  left: 83%;   height: 26%;" alt=""/>
+        <img id="place-2-render" class="render" style="top: 26%;  left: 44%;   height: 37%;" alt=""/>
+        <img id="place-3-render" class="render" style="top: 27%;  left: 67%;   height: 37%;" alt=""/>
+        <img id="place-4-render" class="render" style="top: 62%;  left: 34%;   height: 34.5%;" alt=""/>
+        <img id="place-5-render" class="render" style="top: 62%;  left: 57%;   height: 34.5%;" alt=""/>
+        <img id="place-6-render" class="render" style="top: 62%;  left: 78%;   height: 34.5%;" alt=""/>
+        <!-- <img id="place-7-render" class="render" style="top: 65%;  left: 75%;   height: 26%;" alt=""/> -->
+        <!-- <img id="place-8-render" class="render" style="top: 65%;  left: 83%;   height: 26%;" alt=""/> -->
 
-        <img src="../Resources/Top8_HTML/Immortal Fight Night/IFN Text Boxes.png" alt=""/>
-        <img src="../Resources/Top8_HTML/Immortal Fight Night/IFN Number Boxes.png" alt=""/>
-        <img src="../Resources/Top8_HTML/Immortal Fight Night/IFN Logos.png" alt=""/>
+        <img src="../Resources/Top8_HTML/Immortal Fight Night Top 6/IFN Top 6 Text Boxes.png" alt=""/>
+        <img src="../Resources/Top8_HTML/Immortal Fight Night Top 6/IFN Top 6 Number Boxes.png" alt=""/>
+        <img src="../Resources/Top8_HTML/Immortal Fight Night Top 6/IFN Logos.png" alt=""/>
 
         <!-- Event info -->
         <span id="event-name"    class="label" style="top: 4%;    left: 50%;   font-size: 50px; color: yellow;"></span>
@@ -86,33 +86,33 @@
 
         <!-- Placement numbers -->
         <span id="place-1-num" class="label" style="top: 29.5%; left: 6.5%;    font-size: 100px;"></span>
-        <span id="place-2-num" class="label" style="top: 30.4%; left: 37%; font-size: 75px;"></span>
-        <span id="place-3-num" class="label" style="top: 30.4%; left: 58.9%; font-size: 75px;"></span>
-        <span id="place-4-num" class="label" style="top: 30.4%; left: 80.5%; font-size: 75px;"></span>
-        <span id="place-5-num" class="label" style="top: 67%;   left: 36.1%; font-size: 50px;"></span>
-        <span id="place-6-num" class="label" style="top: 67%;   left: 52.6%; font-size: 50px;"></span>
-        <span id="place-7-num" class="label" style="top: 67%;   left: 69.3%; font-size: 50px;"></span>
-        <span id="place-8-num" class="label" style="top: 67%;   left: 85.8%; font-size: 50px;"></span>
+        <span id="place-2-num" class="label" style="top: 29.5%; left: 48.2%; font-size: 75px;"></span>
+        <span id="place-3-num" class="label" style="top: 29.5%; left: 70%; font-size: 75px;"></span>
+        <span id="place-4-num" class="label" style="top: 64%; left: 37%; font-size: 75px;"></span>
+        <span id="place-5-num" class="label" style="top: 64%;   left: 59%; font-size: 75px;"></span>
+        <span id="place-6-num" class="label" style="top: 64%;   left: 80.7%; font-size: 75px;"></span>
+        <!-- <span id="place-7-num" class="label" style="top: 67%;   left: 77.9%; font-size: 50px;"></span> -->
+        <!-- <span id="place-8-num" class="label" style="top: 67%;   left: 85.8%; font-size: 50px;"></span> -->
 
         <!-- Player names -->
         <span id="place-1-name" class="label" style="top: 88%;   left: 17%;    font-size: 60px;"></span>
-        <span id="place-2-name" class="label" style="top: 55.8%; left: 43.5%; font-size: 40px;"></span>
-        <span id="place-3-name" class="label" style="top: 55.8%; left: 65.6%; font-size: 40px;"></span>
-        <span id="place-4-name" class="label" style="top: 55.8%; left: 87%; font-size: 40px;"></span>
-        <span id="place-5-name" class="label" style="top: 89%;   left: 41%; font-size: 30px;"></span>
-        <span id="place-6-name" class="label" style="top: 89%;   left: 57.5%; font-size: 30px;"></span>
-        <span id="place-7-name" class="label" style="top: 89%;   left: 74%; font-size: 30px;"></span>
-        <span id="place-8-name" class="label" style="top: 89%;   left: 90.5%; font-size: 30px;"></span>
+        <span id="place-2-name" class="label" style="top: 55.8%; left: 55%; font-size: 40px;"></span>
+        <span id="place-3-name" class="label" style="top: 55.8%; left: 77%; font-size: 40px;"></span>
+        <span id="place-4-name" class="label" style="top: 89%; left: 44.4%; font-size: 40px;"></span>
+        <span id="place-5-name" class="label" style="top: 89%;   left: 66%; font-size: 40px;"></span>
+        <span id="place-6-name" class="label" style="top: 89%;   left: 88%; font-size: 40px;"></span>
+        <!-- <span id="place-7-name" class="label" style="top: 89%;   left: 82.5%; font-size: 30px;"></span> -->
+        <!-- <span id="place-8-name" class="label" style="top: 89%;   left: 90.5%; font-size: 30px;"></span> -->
 
         <!-- Sponsors -->
         <span id="place-1-sponsor" class="label sponsor" style="top: 84%;   left: 17%;    font-size: 30px;"></span>
-        <span id="place-2-sponsor" class="label sponsor" style="top: 53.4%; left: 36.1%; font-size: 25px;"></span>
-        <span id="place-3-sponsor" class="label sponsor" style="top: 53.4%; left: 58.9%; font-size: 25px;"></span>
-        <span id="place-4-sponsor" class="label sponsor" style="top: 53.4%; left: 81.6%; font-size: 25px;"></span>
-        <span id="place-5-sponsor" class="label sponsor" style="top: 86.3%; left: 37.1%; font-size: 22px;"></span>
-        <span id="place-6-sponsor" class="label sponsor" style="top: 86.3%; left: 55.5%; font-size: 22px;"></span>
-        <span id="place-7-sponsor" class="label sponsor" style="top: 86.3%; left: 71.3%; font-size: 22px;"></span>
-        <span id="place-8-sponsor" class="label sponsor" style="top: 86.3%; left: 86.6%; font-size: 22px;"></span>
+        <span id="place-2-sponsor" class="label sponsor" style="top: 52.5%; left: 49.5%; font-size: 25px;"></span>
+        <span id="place-3-sponsor" class="label sponsor" style="top: 52.5%; left: 70.5%; font-size: 25px;"></span>
+        <span id="place-4-sponsor" class="label sponsor" style="top: 86.8%; left: 38.5%; font-size: 25px;"></span>
+        <span id="place-5-sponsor" class="label sponsor" style="top: 86.8%; left: 59.5%; font-size: 25px;"></span>
+        <span id="place-6-sponsor" class="label sponsor" style="top: 86.8%; left: 83.5%; font-size: 25px;"></span>
+        <!-- <span id="place-7-sponsor" class="label sponsor" style="top: 86.3%; left: 79%; font-size: 22px;"></span> -->
+        <!-- <span id="place-8-sponsor" class="label sponsor" style="top: 86.3%; left: 86.6%; font-size: 22px;"></span> -->
     </div>
 
     <script>
