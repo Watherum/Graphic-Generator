@@ -56,12 +56,6 @@ def setGlobals(weekly_event, property_settings=None):
     # Set globals based off of type of weekly
     if weekly_event.startswith('Quarantainment'):
         global_properties = populate_globals.setGlobalsQuarantainment(weekly_event)
-    elif weekly_event.startswith('Students x Treehouse'):
-        global_properties = populate_globals.setGlobalsSxT(weekly_event)
-    elif weekly_event.startswith('Fro Fridays'):
-        global_properties = populate_globals.setGlobalsFro(weekly_event)
-    elif weekly_event.startswith('AWG Just Tech It'):
-        global_properties = populate_globals.setGlobalsJustTechIt(weekly_event)
     elif weekly_event.startswith('Straight Into The Abyss'):
         global_properties = populate_globals.setGlobalsStraightIntoTheAbyss(weekly_event)
     elif weekly_event.startswith('Immortal Fight Night'):
@@ -76,14 +70,6 @@ def setGlobals(weekly_event, property_settings=None):
         global_properties = populate_globals.setGlobalsCRClash(weekly_event)
     elif weekly_event.startswith('CR Arcadian'):
         global_properties = populate_globals.setGlobalsCRArcadian(weekly_event)
-    elif weekly_event.startswith('AWG'):
-        global_properties = populate_globals.setGlobalsAWG(weekly_event)
-    elif weekly_event.startswith('C2C Finale'):
-        global_properties = populate_globals.setGlobalsC2C(weekly_event)
-    elif weekly_event.startswith('Catman'):
-        global_properties = populate_globals.setGlobalsCatman(weekly_event)
-    elif weekly_event.startswith('IzAw Sub') or weekly_event.startswith('Big Forhead Plays'):
-        global_properties = populate_globals.setGlobalsIzAw(weekly_event)
     else:
         global_properties = populate_globals.set_default_properties(weekly_event)
     # return properties
