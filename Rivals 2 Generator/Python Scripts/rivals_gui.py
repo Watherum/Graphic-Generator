@@ -13,6 +13,7 @@ PYTHON = sys.executable
 THUMBNAIL_SCRIPT = ROOT / "Python Scripts" / "generate_rivals_thumbnail.py"
 RENDERS_DIR = ROOT / "Resources" / "Character_Renders" / "Rivals 2 Full Renders"
 PLAYER_DB_PATH = ROOT / "Resources" / "Player_database.csv"
+CHAR_DB_PATH   = ROOT / "Resources" / "Character_database.csv"
 
 CHARACTERS = [
     "Absa", "Armando", "Clairen", "Etalus", "Fleet", "Forsburn",
@@ -94,6 +95,28 @@ def save_player_db(header_comments: list[str], players: dict[str, list[tuple[str
     PLAYER_DB_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def load_char_db() -> tuple[list[str], list[str]]:
+    """Returns (header_lines, character_names)."""
+    headers: list[str] = []
+    chars: list[str] = []
+    try:
+        lines = CHAR_DB_PATH.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return [], []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            headers.append(line)
+        else:
+            chars.append(stripped)
+    return headers, chars
+
+
+def save_char_db(headers: list[str], chars: list[str]) -> None:
+    lines = list(headers) + chars
+    CHAR_DB_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def load_thumbnail_events() -> list[tuple[str, str]]:
     """Parse startswith() calls from the dispatcher in generate_rivals_thumbnail.py."""
     try:
@@ -139,6 +162,7 @@ class RivalsGUI:
         self._build_thumbnails_tab(notebook)
         self._build_renders_tab(notebook)
         self._build_player_db_tab(notebook)
+        self._build_char_db_tab(notebook)
 
         # Shared console
         console_frame = tk.LabelFrame(root, text="Console Output")
@@ -651,6 +675,158 @@ class RivalsGUI:
             self._log("[Player database saved]\n")
         except Exception as exc:
             self._log(f"[Error saving player database: {exc}]\n")
+
+    # ------------------------------------------------------------------ #
+    #  Tab: Character Database                                            #
+    # ------------------------------------------------------------------ #
+    def _build_char_db_tab(self, notebook: ttk.Notebook):
+        tab = tk.Frame(notebook)
+        notebook.add(tab, text="Character Database")
+
+        self._cdb_headers: list[str] = []
+        self._cdb_chars: list[str] = []
+
+        top = tk.Frame(tab)
+        top.pack(fill="both", expand=True, padx=10, pady=(10, 4))
+
+        tk.Label(top, text="Characters", font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 2))
+
+        list_frame = tk.Frame(top)
+        list_frame.pack(fill="both", expand=True)
+        cdb_sb = tk.Scrollbar(list_frame)
+        cdb_sb.pack(side="right", fill="y")
+        self._cdb_listbox = tk.Listbox(
+            list_frame, yscrollcommand=cdb_sb.set,
+            selectmode="single", activestyle="dotbox", width=34,
+        )
+        self._cdb_listbox.pack(side="left", fill="both", expand=True)
+        cdb_sb.config(command=self._cdb_listbox.yview)
+
+        btn_row = tk.Frame(tab)
+        btn_row.pack(fill="x", padx=10, pady=4)
+        tk.Button(btn_row, text="+ Add",    command=self._cdb_add).pack(side="left", padx=(0, 4))
+        tk.Button(btn_row, text="Rename",   command=self._cdb_rename).pack(side="left", padx=(0, 4))
+        tk.Button(btn_row, text="- Remove", command=self._cdb_remove).pack(side="left")
+        tk.Button(btn_row, text="Move Up",   command=lambda: self._cdb_move(-1)).pack(side="right", padx=(4, 0))
+        tk.Button(btn_row, text="Move Down", command=lambda: self._cdb_move(1)).pack(side="right")
+
+        ttk.Separator(tab, orient="horizontal").pack(fill="x", padx=10, pady=4)
+
+        save_row = tk.Frame(tab)
+        save_row.pack(fill="x", padx=10, pady=(0, 8))
+        tk.Button(save_row, text="Save Character Database", command=self._cdb_save,
+                  bg="#2d6a2d", fg="white", width=24).pack(side="left")
+        tk.Button(save_row, text="Reload from File", command=self._cdb_reload).pack(side="left", padx=(8, 0))
+
+        self._cdb_reload()
+
+    def _cdb_reload(self):
+        self._cdb_headers, self._cdb_chars = load_char_db()
+        self._cdb_refresh()
+
+    def _cdb_refresh(self):
+        self._cdb_listbox.delete(0, "end")
+        for name in self._cdb_chars:
+            self._cdb_listbox.insert("end", name)
+
+    def _cdb_selected_idx(self):
+        sel = self._cdb_listbox.curselection()
+        return int(sel[0]) if sel else None
+
+    def _cdb_add(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add Character")
+        dialog.geometry("280x110")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        tk.Label(dialog, text="Character name:").pack(pady=(14, 4))
+        name_var = tk.StringVar()
+        entry = tk.Entry(dialog, textvariable=name_var, width=28)
+        entry.pack()
+        entry.focus()
+
+        def confirm():
+            name = name_var.get().strip()
+            if not name:
+                return
+            if name in self._cdb_chars:
+                self._log(f"['{name}' already in character database]\n")
+                dialog.destroy()
+                return
+            self._cdb_chars.append(name)
+            self._cdb_refresh()
+            idx = len(self._cdb_chars) - 1
+            self._cdb_listbox.selection_set(idx)
+            self._cdb_listbox.see(idx)
+            dialog.destroy()
+
+        entry.bind("<Return>", lambda _: confirm())
+        tk.Button(dialog, text="Add", command=confirm).pack(pady=8)
+
+    def _cdb_rename(self):
+        idx = self._cdb_selected_idx()
+        if idx is None:
+            self._log("[Select a character to rename]\n")
+            return
+        old_name = self._cdb_chars[idx]
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Rename Character")
+        dialog.geometry("280x110")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        tk.Label(dialog, text="New name:").pack(pady=(14, 4))
+        name_var = tk.StringVar(value=old_name)
+        entry = tk.Entry(dialog, textvariable=name_var, width=28)
+        entry.pack()
+        entry.focus()
+        entry.select_range(0, "end")
+
+        def confirm():
+            name = name_var.get().strip()
+            if not name or name == old_name:
+                dialog.destroy()
+                return
+            if name in self._cdb_chars:
+                self._log(f"['{name}' already in character database]\n")
+                dialog.destroy()
+                return
+            self._cdb_chars[idx] = name
+            self._cdb_refresh()
+            self._cdb_listbox.selection_set(idx)
+            self._cdb_listbox.see(idx)
+            dialog.destroy()
+
+        entry.bind("<Return>", lambda _: confirm())
+        tk.Button(dialog, text="Rename", command=confirm).pack(pady=8)
+
+    def _cdb_remove(self):
+        idx = self._cdb_selected_idx()
+        if idx is None:
+            return
+        self._cdb_chars.pop(idx)
+        self._cdb_refresh()
+        new_sel = min(idx, len(self._cdb_chars) - 1)
+        if new_sel >= 0:
+            self._cdb_listbox.selection_set(new_sel)
+
+    def _cdb_move(self, direction: int):
+        idx = self._cdb_selected_idx()
+        if idx is None:
+            return
+        new_idx = idx + direction
+        if 0 <= new_idx < len(self._cdb_chars):
+            self._cdb_chars[idx], self._cdb_chars[new_idx] = self._cdb_chars[new_idx], self._cdb_chars[idx]
+            self._cdb_refresh()
+            self._cdb_listbox.selection_set(new_idx)
+            self._cdb_listbox.see(new_idx)
+
+    def _cdb_save(self):
+        try:
+            save_char_db(self._cdb_headers, self._cdb_chars)
+            self._log("[Character database saved]\n")
+        except Exception as exc:
+            self._log(f"[Error saving character database: {exc}]\n")
 
     # ------------------------------------------------------------------ #
     #  Process runners                                                    #
