@@ -61,8 +61,8 @@
 
     <div id="canvas" class="loading">
         <!-- Background first so it renders behind everything -->
-        <img src="../Resources/Top8_HTML/Immortal Fight Night Top 7/IFN Background.png" alt=""/>
-        <img src="../Resources/Top8_HTML/Immortal Fight Night Top 7/IFN Top 7 Player Boxes.png" alt=""/>
+        <img src="../Resources/Top_8_Images/Immortal Fight Night Top 7/IFN Background.png" alt=""/>
+        <img src="../Resources/Top_8_Images/Immortal Fight Night Top 7/IFN Top 7 Player Boxes.png" alt=""/>
 
         <!-- Character renders (sit between the box layers and the text overlay) -->
         <img id="place-1-render" class="render" style="top: 32%;  left: 3%;    height: 55%;" alt=""/>
@@ -74,9 +74,9 @@
         <img id="place-7-render" class="render" style="top: 65%;  left: 75%;   height: 26%;" alt=""/>
         <!-- <img id="place-8-render" class="render" style="top: 65%;  left: 83%;   height: 26%;" alt=""/> -->
 
-        <img src="../Resources/Top8_HTML/Immortal Fight Night Top 7/IFN Top 7 Text Boxes.png" alt=""/>
-        <img src="../Resources/Top8_HTML/Immortal Fight Night Top 7/IFN Top 7 Number Boxes.png" alt=""/>
-        <img src="../Resources/Top8_HTML/Immortal Fight Night Top 7/IFN Logos.png" alt=""/>
+        <img src="../Resources/Top_8_Images/Immortal Fight Night Top 7/IFN Top 7 Text Boxes.png" alt=""/>
+        <img src="../Resources/Top_8_Images/Immortal Fight Night Top 7/IFN Top 7 Number Boxes.png" alt=""/>
+        <img src="../Resources/Top_8_Images/Immortal Fight Night Top 7/IFN Logos.png" alt=""/>
 
         <!-- Event info -->
         <span id="event-name"    class="label" style="top: 4%;    left: 50%;   font-size: 50px; color: yellow;"></span>
@@ -116,11 +116,11 @@
     </div>
 
     <script>
-        const DATA_FILE       = '../Top_8_Infos/Immortal Fight Night Top 8 HTML.txt';
+        const DATA_FILE       = '../Top_8_Texts/Immortal Fight Night Top 8 HTML.txt';
         const PLAYER_DB_FILE  = '../Resources/Player_database.csv';
-        const RENDER_DIR      = '../Resources/Character_Renders/Full render';
+        const RENDER_DIR      = '../Resources/Character_Renders/Rivals 2 Full Renders';
 
-        // Parse Top8_HTML.txt → { info: {}, placements: [] }
+        // Parse Top_8_Images.txt → { info: {}, placements: [] }
         function parseDataFile(text) {
             const info = {};
             const placements = [];

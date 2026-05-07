@@ -1,0 +1,19 @@
+# Top 8 Graphic example
+# All information is tab deliminated
+
+#Graphic Information
+Event name:	Straight Into The Abyss 47
+Event link: https://start.gg/SITA47
+Event entrants:	24 Competitors
+Event date:	4/29/2026
+
+# Placements
+# place, name, sponsor, characters
+1,Sophilo,Shrug Club,Zetterburn
+2,Viviana,NS,Galvan
+3,SapphireGD,AoC,Zetterburn
+4,Shard,,Fleet
+5,Landkon2,,Galvan
+5,Nothigh,ravel,Loxodont
+7,Gab,,La Reina
+7,Dr. Grin,Boring,Wrastor
