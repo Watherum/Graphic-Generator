@@ -1,0 +1,19 @@
+# Top 8 Graphic example
+# All information is tab deliminated
+
+#Graphic Information
+Event name:	CR Clash 77
+Event link: 
+Event entrants:	16 Competitors
+Event date:	12/7/2023
+
+# Placements
+# place, name, sponsor, characters
+1,alright,Beale Gaming,Falco
+2,Kogs,UMF,Sheik
+3,tezlik,C2F RVL,Marth
+4,FatCop,,Dr. Mario
+5,waly,FYS,Falco
+5,VOx,,Jigglypuff
+7,wcbq,ww,Roy
+7,Transient Bean,,Yoshi

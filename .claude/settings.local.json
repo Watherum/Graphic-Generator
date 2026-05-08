@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cmd /c \"dir `\"D:\\\\Red Ops\\\\Content Creation\\\\Graphic Generator\\\\`\" /b\")"
+    ]
+  }
+}
