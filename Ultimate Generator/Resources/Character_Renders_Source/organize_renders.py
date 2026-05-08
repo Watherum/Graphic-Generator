@@ -6,14 +6,14 @@ Folder structure by default:
 
 Desire is to grab the portraits for each character organize them in the following way:
     Renders
-        Square render
+        Ultimate Square render
             Character (1)
             ...
             Character (8)
-        Body render
+        Ultimate Body render
         Wide render
-        Diamond render
-        Full render (incomplete)
+        Ultimate Diamond render
+        Ultimate Full render (incomplete)
 
 """
 import os
@@ -278,18 +278,18 @@ def organize_from_renders_zip(char_name, new_folder_location):
             ...
     Desired location is in the following format
         Renders
-            Square render
+            Ultimate Square render
                 Character (1)
                 ...
                 Character (8)
-            Body render
+            Ultimate Body render
             Wide render
-            Diamond render
+            Ultimate Diamond render
     Move the images from the zip structure to the new location
-        chara_0 --> Square render
-        chara_1 --> Body render
+        chara_0 --> Ultimate Square render
+        chara_1 --> Ultimate Body render
         chara_3 --> Wide render
-        chara_4 --> Diamond render
+        chara_4 --> Ultimate Diamond render
         chara_5 --> Single Full render
         chara_6 --> Face render
         chara_7 --> Single render with shadow
@@ -323,17 +323,17 @@ def organize_from_renders_zip(char_name, new_folder_location):
             dest_file = create_char_filename(char_name, a_file)
             # Save information based off filename
             if a_file.startswith("chara_0_"):  # Char 0 case
-                dest_folder = os.path.join(new_folder_location, "Square render")
+                dest_folder = os.path.join(new_folder_location, "Ultimate Square render")
                 return_mapping.append((source_path, a_file, dest_folder, dest_file))
             elif a_file.startswith("chara_1_"):  # Char 1 case
-                dest_folder = os.path.join(new_folder_location, "Body render")
+                dest_folder = os.path.join(new_folder_location, "Ultimate Body render")
                 return_mapping.append((source_path, a_file, dest_folder, dest_file))
             elif a_file.startswith("chara_3_"):  # Char 3 case
                 continue  # Skipping
                 dest_folder = os.path.join(new_folder_location, "Wide render")
                 return_mapping.append((source_path, a_file, dest_folder, dest_file))
             elif a_file.startswith("chara_4_"):  # Char 4 case
-                dest_folder = os.path.join(new_folder_location, "Diamond render")
+                dest_folder = os.path.join(new_folder_location, "Ultimate Diamond render")
                 return_mapping.append((source_path, a_file, dest_folder, dest_file))
             elif a_file.startswith("chara_6_"):  # Char 6 case
                 continue # Skipping
@@ -351,7 +351,7 @@ def organize_from_renders_zip(char_name, new_folder_location):
                 continue
             # Create filename for character "{char} (0).png", ..., "{char} (8).png"
             dest_file = create_char_filename2(char_name, a_file)
-            dest_folder = os.path.join(new_folder_location, "Full render")
+            dest_folder = os.path.join(new_folder_location, "Ultimate Full render")
             return_mapping.append((source_path, a_file, dest_folder, dest_file))
             # end of main case
         # end of loop

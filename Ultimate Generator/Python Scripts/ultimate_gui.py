@@ -16,10 +16,10 @@ except ImportError:
 
 ROOT = Path(__file__).parent.parent
 PYTHON = sys.executable
-RENDERS_DIR = ROOT / "Resources" / "Character_Renders" / "Body render"
+RENDERS_DIR = ROOT / "Resources" / "Character_Renders" / "Ultimate Body render"
 PLAYER_DB_PATH = ROOT / "Resources" / "Player_database.csv"
 CHAR_DB_PATH = ROOT / "Resources" / "Character_database.csv"
-THUMBNAIL_SCRIPT = ROOT / "Python Scripts" / "create_thumbnail.py"
+THUMBNAIL_SCRIPT = ROOT / "Python Scripts" / "generate_ultimate_thumbnails.py"
 
 FETCH_EVENTS = [
     {
@@ -44,7 +44,7 @@ def get_characters_from_renders() -> list[str]:
 
 
 def load_thumbnail_events() -> list[tuple[str, str]]:
-    """Parse startswith() calls from the dispatcher in create_thumbnail.py."""
+    """Parse startswith() calls from the dispatcher in generate_ultimate_thumbnails.py."""
     try:
         source = THUMBNAIL_SCRIPT.read_text(encoding="utf-8")
         names = re.findall(r"weekly_event\.startswith\('([^']+)'\)", source)
@@ -328,7 +328,7 @@ class UltimateGUI:
             self._log("[Error: event name is empty]\n")
             return
         self._run([
-            PYTHON, str(ROOT / "Python Scripts" / "create_thumbnail.py"),
+            PYTHON, str(ROOT / "Python Scripts" / "generate_ultimate_thumbnails.py"),
             "-e", event_name, "-o", "missing.log",
         ])
 
