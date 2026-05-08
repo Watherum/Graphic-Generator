@@ -8,6 +8,12 @@ import sys
 import re
 from pathlib import Path
 
+try:
+    from PIL import Image, ImageTk
+    _PIL_AVAILABLE = True
+except ImportError:
+    _PIL_AVAILABLE = False
+
 ROOT = Path(__file__).parent.parent
 PYTHON = sys.executable
 THUMBNAIL_SCRIPT = ROOT / "Python Scripts" / "generate_rivals_thumbnail.py"
@@ -463,6 +469,7 @@ class RivalsGUI:
         self._char_tree.column("skin", width=240)
         self._char_tree.pack(side="left", fill="both", expand=True)
         tree_sb.config(command=self._char_tree.yview)
+        self._char_tree.bind("<<TreeviewSelect>>", self._on_char_tree_select)
 
         tree_btns = tk.Frame(right)
         tree_btns.pack(fill="x", pady=4)
@@ -475,7 +482,14 @@ class RivalsGUI:
 
         tk.Label(right, text="Add / Edit Entry", font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(0, 4))
 
-        form_row = tk.Frame(right)
+        form_section = tk.Frame(right)
+        form_section.pack(fill="x")
+        form_left = tk.Frame(form_section)
+        form_left.pack(side="left", fill="y")
+        form_right = tk.Frame(form_section)
+        form_right.pack(side="left", padx=(12, 0), anchor="n")
+
+        form_row = tk.Frame(form_left)
         form_row.pack(fill="x")
         tk.Label(form_row, text="Character:").pack(side="left")
         self._form_char = tk.StringVar()
@@ -488,14 +502,19 @@ class RivalsGUI:
         self._form_skin_var = tk.StringVar()
         self._form_skin_box = ttk.Combobox(form_row, textvariable=self._form_skin_var, state="readonly", width=30)
         self._form_skin_box.pack(side="left", padx=4)
+        self._form_skin_var.trace_add("write", self._on_form_skin_change)
 
-        form_btns = tk.Frame(right)
+        form_btns = tk.Frame(form_left)
         form_btns.pack(fill="x", pady=4)
         self._form_add_btn = tk.Button(form_btns, text="Add Entry", command=self._add_char_entry)
         self._form_add_btn.pack(side="left", padx=(0, 4))
         self._form_edit_btn = tk.Button(form_btns, text="Update Entry", command=self._update_char_entry, state="disabled")
         self._form_edit_btn.pack(side="left")
         tk.Button(form_btns, text="Clear Form", command=self._clear_form).pack(side="left", padx=(8, 0))
+
+        self._preview_label = tk.Label(form_right, bg="#111111", width=11, height=9)
+        self._preview_label.pack()
+        self._preview_img = None
 
         ttk.Separator(right, orient="horizontal").pack(fill="x", pady=6)
 
@@ -594,6 +613,47 @@ class RivalsGUI:
         self._form_skin_box["values"] = labels
         self._form_skin_var.set(labels[0] if labels else "")
 
+    def _on_form_skin_change(self, *_):
+        stem = self._skin_stem_from_label(self._form_skin_var.get())
+        self._show_preview(stem)
+
+    def _on_char_tree_select(self, _event=None):
+        sel = self._char_tree.selection()
+        if not sel:
+            return
+        values = self._char_tree.item(sel[0], "values")
+        if not values or len(values) < 2:
+            return
+        char, lbl = values[0], values[1]
+        stems = get_skins_for_char(char)
+        labels = [skin_label(s) for s in stems]
+        stem = stems[labels.index(lbl)] if lbl in labels else ""
+        self._show_preview(stem)
+
+    def _show_preview(self, skin_stem: str):
+        if not _PIL_AVAILABLE:
+            return
+        if not skin_stem:
+            self._clear_preview()
+            return
+        path = RENDERS_DIR / f"{skin_stem}.png"
+        if not path.exists():
+            self._clear_preview()
+            return
+        try:
+            img = Image.open(path)
+            h = 130
+            w = round(img.width * h / img.height)
+            img = img.resize((w, h), Image.LANCZOS)
+            self._preview_img = ImageTk.PhotoImage(img)
+            self._preview_label.config(image=self._preview_img, width=w, height=h)
+        except Exception:
+            self._clear_preview()
+
+    def _clear_preview(self):
+        self._preview_img = None
+        self._preview_label.config(image="", width=11, height=9)
+
     def _skin_stem_from_label(self, lbl: str) -> str:
         labels = [skin_label(s) for s in self._skin_stems]
         if lbl in labels:
@@ -668,6 +728,7 @@ class RivalsGUI:
         self._form_add_btn.config(state="normal")
         self._form_edit_btn.config(state="disabled")
         self._db_selected_char_idx = None
+        self._clear_preview()
 
     def _save_player_db(self):
         try:
