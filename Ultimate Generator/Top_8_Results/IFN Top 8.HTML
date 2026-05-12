@@ -177,15 +177,18 @@
 
         // Fits text within maxWidthPct/maxHeightPct of canvas: splits at last space first, then shrinks font.
         const SLOT_MAX_WIDTHS    = [0.15, 0.11, 0.11, 0.11, 0.9,  0.9,  0.9,  0.08];
-        const SLOT_MAX_HEIGHTS   = [0.07,  0.05, 0.05, 0.05, 0.03, 0.03, 0.03, 0.03];
-        const SLOT_ALLOW_WRAPPING = [false,  true, true, true, true, true, true, true];
+        const SLOT_MAX_HEIGHTS   = [0.07,  0.05, 0.05, 0.05, 0.04, 0.04, 0.04, 0.04];
+        const SLOT_ALLOW_WRAPPING = [false,  true, true, true, false, true, true, true];
         function fitText(el, maxWidthPct, allowWrap = true, maxHeightPct = 1) {
             if (!el || !el.textContent) return;
             const canvas     = document.getElementById('canvas');
             const maxWidth   = canvas.offsetWidth  * maxWidthPct;
             const maxHeight  = canvas.offsetHeight * maxHeightPct;
 
-            if (allowWrap && el.scrollWidth > maxWidth) {
+            // Always wrap on the last space when allowed — don't gate on scrollWidth,
+            // because the custom font may not be loaded yet when this runs, making
+            // fallback-font measurements too narrow and the overflow check never fire.
+            if (allowWrap || el.scrollWidth > maxWidth) {
                 const spaceIdx = el.textContent.lastIndexOf(' ');
                 if (spaceIdx !== -1) {
                     const full = el.textContent;
