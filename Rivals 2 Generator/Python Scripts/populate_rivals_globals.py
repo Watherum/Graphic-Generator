@@ -286,16 +286,16 @@ def setGlobalsIFN(weekly_event):
     properties['center_shift_1'] = (-0.00, +0.00) # Universal character shift
     # Center-point shift for canvas for characters
     properties['center_shift_2_1'] = (-0.00, +0.00)  # Two character shift
-    properties['center_shift_2_2'] = (-0.32, +0.00)
+    properties['center_shift_2_2'] = (-0.35, +0.1)
     properties['center_shift_3_1'] = (-0.00, +0.00)  # Three character shift
-    properties['center_shift_3_2'] = (-0.35, +0.05)
-    properties['center_shift_3_3'] = (+0.35, +0.05)
+    properties['center_shift_3_2'] = (-0.35, +0.1)
+    properties['center_shift_3_3'] = (+0.35, +0.1)
     # Single character flag on overlay
     properties['one_char_flag'] = False
     # Scaler Variables for characters in window
     properties['resize_1'] = 0.80  # resize for character for multiple renders on image
-    properties['resize_2'] = 0.35
-    properties['resize_3'] = 0.35
+    properties['resize_2'] = 0.32
+    properties['resize_3'] = 0.32
     # Canvas flag
     properties['char_glow_bool'] = False
     # Center-point for text on canvas with respect to whole canvas

@@ -1,0 +1,19 @@
+# Top 8 Graphic example
+# All information is tab deliminated
+
+#Graphic Information
+Event name:	Immortal Fight Night 275
+Event link: https://start.gg/UIFN275
+Event entrants:	9 Competitors
+Event date:	5/11/2026
+
+# Placements
+# place, name, sponsor, characters
+1,FruitMeatball,Asbestos,
+2,Sh-Awe,,Bowser
+3,NibbyNibbyNub,,
+4,Chum,Asbestos,
+5,Silver X,AWG,
+5,Chopland Sedans,,Link
+7,homie,,Byleth
+7,Phoon,,Terry

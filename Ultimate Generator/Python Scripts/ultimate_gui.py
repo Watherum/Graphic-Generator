@@ -381,35 +381,18 @@ class UltimateGUI:
         self._editing_label = tk.Label(right, text="Select a player", font=("TkDefaultFont", 10, "bold"))
         self._editing_label.pack(anchor="w", pady=(0, 6))
 
-        tree_frame = tk.Frame(right)
-        tree_frame.pack(fill="both", expand=True)
-        tree_sb = tk.Scrollbar(tree_frame)
-        tree_sb.pack(side="right", fill="y")
-        self._char_tree = ttk.Treeview(
-            tree_frame, columns=("char", "alt"), show="headings",
-            yscrollcommand=tree_sb.set, selectmode="browse", height=8,
-        )
-        self._char_tree.heading("char", text="Character")
-        self._char_tree.heading("alt", text="Alt #")
-        self._char_tree.column("char", width=230)
-        self._char_tree.column("alt", width=60)
-        self._char_tree.pack(side="left", fill="both", expand=True)
-        tree_sb.config(command=self._char_tree.yview)
-        self._char_tree.bind("<<TreeviewSelect>>", self._on_char_tree_select)
+        # Pack bottom elements first so they always have space regardless of treeview height
+        save_row = tk.Frame(right)
+        save_row.pack(side="bottom", fill="x")
+        tk.Button(save_row, text="Save Player Database", command=self._save_player_db,
+                  bg="#2d6a2d", fg="white", width=22).pack(side="left")
+        tk.Button(save_row, text="Reload from File", command=self._reload_player_db).pack(side="left", padx=(8, 0))
 
-        tree_btns = tk.Frame(right)
-        tree_btns.pack(fill="x", pady=4)
-        tk.Button(tree_btns, text="Edit Selected", command=self._edit_char_entry).pack(side="left", padx=(0, 4))
-        tk.Button(tree_btns, text="Remove Selected", command=self._remove_char_entry).pack(side="left")
-        tk.Button(tree_btns, text="Move Up", command=lambda: self._move_char_entry(-1)).pack(side="right", padx=(4, 0))
-        tk.Button(tree_btns, text="Move Down", command=lambda: self._move_char_entry(1)).pack(side="right")
+        ttk.Separator(right, orient="horizontal").pack(side="bottom", fill="x", pady=6)
 
-        ttk.Separator(right, orient="horizontal").pack(fill="x", pady=6)
-
-        tk.Label(right, text="Add / Edit Entry", font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(0, 4))
-
+        self._preview_photo = None
         form_section = tk.Frame(right)
-        form_section.pack(fill="x", pady=(0, 4))
+        form_section.pack(side="bottom", fill="x", pady=(0, 4))
 
         form_left = tk.Frame(form_section)
         form_left.pack(side="left", fill="x", expand=True)
@@ -438,7 +421,6 @@ class UltimateGUI:
         self._form_char.trace_add("write", self._update_char_preview)
         self._form_alt.trace_add("write", self._update_char_preview)
 
-        self._preview_photo = None
         form_right = tk.Frame(form_section)
         form_right.pack(side="left", padx=(12, 0), anchor="n")
         self._preview_label = tk.Label(
@@ -448,13 +430,32 @@ class UltimateGUI:
         )
         self._preview_label.pack()
 
-        ttk.Separator(right, orient="horizontal").pack(fill="x", pady=6)
+        tk.Label(right, text="Add / Edit Entry", font=("TkDefaultFont", 9, "bold")).pack(side="bottom", anchor="w", pady=(0, 4))
 
-        save_row = tk.Frame(right)
-        save_row.pack(fill="x")
-        tk.Button(save_row, text="Save Player Database", command=self._save_player_db,
-                  bg="#2d6a2d", fg="white", width=22).pack(side="left")
-        tk.Button(save_row, text="Reload from File", command=self._reload_player_db).pack(side="left", padx=(8, 0))
+        ttk.Separator(right, orient="horizontal").pack(side="bottom", fill="x", pady=6)
+
+        tree_btns = tk.Frame(right)
+        tree_btns.pack(side="bottom", fill="x", pady=4)
+        tk.Button(tree_btns, text="Edit Selected", command=self._edit_char_entry).pack(side="left", padx=(0, 4))
+        tk.Button(tree_btns, text="Remove Selected", command=self._remove_char_entry).pack(side="left")
+        tk.Button(tree_btns, text="Move Up", command=lambda: self._move_char_entry(-1)).pack(side="right", padx=(4, 0))
+        tk.Button(tree_btns, text="Move Down", command=lambda: self._move_char_entry(1)).pack(side="right")
+
+        tree_frame = tk.Frame(right)
+        tree_frame.pack(fill="both", expand=True)
+        tree_sb = tk.Scrollbar(tree_frame)
+        tree_sb.pack(side="right", fill="y")
+        self._char_tree = ttk.Treeview(
+            tree_frame, columns=("char", "alt"), show="headings",
+            yscrollcommand=tree_sb.set, selectmode="browse", height=8,
+        )
+        self._char_tree.heading("char", text="Character")
+        self._char_tree.heading("alt", text="Alt #")
+        self._char_tree.column("char", width=230)
+        self._char_tree.column("alt", width=60)
+        self._char_tree.pack(side="left", fill="both", expand=True)
+        tree_sb.config(command=self._char_tree.yview)
+        self._char_tree.bind("<<TreeviewSelect>>", self._on_char_tree_select)
 
         self._reload_player_db()
 
@@ -612,6 +613,8 @@ class UltimateGUI:
         chars = self._db_players[self._db_selected_player]
         if idx < len(chars):
             char, alt = chars[idx]
+            self._form_char.set(char)
+            self._form_alt.set(alt)
             self._show_preview(char, alt)
 
     def _show_preview(self, char: str, alt: str):
