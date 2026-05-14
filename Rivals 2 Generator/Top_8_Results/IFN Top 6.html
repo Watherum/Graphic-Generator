@@ -141,9 +141,11 @@
             return { info, placements };
         }
 
-        // Parse Player_database.csv → { "Sophilo": { "Zetterburn": "17", ... }, ... }
+        // Parse Player_database.csv → { players: {playerKey: {charKey: altStem}}, charDefaults: {charKey: defaultStem} }
         function parsePlayerDB(text) {
-            const db = {};
+            const players = {};
+            const charDefaults = {};
+            const prefixRe = /^(T_[A-Za-z]+)_/;
             for (const raw of text.split('\n')) {
                 const line = raw.trim();
                 if (!line || line.startsWith('#')) continue;
@@ -154,18 +156,27 @@
                 for (let i = 1; i + 1 < parts.length; i += 2) {
                     const charName = parts[i];
                     const alt      = parts[i + 1];
-                    if (charName) chars[charName.toLowerCase()] = alt || '1';
+                    if (!charName) continue;
+                    const charKey = charName.toLowerCase();
+                    chars[charKey] = alt;
+                    if (alt && alt.startsWith('T_') && !(charKey in charDefaults)) {
+                        const m = prefixRe.exec(alt);
+                        if (m) charDefaults[charKey] = m[1] + '_Default_Neutral_CSP';
+                    }
                 }
-                db[playerName.toLowerCase()] = chars;
+                players[playerName.toLowerCase()] = chars;
             }
-            return db;
+            return { players, charDefaults };
         }
 
         function resolveRenderPath(playerName, characterName, playerDB) {
             const playerKey = playerName.toLowerCase();
             const charKey   = characterName.toLowerCase();
-            const alt = playerDB[playerKey]?.[charKey] ?? '1';
-            return `${RENDER_DIR}/${characterName} (${alt}).png`;
+            const altStem = playerDB.players[playerKey]?.[charKey]
+                         ?? playerDB.charDefaults[charKey]
+                         ?? null;
+            if (!altStem) return '';
+            return `${RENDER_DIR}/${altStem}.png`;
         }
 
         // Fits text within maxWidthPct/maxHeightPct of canvas: splits at last space first, then shrinks font.
