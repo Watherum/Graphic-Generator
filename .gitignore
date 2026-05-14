@@ -10,6 +10,7 @@ build
 dist
 *.spec
 CLAUDE.md
+.claude
 Melee Generator/Youtube_Thumbnails/*
 Rivals 2 Generator/Youtube_Thumbnails/*
 Ultimate Generator/Youtube_Thumbnails/*
