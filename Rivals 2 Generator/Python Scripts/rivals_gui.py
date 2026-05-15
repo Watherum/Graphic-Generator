@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """GUI launcher for the Rivals 2 Generator toolset."""
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import ttk
 import subprocess
 import threading
 import sys
@@ -13,6 +13,12 @@ try:
     _PIL_AVAILABLE = True
 except ImportError:
     _PIL_AVAILABLE = False
+
+try:
+    import sv_ttk
+    _SV_TTK_AVAILABLE = True
+except ImportError:
+    _SV_TTK_AVAILABLE = False
 
 ROOT = Path(__file__).parent.parent
 PYTHON = sys.executable
@@ -34,6 +40,62 @@ CHAR_ABBREVS = {
     "Orcane": "Orc", "Ranno": "Ran", "Slade": "Sla", "Wrastor": "Wra",
     "Zetterburn": "Zet",
 }
+
+# sv_ttk dark palette (used for classic tk widgets that sv_ttk doesn't reach)
+_BG    = "#1c1c1c"
+_BG2   = "#2b2b2b"
+_BG3   = "#3b3b3b"
+_FG    = "#ffffff"
+_MUTED = "#999999"
+_SEL   = "#0078d4"
+_GREEN = "#1e7a1e"
+
+
+def _apply_theme(root: tk.Tk) -> None:
+    if _SV_TTK_AVAILABLE:
+        sv_ttk.set_theme("dark")
+    else:
+        style = ttk.Style(root)
+        style.theme_use("clam")
+        style.configure(".", background=_BG2, foreground=_FG)
+
+    # sv_ttk only themes ttk widgets; patch classic tk widgets to match
+    for key, val in {
+        "*Background":              _BG2,
+        "*Foreground":              _FG,
+        "*activeBackground":        _BG3,
+        "*activeForeground":        _FG,
+        "*selectBackground":        _SEL,
+        "*selectForeground":        _FG,
+        "*disabledForeground":      _MUTED,
+        "*highlightBackground":     _BG2,
+        "*highlightColor":          _SEL,
+        "*highlightThickness":      "0",
+        "*Font":                    ("Segoe UI", 9),
+        "*Button.Relief":           "flat",
+        "*Button.BorderWidth":      "0",
+        "*Button.Cursor":           "hand2",
+        "*Button.PadX":             "10",
+        "*Button.PadY":             "5",
+        "*Listbox.Background":      _BG3,
+        "*Listbox.Relief":          "flat",
+        "*Listbox.BorderWidth":     "0",
+        "*Entry.Background":        _BG3,
+        "*Entry.Foreground":        _FG,
+        "*Entry.insertBackground":  _FG,
+        "*Entry.Relief":            "flat",
+        "*Entry.BorderWidth":       "1",
+    }.items():
+        root.option_add(key, val, priority=80)
+
+    root.configure(bg=_BG, highlightthickness=0, bd=0)
+
+    style = ttk.Style()
+    style.configure("Muted.TLabel", foreground=_MUTED)
+    style.configure("TLabelframe", borderwidth=0, relief="flat")
+    style.configure("TLabelframe.Label", foreground=_MUTED)
+    style.configure("TNotebook", borderwidth=0)
+    style.configure("TNotebook.Tab", focuscolor="")
 
 
 def get_skins_for_char(char_name: str) -> list[str]:
@@ -158,11 +220,13 @@ class RivalsGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Rivals 2 Generator")
-        self.root.geometry("720x640")
+        self.root.geometry("900x840")
         self.root.resizable(True, True)
 
+        _apply_theme(self.root)
+
         notebook = ttk.Notebook(root)
-        notebook.pack(fill="both", expand=True, padx=10, pady=(10, 5))
+        notebook.pack(fill="both", expand=True, padx=0, pady=0)
 
         self._build_fetch_tab(notebook)
         self._build_thumbnails_tab(notebook)
@@ -171,93 +235,98 @@ class RivalsGUI:
         self._build_char_db_tab(notebook)
 
         # Shared console
-        console_frame = tk.LabelFrame(root, text="Console Output")
-        console_frame.pack(fill="both", expand=True, padx=10, pady=(0, 5))
+        console_frame = ttk.LabelFrame(root, text="Console Output")
+        console_frame.pack(fill="both", expand=True, padx=0, pady=0)
 
-        self.console = scrolledtext.ScrolledText(
-            console_frame, height=10, state="disabled",
-            bg="#1e1e1e", fg="#d4d4d4", font=("Consolas", 9),
-            wrap="word",
+        console_inner = ttk.Frame(console_frame)
+        console_inner.pack(fill="both", expand=True, padx=5, pady=5)
+        console_sb = ttk.Scrollbar(console_inner)
+        console_sb.pack(side="right", fill="y")
+        self.console = tk.Text(
+            console_inner, height=10, state="disabled",
+            bg=_BG, fg=_FG, insertbackground=_FG,
+            font=("Consolas", 9), wrap="word",
+            relief="flat", highlightthickness=0,
+            yscrollcommand=console_sb.set,
         )
-        self.console.pack(fill="both", expand=True, padx=5, pady=5)
+        self.console.pack(side="left", fill="both", expand=True)
+        console_sb.config(command=self.console.yview)
 
-        footer = tk.Frame(root)
-        footer.pack(fill="x", padx=10, pady=(0, 8))
-        tk.Button(footer, text="Clear Console", command=self._clear_console).pack(side="right")
+        footer = ttk.Frame(root)
+        footer.pack(fill="x", padx=8, pady=(4, 8))
+        ttk.Button(footer, text="Clear Console", command=self._clear_console).pack(side="right")
 
     # ------------------------------------------------------------------ #
     #  Tab: Fetch from start.gg                                           #
     # ------------------------------------------------------------------ #
     def _build_fetch_tab(self, notebook: ttk.Notebook):
-        tab = tk.Frame(notebook)
+        tab = ttk.Frame(notebook)
         notebook.add(tab, text="Fetch from start.gg")
 
         self._fetch_widgets = {}
 
         for cfg in FETCH_EVENTS:
-            lf = tk.LabelFrame(tab, text=cfg["label"], padx=8, pady=6)
+            lf = ttk.LabelFrame(tab, text=cfg["label"], padding=(8, 6))
             lf.pack(fill="x", padx=10, pady=8)
 
-            row1 = tk.Frame(lf)
+            row1 = ttk.Frame(lf)
             row1.pack(fill="x", pady=(0, 4))
 
-            tk.Label(row1, text="Event #:").pack(side="left")
+            ttk.Label(row1, text="Event #:").pack(side="left")
             num_var = tk.StringVar(value=cfg["default_num"])
-            tk.Entry(row1, textvariable=num_var, width=6).pack(side="left", padx=(4, 16))
+            ttk.Entry(row1, textvariable=num_var, width=6).pack(side="left", padx=(4, 16))
 
-            tk.Label(row1, text="Top 8 Link:").pack(side="left")
+            ttk.Label(row1, text="Top 8 Link:").pack(side="left")
             link_var = tk.StringVar(value=cfg["default_link"].replace("{n}", cfg["default_num"]))
-            tk.Entry(row1, textvariable=link_var, width=32).pack(side="left", padx=4)
+            ttk.Entry(row1, textvariable=link_var, width=32).pack(side="left", padx=4)
 
             # Auto-fill link when number changes
             def _on_num_change(name, index, mode, nv=num_var, lv=link_var, t=cfg["default_link"]):
                 lv.set(t.replace("{n}", nv.get().strip()))
             num_var.trace_add("write", _on_num_change)
 
-            row2 = tk.Frame(lf)
+            row2 = ttk.Frame(lf)
             row2.pack(fill="x")
 
-            btn_sets = tk.Button(
+            ttk.Button(
                 row2, text="Fetch VOD Names",
                 command=lambda c=cfg, nv=num_var: self._fetch_sets(c, nv.get().strip()),
-            )
-            btn_sets.pack(side="left", padx=(0, 6))
+            ).pack(side="left", padx=(0, 6))
 
-            btn_top8 = tk.Button(
+            ttk.Button(
                 row2, text="Fetch Top 8",
                 command=lambda c=cfg, nv=num_var, lv=link_var: self._fetch_top8(
                     c, nv.get().strip(), lv.get().strip()
                 ),
-            )
-            btn_top8.pack(side="left")
+            ).pack(side="left")
 
             self._fetch_widgets[cfg["label"]] = {"num": num_var, "link": link_var}
 
         # Custom tournament section
-        lf_custom = tk.LabelFrame(tab, text="Custom Tournament", padx=8, pady=6)
+        lf_custom = ttk.LabelFrame(tab, text="Custom Tournament", padding=(8, 6))
         lf_custom.pack(fill="x", padx=10, pady=(0, 8))
 
-        row_slug = tk.Frame(lf_custom)
+        row_slug = ttk.Frame(lf_custom)
         row_slug.pack(fill="x", pady=(0, 4))
-        tk.Label(row_slug, text="Slug:", width=10, anchor="w").pack(side="left")
+        ttk.Label(row_slug, text="Slug:", width=10, anchor="w").pack(side="left")
         self._custom_slug = tk.StringVar()
-        tk.Entry(row_slug, textvariable=self._custom_slug, width=52).pack(side="left", padx=4)
-        tk.Label(row_slug, text="e.g. tournament/my-event/event/singles",
-                 fg="gray").pack(side="left", padx=(4, 0))
+        ttk.Entry(row_slug, textvariable=self._custom_slug, width=52).pack(side="left", padx=4)
+        ttk.Label(row_slug, text="e.g. tournament/my-event/event/singles",
+                  style="Muted.TLabel").pack(side="left", padx=(4, 0))
 
-        row_name = tk.Frame(lf_custom)
+        row_name = ttk.Frame(lf_custom)
         row_name.pack(fill="x", pady=(0, 4))
-        tk.Label(row_name, text="Name:", width=10, anchor="w").pack(side="left")
+        ttk.Label(row_name, text="Name:", width=10, anchor="w").pack(side="left")
         self._custom_name = tk.StringVar()
-        tk.Entry(row_name, textvariable=self._custom_name, width=36).pack(side="left", padx=4)
+        ttk.Entry(row_name, textvariable=self._custom_name, width=36).pack(side="left", padx=4)
 
-        row_out = tk.Frame(lf_custom)
+        row_out = ttk.Frame(lf_custom)
         row_out.pack(fill="x", pady=(0, 4))
-        tk.Label(row_out, text="Output file:", width=10, anchor="w").pack(side="left")
+        ttk.Label(row_out, text="Output file:", width=10, anchor="w").pack(side="left")
         self._custom_out = tk.StringVar()
-        tk.Entry(row_out, textvariable=self._custom_out, width=36).pack(side="left", padx=4)
-        tk.Label(row_out, text="(saved in Vod_Names/ if no path given)",
-                 fg="gray").pack(side="left", padx=(4, 0))
+        ttk.Entry(row_out, textvariable=self._custom_out, width=36).pack(side="left", padx=4)
+        ttk.Label(row_out, text="(saved in Vod_Names/ if no path given)",
+                  style="Muted.TLabel").pack(side="left", padx=(4, 0))
 
         # Auto-fill output filename when name changes
         def _on_custom_name_change(*_):
@@ -266,8 +335,8 @@ class RivalsGUI:
                 self._custom_out.set(f"{name} Names.txt")
         self._custom_name.trace_add("write", _on_custom_name_change)
 
-        tk.Button(lf_custom, text="Fetch VOD Names",
-                  command=self._fetch_custom_sets).pack(anchor="w")
+        ttk.Button(lf_custom, text="Fetch VOD Names",
+                   command=self._fetch_custom_sets).pack(anchor="w")
 
     def _fetch_custom_sets(self):
         slug = self._custom_slug.get().strip()
@@ -311,35 +380,35 @@ class RivalsGUI:
     #  Tab: Generate Thumbnails                                           #
     # ------------------------------------------------------------------ #
     def _build_thumbnails_tab(self, notebook: ttk.Notebook):
-        tab = tk.Frame(notebook)
+        tab = ttk.Frame(notebook)
         notebook.add(tab, text="Generate Thumbnails")
 
-        lf = tk.LabelFrame(tab, text="Event", padx=8, pady=8)
+        lf = ttk.LabelFrame(tab, text="Event", padding=(8, 8))
         lf.pack(fill="x", padx=10, pady=10)
 
-        row1 = tk.Frame(lf)
+        row1 = ttk.Frame(lf)
         row1.pack(fill="x", pady=(0, 6))
 
-        tk.Label(row1, text="Series:").pack(side="left")
+        ttk.Label(row1, text="Series:").pack(side="left")
         self._thumb_series = tk.StringVar()
         self._thumb_series_box = ttk.Combobox(
             row1, textvariable=self._thumb_series,
             state="readonly", width=26,
         )
         self._thumb_series_box.pack(side="left", padx=(4, 4))
-        tk.Button(row1, text="↺", width=2,
-                  command=self._refresh_thumbnail_events).pack(side="left", padx=(0, 12))
+        ttk.Button(row1, text="↺",
+                   command=self._refresh_thumbnail_events).pack(side="left", padx=(0, 12))
 
-        tk.Label(row1, text="# / Suffix:").pack(side="left")
+        ttk.Label(row1, text="# / Suffix:").pack(side="left")
         self._thumb_num = tk.StringVar(value="274")
-        tk.Entry(row1, textvariable=self._thumb_num, width=8).pack(side="left", padx=4)
+        ttk.Entry(row1, textvariable=self._thumb_num, width=8).pack(side="left", padx=4)
 
-        row2 = tk.Frame(lf)
+        row2 = ttk.Frame(lf)
         row2.pack(fill="x", pady=(0, 6))
 
-        tk.Label(row2, text="Event name:").pack(side="left")
+        ttk.Label(row2, text="Event name:").pack(side="left")
         self._thumb_event_name = tk.StringVar()
-        tk.Entry(row2, textvariable=self._thumb_event_name, width=40).pack(side="left", padx=4)
+        ttk.Entry(row2, textvariable=self._thumb_event_name, width=40).pack(side="left", padx=4)
 
         def _update_name(*_):
             template = self._thumb_event_map.get(self._thumb_series.get(), "{n}")
@@ -351,8 +420,8 @@ class RivalsGUI:
 
         self._refresh_thumbnail_events()
 
-        tk.Button(tab, text="Generate Thumbnails", command=self._generate_thumbnails,
-                  width=22).pack(padx=10, pady=4, anchor="w")
+        ttk.Button(tab, text="Generate Thumbnails", command=self._generate_thumbnails,
+                   style="Accent.TButton").pack(padx=10, pady=8, anchor="w")
 
     def _refresh_thumbnail_events(self):
         events = load_thumbnail_events()
@@ -377,22 +446,22 @@ class RivalsGUI:
     #  Tab: Character Renders                                             #
     # ------------------------------------------------------------------ #
     def _build_renders_tab(self, notebook: ttk.Notebook):
-        tab = tk.Frame(notebook)
+        tab = ttk.Frame(notebook)
         notebook.add(tab, text="Character Renders")
 
-        lf = tk.LabelFrame(tab, text="Manage Renders", padx=10, pady=10)
+        lf = ttk.LabelFrame(tab, text="Manage Renders", padding=(10, 10))
         lf.pack(fill="x", padx=10, pady=10)
 
-        tk.Label(lf, text="Download render images from dragdown.wiki or copy them to the Full Renders folder.",
-                 wraplength=560, justify="left").pack(anchor="w", pady=(0, 8))
+        ttk.Label(lf, text="Download render images from dragdown.wiki or copy them to the Full Renders folder.",
+                  wraplength=560, justify="left").pack(anchor="w", pady=(0, 8))
 
         btn_cfg = [
-            ("Download & Copy",     self._download_and_copy),
-            ("Download Renders",    self._download_renders),
-            ("Copy to Full Renders",self._copy_renders),
+            ("Download & Copy",      self._download_and_copy),
+            ("Download Renders",     self._download_renders),
+            ("Copy to Full Renders", self._copy_renders),
         ]
         for label, cmd in btn_cfg:
-            tk.Button(lf, text=label, width=22, command=cmd).pack(pady=3, anchor="w")
+            ttk.Button(lf, text=label, command=cmd).pack(pady=3, anchor="w")
 
     def _download_renders(self):
         self._run([PYTHON, str(ROOT / "Python Scripts" / "download_rivals_renders.py")])
@@ -410,7 +479,7 @@ class RivalsGUI:
     #  Tab: Player Database                                               #
     # ------------------------------------------------------------------ #
     def _build_player_db_tab(self, notebook: ttk.Notebook):
-        tab = tk.Frame(notebook)
+        tab = ttk.Frame(notebook)
         notebook.add(tab, text="Player Database")
 
         self._db_header: list[str] = []
@@ -420,44 +489,46 @@ class RivalsGUI:
         self._skin_stems: list[str] = []
 
         # Two-pane layout
-        pane = tk.PanedWindow(tab, orient="horizontal", sashrelief="raised")
+        pane = tk.PanedWindow(tab, orient="horizontal", sashrelief="flat",
+                              bg=_BG2, sashwidth=6)
         pane.pack(fill="both", expand=True, padx=10, pady=10)
 
         # --- Left: player list ---
-        left = tk.Frame(pane)
+        left = ttk.Frame(pane)
         pane.add(left, width=190)
 
-        tk.Label(left, text="Players", font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 2))
+        ttk.Label(left, text="Players", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 2))
 
         self._player_search = tk.StringVar()
-        tk.Entry(left, textvariable=self._player_search).pack(fill="x", pady=(0, 4))
+        ttk.Entry(left, textvariable=self._player_search).pack(fill="x", pady=(0, 4))
         self._player_search.trace_add("write", lambda *_: self._refresh_player_list())
 
-        lb_frame = tk.Frame(left)
+        lb_frame = ttk.Frame(left)
         lb_frame.pack(fill="both", expand=True)
-        lb_sb = tk.Scrollbar(lb_frame)
+        lb_sb = ttk.Scrollbar(lb_frame)
         lb_sb.pack(side="right", fill="y")
-        self._player_listbox = tk.Listbox(lb_frame, yscrollcommand=lb_sb.set, selectmode="single", activestyle="dotbox")
+        self._player_listbox = tk.Listbox(lb_frame, yscrollcommand=lb_sb.set, selectmode="single",
+                                          activestyle="none", relief="flat", borderwidth=0)
         self._player_listbox.pack(side="left", fill="both", expand=True)
         lb_sb.config(command=self._player_listbox.yview)
         self._player_listbox.bind("<<ListboxSelect>>", self._on_player_select)
 
-        btn_row = tk.Frame(left)
+        btn_row = ttk.Frame(left)
         btn_row.pack(fill="x", pady=(6, 0))
-        tk.Button(btn_row, text="+ Add", command=self._add_player).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        tk.Button(btn_row, text="- Remove", command=self._remove_player).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        ttk.Button(btn_row, text="+ Add", command=self._add_player).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        ttk.Button(btn_row, text="- Remove", command=self._remove_player).pack(side="left", fill="x", expand=True, padx=(2, 0))
 
         # --- Right: editor ---
-        right = tk.Frame(pane)
+        right = ttk.Frame(pane)
         pane.add(right)
 
-        self._editing_label = tk.Label(right, text="Select a player", font=("TkDefaultFont", 10, "bold"))
+        self._editing_label = ttk.Label(right, text="Select a player", font=("Segoe UI", 10, "bold"))
         self._editing_label.pack(anchor="w", pady=(0, 6))
 
         # Treeview
-        tree_frame = tk.Frame(right)
+        tree_frame = ttk.Frame(right)
         tree_frame.pack(fill="both", expand=True)
-        tree_sb = tk.Scrollbar(tree_frame)
+        tree_sb = ttk.Scrollbar(tree_frame)
         tree_sb.pack(side="right", fill="y")
         self._char_tree = ttk.Treeview(
             tree_frame, columns=("char", "skin"), show="headings",
@@ -471,58 +542,58 @@ class RivalsGUI:
         tree_sb.config(command=self._char_tree.yview)
         self._char_tree.bind("<<TreeviewSelect>>", self._on_char_tree_select)
 
-        tree_btns = tk.Frame(right)
+        tree_btns = ttk.Frame(right)
         tree_btns.pack(fill="x", pady=4)
-        tk.Button(tree_btns, text="Edit Selected", command=self._edit_char_entry).pack(side="left", padx=(0, 4))
-        tk.Button(tree_btns, text="Remove Selected", command=self._remove_char_entry).pack(side="left")
-        tk.Button(tree_btns, text="Move Up", command=lambda: self._move_char_entry(-1)).pack(side="right", padx=(4, 0))
-        tk.Button(tree_btns, text="Move Down", command=lambda: self._move_char_entry(1)).pack(side="right")
+        ttk.Button(tree_btns, text="Edit Selected", command=self._edit_char_entry).pack(side="left", padx=(0, 4))
+        ttk.Button(tree_btns, text="Remove Selected", command=self._remove_char_entry).pack(side="left")
+        ttk.Button(tree_btns, text="Move Up", command=lambda: self._move_char_entry(-1)).pack(side="right", padx=(4, 0))
+        ttk.Button(tree_btns, text="Move Down", command=lambda: self._move_char_entry(1)).pack(side="right")
 
         ttk.Separator(right, orient="horizontal").pack(fill="x", pady=6)
 
-        tk.Label(right, text="Add / Edit Entry", font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(0, 4))
+        ttk.Label(right, text="Add / Edit Entry", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
 
-        form_section = tk.Frame(right)
+        form_section = ttk.Frame(right)
         form_section.pack(fill="x")
-        form_left = tk.Frame(form_section)
+        form_left = ttk.Frame(form_section)
         form_left.pack(side="left", fill="y")
-        form_right = tk.Frame(form_section)
+        form_right = ttk.Frame(form_section)
         form_right.pack(side="left", padx=(12, 0), anchor="n")
 
-        form_row = tk.Frame(form_left)
+        form_row = ttk.Frame(form_left)
         form_row.pack(fill="x")
-        tk.Label(form_row, text="Character:").pack(side="left")
+        ttk.Label(form_row, text="Character:").pack(side="left")
         self._form_char = tk.StringVar()
         ttk.Combobox(
             form_row, textvariable=self._form_char, values=CHARACTERS, state="readonly", width=14,
         ).pack(side="left", padx=(4, 12))
         self._form_char.trace_add("write", self._on_form_char_change)
 
-        tk.Label(form_row, text="Skin:").pack(side="left")
+        ttk.Label(form_row, text="Skin:").pack(side="left")
         self._form_skin_var = tk.StringVar()
         self._form_skin_box = ttk.Combobox(form_row, textvariable=self._form_skin_var, state="readonly", width=30)
         self._form_skin_box.pack(side="left", padx=4)
         self._form_skin_var.trace_add("write", self._on_form_skin_change)
 
-        form_btns = tk.Frame(form_left)
+        form_btns = ttk.Frame(form_left)
         form_btns.pack(fill="x", pady=4)
-        self._form_add_btn = tk.Button(form_btns, text="Add Entry", command=self._add_char_entry)
+        self._form_add_btn = ttk.Button(form_btns, text="Add Entry", command=self._add_char_entry)
         self._form_add_btn.pack(side="left", padx=(0, 4))
-        self._form_edit_btn = tk.Button(form_btns, text="Update Entry", command=self._update_char_entry, state="disabled")
+        self._form_edit_btn = ttk.Button(form_btns, text="Update Entry", command=self._update_char_entry, state="disabled")
         self._form_edit_btn.pack(side="left")
-        tk.Button(form_btns, text="Clear Form", command=self._clear_form).pack(side="left", padx=(8, 0))
+        ttk.Button(form_btns, text="Clear Form", command=self._clear_form).pack(side="left", padx=(8, 0))
 
-        self._preview_label = tk.Label(form_right, bg="#111111", width=11, height=9)
+        self._preview_label = tk.Label(form_right, bg=_BG3, width=22, height=9)
         self._preview_label.pack()
         self._preview_img = None
 
         ttk.Separator(right, orient="horizontal").pack(fill="x", pady=6)
 
-        save_row = tk.Frame(right)
+        save_row = ttk.Frame(right)
         save_row.pack(fill="x")
-        tk.Button(save_row, text="Save Player Database", command=self._save_player_db,
-                  bg="#2d6a2d", fg="white", width=22).pack(side="left")
-        tk.Button(save_row, text="Reload from File", command=self._reload_player_db).pack(side="left", padx=(8, 0))
+        ttk.Button(save_row, text="Save Player Database", command=self._save_player_db,
+                   style="Accent.TButton").pack(side="left")
+        ttk.Button(save_row, text="Reload from File", command=self._reload_player_db).pack(side="left", padx=(8, 0))
 
         self._reload_player_db()
 
@@ -566,9 +637,9 @@ class RivalsGUI:
         dialog.geometry("300x110")
         dialog.transient(self.root)
         dialog.grab_set()
-        tk.Label(dialog, text="Player name:").pack(pady=(14, 4))
+        ttk.Label(dialog, text="Player name:").pack(pady=(14, 4))
         name_var = tk.StringVar()
-        entry = tk.Entry(dialog, textvariable=name_var, width=30)
+        entry = ttk.Entry(dialog, textvariable=name_var, width=30)
         entry.pack()
         entry.focus()
 
@@ -594,7 +665,7 @@ class RivalsGUI:
             dialog.destroy()
 
         entry.bind("<Return>", lambda _: confirm())
-        tk.Button(dialog, text="Add", command=confirm).pack(pady=8)
+        ttk.Button(dialog, text="Add", command=confirm).pack(pady=8)
 
     def _remove_player(self):
         if not self._db_selected_player or self._db_selected_player not in self._db_players:
@@ -642,8 +713,8 @@ class RivalsGUI:
             return
         try:
             img = Image.open(path)
-            h = 130
-            w = round(img.width * h / img.height)
+            w = 220
+            h = round(img.height * w / img.width)
             img = img.resize((w, h), Image.LANCZOS)
             self._preview_img = ImageTk.PhotoImage(img)
             self._preview_label.config(image=self._preview_img, width=w, height=h)
@@ -652,7 +723,7 @@ class RivalsGUI:
 
     def _clear_preview(self):
         self._preview_img = None
-        self._preview_label.config(image="", width=11, height=9)
+        self._preview_label.config(image="", width=22, height=9)
 
     def _skin_stem_from_label(self, lbl: str) -> str:
         labels = [skin_label(s) for s in self._skin_stems]
@@ -741,43 +812,44 @@ class RivalsGUI:
     #  Tab: Character Database                                            #
     # ------------------------------------------------------------------ #
     def _build_char_db_tab(self, notebook: ttk.Notebook):
-        tab = tk.Frame(notebook)
+        tab = ttk.Frame(notebook)
         notebook.add(tab, text="Character Database")
 
         self._cdb_headers: list[str] = []
         self._cdb_chars: list[str] = []
 
-        top = tk.Frame(tab)
+        top = ttk.Frame(tab)
         top.pack(fill="both", expand=True, padx=10, pady=(10, 4))
 
-        tk.Label(top, text="Characters", font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 2))
+        ttk.Label(top, text="Characters", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 2))
 
-        list_frame = tk.Frame(top)
+        list_frame = ttk.Frame(top)
         list_frame.pack(fill="both", expand=True)
-        cdb_sb = tk.Scrollbar(list_frame)
+        cdb_sb = ttk.Scrollbar(list_frame)
         cdb_sb.pack(side="right", fill="y")
         self._cdb_listbox = tk.Listbox(
             list_frame, yscrollcommand=cdb_sb.set,
-            selectmode="single", activestyle="dotbox", width=34,
+            selectmode="single", activestyle="none", width=34,
+            relief="flat", borderwidth=0,
         )
         self._cdb_listbox.pack(side="left", fill="both", expand=True)
         cdb_sb.config(command=self._cdb_listbox.yview)
 
-        btn_row = tk.Frame(tab)
+        btn_row = ttk.Frame(tab)
         btn_row.pack(fill="x", padx=10, pady=4)
-        tk.Button(btn_row, text="+ Add",    command=self._cdb_add).pack(side="left", padx=(0, 4))
-        tk.Button(btn_row, text="Rename",   command=self._cdb_rename).pack(side="left", padx=(0, 4))
-        tk.Button(btn_row, text="- Remove", command=self._cdb_remove).pack(side="left")
-        tk.Button(btn_row, text="Move Up",   command=lambda: self._cdb_move(-1)).pack(side="right", padx=(4, 0))
-        tk.Button(btn_row, text="Move Down", command=lambda: self._cdb_move(1)).pack(side="right")
+        ttk.Button(btn_row, text="+ Add",    command=self._cdb_add).pack(side="left", padx=(0, 4))
+        ttk.Button(btn_row, text="Rename",   command=self._cdb_rename).pack(side="left", padx=(0, 4))
+        ttk.Button(btn_row, text="- Remove", command=self._cdb_remove).pack(side="left")
+        ttk.Button(btn_row, text="Move Up",   command=lambda: self._cdb_move(-1)).pack(side="right", padx=(4, 0))
+        ttk.Button(btn_row, text="Move Down", command=lambda: self._cdb_move(1)).pack(side="right")
 
         ttk.Separator(tab, orient="horizontal").pack(fill="x", padx=10, pady=4)
 
-        save_row = tk.Frame(tab)
+        save_row = ttk.Frame(tab)
         save_row.pack(fill="x", padx=10, pady=(0, 8))
-        tk.Button(save_row, text="Save Character Database", command=self._cdb_save,
-                  bg="#2d6a2d", fg="white", width=24).pack(side="left")
-        tk.Button(save_row, text="Reload from File", command=self._cdb_reload).pack(side="left", padx=(8, 0))
+        ttk.Button(save_row, text="Save Character Database", command=self._cdb_save,
+                   style="Accent.TButton").pack(side="left")
+        ttk.Button(save_row, text="Reload from File", command=self._cdb_reload).pack(side="left", padx=(8, 0))
 
         self._cdb_reload()
 
@@ -800,9 +872,9 @@ class RivalsGUI:
         dialog.geometry("280x110")
         dialog.transient(self.root)
         dialog.grab_set()
-        tk.Label(dialog, text="Character name:").pack(pady=(14, 4))
+        ttk.Label(dialog, text="Character name:").pack(pady=(14, 4))
         name_var = tk.StringVar()
-        entry = tk.Entry(dialog, textvariable=name_var, width=28)
+        entry = ttk.Entry(dialog, textvariable=name_var, width=28)
         entry.pack()
         entry.focus()
 
@@ -822,7 +894,7 @@ class RivalsGUI:
             dialog.destroy()
 
         entry.bind("<Return>", lambda _: confirm())
-        tk.Button(dialog, text="Add", command=confirm).pack(pady=8)
+        ttk.Button(dialog, text="Add", command=confirm).pack(pady=8)
 
     def _cdb_rename(self):
         idx = self._cdb_selected_idx()
@@ -836,9 +908,9 @@ class RivalsGUI:
         dialog.geometry("280x110")
         dialog.transient(self.root)
         dialog.grab_set()
-        tk.Label(dialog, text="New name:").pack(pady=(14, 4))
+        ttk.Label(dialog, text="New name:").pack(pady=(14, 4))
         name_var = tk.StringVar(value=old_name)
-        entry = tk.Entry(dialog, textvariable=name_var, width=28)
+        entry = ttk.Entry(dialog, textvariable=name_var, width=28)
         entry.pack()
         entry.focus()
         entry.select_range(0, "end")
@@ -859,7 +931,7 @@ class RivalsGUI:
             dialog.destroy()
 
         entry.bind("<Return>", lambda _: confirm())
-        tk.Button(dialog, text="Rename", command=confirm).pack(pady=8)
+        ttk.Button(dialog, text="Rename", command=confirm).pack(pady=8)
 
     def _cdb_remove(self):
         idx = self._cdb_selected_idx()

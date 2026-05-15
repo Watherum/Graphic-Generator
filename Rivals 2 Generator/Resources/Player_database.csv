@@ -67,7 +67,7 @@ Ross,Zetterburn,T_Zet_Flavorburn_Green_CSP
 Drewsephix,Orcane,T_Orc_Genesis_Neutral_CSP,Absa,T_Abs_Mecha_Red_CSP,Slade,T_Sla_Lovers_Neutral_CSP
 Bowler,Clairen,T_Cla_Default_CoolBlue_CSP
 hotel pneumario,Etalus,T_Eta_Striped_Red_CSP
-Shard,Fleet,T_Fle_Pajama_CoolBlue_CSP,Maypul,T_May_Pirate_Red_CSP,Absa,T_Abs_Abyss_Blue_CSP
+Shard,Fleet,T_Fle_Summer_Blue_CSP,Maypul,T_May_Pirate_Red_CSP,Absa,T_Abs_Abyss_Blue_CSP
 SapphireGD,Zetterburn,T_Zet_Cheetah_Blue_CSP
 Nothigh,Loxodont,T_Lox_Lovers_Neutral_CSP,La Reina,T_Lar_Abyss_Red_CSP
 Turnap,Ranno,T_Ran_Default_Summer_CSP,La Reina,T_Lar_Default_Blue_CSP
@@ -82,7 +82,7 @@ Mask,Galvan,T_Gal_Default_Green_CSP,Forsburn,T_For_Retro_Neutral_CSP
 Dr. Grin,Wrastor,T_Wra_Mecha_Midnight_CSP
 Hockey,Zetterburn,T_Zet_Champion_Neutral_CSP
 Ferrari77,Clairen,T_Cla_Mecha_Neutral_CSP
-Waddlespch,Zetterburn,T_Zet_Default_Black_CSP
+Waddlespch,Zetterburn,T_Zet_Vampire_Neutral_CSP
 RubySoul,Forsburn,T_For_Default_Red_CSP
 TekAjpu,Maypul,T_May_Mummy_Blue_CSP
 Gordrack,Etalus,T_Eta_Retro_Green_CSP,Zetterburn,T_Zet_Excaliburn_Red_CSP
@@ -101,7 +101,7 @@ Lucent,Orcane,T_Orc_Retro_Neutral_CSP
 Guren,Fleet,T_Fle_Sunny_Blue_CSP
 GirthwormJim,Forsburn,T_For_Wasteland_Blue_CSP
 Turts,Zetterburn,T_Zet_Default_Purple_CSP
-RachnerousBoyToy,La Reina,T_Lar_Default_White_CSP
+RachnerousBoyToy,La Reina,T_Lar_Pajama_Blue_CSP
 RivalsRatGod,Olympia,T_Oly_Default_Neutral_CSP
 MX Golli,Zetterburn,T_Zet_Panther_Neutral_CSP
 Tacobros,Clairen,T_Cla_Champion_Neutral_CSP
@@ -141,5 +141,8 @@ Nimbus,Slade,T_Sla_Default_Neutral_CSP,Fleet,T_Fle_Pajama_Neutral_CSP
 Arbs,Kragg,T_Kra_Salaryman_Red_CSP
 LittleBoi,Kragg,T_Kra_LowPoly_Blue_CSP
 Goose,Ranno,T_Ran_Tuxedo_Neutral_CSP
-ProZ,Maypul,T_May_Retro_Red_CSP
+ProZ,Maypul,T_May_Primal_Blue_CSP
 Geo,La Reina,T_Lar_Pajama_Blue_CSP
+JGamer,Etalus,T_Eta_Champion_Blue_CSP
+LemonCake,Orcane,T_Orc_RootBeerFloat_Green_CSP,Slade,T_Sla_Abyss_Blue_CSP,Clairen,T_Cla_RainyDay_Red_CSP
+the problem causer,Orcane,T_Orc_Default_Brown_CSP

@@ -54,22 +54,22 @@ def setGlobals(weekly_event, property_settings=None):
     :return:
     """
     # Set globals based off of type of weekly
-    if weekly_event.startswith('Quarantainment'):
-        global_properties = populate_globals.setGlobalsQuarantainment(weekly_event)
-    elif weekly_event.startswith('Straight Into The Abyss'):
+    if weekly_event.startswith('Straight Into The Abyss'):
         global_properties = populate_globals.setGlobalsStraightIntoTheAbyss(weekly_event)
     elif weekly_event.startswith('Immortal Fight Night'):
-        global_properties = populate_globals.setGlobalsIFN(weekly_event) 
+        global_properties = populate_globals.setGlobalsIFN(weekly_event)
     elif weekly_event.startswith('Super Fusion'):
-        global_properties = populate_globals.setGlobalsSuperFusion(weekly_event) 
+        global_properties = populate_globals.setGlobalsSuperFusion(weekly_event)
     elif weekly_event.startswith('Twist of Fate'):
-        global_properties = populate_globals.setGlobalsTwistOfFate(weekly_event) 
+        global_properties = populate_globals.setGlobalsTwistOfFate(weekly_event)
     elif weekly_event.startswith('Clip It'):
-        global_properties = populate_globals.setGlobalsClipIt(weekly_event) 
+        global_properties = populate_globals.setGlobalsClipIt(weekly_event)
     elif weekly_event.startswith('CR Clash'):
         global_properties = populate_globals.setGlobalsCRClash(weekly_event)
     elif weekly_event.startswith('CR Arcadian'):
         global_properties = populate_globals.setGlobalsCRArcadian(weekly_event)
+    elif weekly_event.startswith('Quarantainment'):
+        global_properties = populate_globals.setGlobalsQuarantainment(weekly_event)
     else:
         global_properties = populate_globals.set_default_properties(weekly_event)
     # return properties
