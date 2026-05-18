@@ -2,18 +2,18 @@
 # All information is tab deliminated
 
 #Graphic Information
-Event name:	Straight Into The Abyss 48
-Event link: https://start.gg/SITA48
-Event entrants:	20 Competitors
-Event date:	5/6/2026
+Event name:	Straight Into The Abyss 49
+Event link: https://start.gg/SITA49
+Event entrants:	26 Competitors
+Event date:	5/13/2026
 
 # Placements
 # place, name, sponsor, characters
-1,Sophilo,Shrug Club,Zetterburn
-2,SapphireGD,AoC,Zetterburn
-3,Viviana,NS,Galvan
-4,humanlime,RBE,Orcane
-5,Shard,,Fleet
-5,ProZ,,Maypul
-7,Cy,,Ranno
-7,Nothigh,ravel,Loxodont
+1,Sophilo,Shrug Club,
+2,SapphireGD,AoC,
+3,Shard,,Fleet
+4,ProZ,,Maypul
+5,Turnap,BLZE,
+5,waddlespch,EGG,Zetterburn
+7,Viviana,NS,Galvan
+7,LemonCake,,Orcane

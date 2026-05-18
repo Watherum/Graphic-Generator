@@ -1,3 +1,3 @@
-@echo off
+﻿@echo off
 cd /d "%~dp0"
-python "Python Scripts\melee_gui.py"
+py -3.9 "Python Scripts\melee_gui.py"

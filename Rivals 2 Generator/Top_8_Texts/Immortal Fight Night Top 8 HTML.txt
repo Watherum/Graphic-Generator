@@ -2,54 +2,14 @@
 # All information is tab deliminated
 
 #Graphic Information
-Event name:	Immortal Fight Night
-Event link: https://start.gg/UIFN273
-Event entrants:	8 Competitors
-Event date:	4/27/2026
+Event name:	Immortal Fight Night 274
+Event link: https://start.gg/UIFN274
+Event entrants:	4 Competitors
+Event date:	5/4/2026
 
 # Placements
 # place, name, sponsor, characters
 1,Average Alex,C2F,Slade
-2,Bowler,Free,Clairen
+2,ybm,RATS,Wrastor
 3,Watherum,C2F,Ranno
-4,ybm,RATS,Wrastor
-5,Grunk,C2F,Zetterburn
-5,BGunn,Shmoney,Olympia
-7,Sh-Awe,Free,Galvan
-7,Ares,C0b,Absa
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#First 3 lines of text are
-#1) link to the bracket 
-#2) how many competitors 
-#3) Date of the bracket
-#The following CSV lines describe the images and text that need to be placed
-#Placement,Sponsor (empty if none),Name,Character,skin number
-#https://start.gg/sita45
-#17 competitors
-#4/16/2026
-#1,Shrug Club,Sophilo,Zetterburn,17
-#2,AOC,SapphireGD,Zetterburn,35
-#3,,Shard,Fleet,81
-#4,BLZE,Turnap,Ranno,68
-#5,,Landkon2,Galvan,34
-#6,Δ&Λ,Lucent εχΘ,Orcane,5
-#7,MB,Mkok,Zetterburn,1
-#7,mindset,RX,Clairen,23
+4,Sh-Awe,,Galvan

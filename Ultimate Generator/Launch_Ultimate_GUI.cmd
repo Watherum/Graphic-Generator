@@ -1,4 +1,3 @@
-@echo off
+﻿@echo off
 cd /d "%~dp0"
-call ..\venv\Scripts\activate.bat
-python "Python Scripts\ultimate_gui.py"
+py -3.9 "Python Scripts\ultimate_gui.py"
