@@ -6,6 +6,12 @@ Ultimate Support is still maintained but not the main focus. Some Melee support 
 
 Using the docs below and the Rivals 2 section as a guide you can use this for either game. Or modify it to create thumbnails for a new game
 
+## Updating
+
+Run `update.cmd` from the repo root to pull the latest code from GitHub.
+
+It will automatically stash any local changes (generated outputs, VOD name files, etc.), pull the latest source, then restore your local changes. Requires [Git for Windows](https://git-scm.com/download/win) to be installed.
+
 ## Notes
 Currently these scripts only run with python 3.9. An exe is included.
 
