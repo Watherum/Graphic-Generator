@@ -3,7 +3,7 @@
 # Player,character,alt,character,alt,character,alt,character,alt,character,alt,character,alt,,,,,,
 Watherum,Ranno,T_Ran_Tuxedo_Neutral_CSP,Clairen,T_Cla_Abyss_Red_CSP,Kragg,T_Kra_Default_Abyssal_CSP,Zetterburn,T_Zet_Abyss_Red_CSP,Galvan,T_Gal_Genesis_Red_CSP
 Monocle Gentlesir,Maypul,T_May_Sylvan_Green_CSP,Clairen,T_Cla_Abyss_Green_CSP,La Reina,T_Lar_Hornet_Green_CSP
-Average Alex,Clairen,T_Cla_Leopard_Pink_CSP,Forsburn,T_For_Default_Neutral_CSP,Random,T_Ran_Blue,Maypul,T_May_Primal_Orange_CSP,Wrastor,T_Wra_Default_Neutral_CSP,Kragg,T_Kra_Default_Neutral_CSP,Orcane,T_Orc_BlueTang_Blue_CSP,Loxodont,T_Lox_Summer_Blue_CSP,Zetterburn,T_Zet_Default_Neutral_CSP,Etalus,T_Eta_Default_Green_CSP,Olympia,T_Oly_LowPoly_Green_CSP,Fleet,T_Fle_Ranger_Green_CSP,Ranno,T_Ran_LowPoly_Orange_CSP,Absa,T_Abs_Summer_Green_CSP,Galvan,T_Gal_Abyss_Midnight_CSP,La Reina,T_Lar_Lucha_Green_CSP,Slade,T_Sla_Zebra_Neutral_CSP
+Average Alex,Clairen,T_Cla_Leopard_Pink_CSP,Forsburn,T_For_Default_Neutral_CSP,Random,T_Ran_Blue,Maypul,T_May_Primal_Orange_CSP,Wrastor,T_Wra_Default_Neutral_CSP,Kragg,T_Kra_Default_Neutral_CSP,Orcane,T_Orc_Prehistoric_CoolBlue_CSP,Loxodont,T_Lox_Summer_Blue_CSP,Zetterburn,T_Zet_Default_Neutral_CSP,Etalus,T_Eta_Default_Green_CSP,Olympia,T_Oly_LowPoly_Green_CSP,Fleet,T_Fle_Ranger_Green_CSP,Ranno,T_Ran_LowPoly_Orange_CSP,Absa,T_Abs_Summer_Green_CSP,Galvan,T_Gal_Abyss_Midnight_CSP,La Reina,T_Lar_Lucha_Green_CSP,Slade,T_Sla_Zebra_Neutral_CSP
 ZeeBee,Kragg,T_Kra_Default_Blue_CSP,Random,T_Ran_Blue,Etalus,T_Eta_Default_Green_CSP,Clairen,T_Cla_Default_Blue_CSP,Zetterburn,T_Zet_Default_Red_CSP,Orcane,T_Orc_Default_Red_CSP
 Mars,Clairen,T_Cla_Default_Neutral_CSP
 Crowbar,Kragg,T_Kra_Soccer_Neutral_CSP,Zetterburn,T_Zet_Default_Blue_CSP,Random,T_Ran_Blue
@@ -32,7 +32,7 @@ Lucio,Zetterburn,T_Zet_Vampire_Neutral_CSP
 Shadowhawke,Wrastor,T_Wra_Tailslide_Neutral_CSP
 Hybrid Omega,Kragg,T_Kra_Snowman_Blue_CSP
 Cou,Kragg,T_Kra_Snowman_Yellow_CSP,Clairen,T_Cla_Slasher_Neutral_CSP,La Reina,T_Lar_Primal_White_CSP
-Suture,Ranno,T_Ran_Dart_Foil_CSP
+Suture,Ranno,T_Ran_Tuxedo_Pink_CSP
 ybm,Wrastor,T_Wra_Parrot_Neutral_CSP,Fleet,T_Fle_Champion_Blue_CSP
 nard,Clairen,T_Cla_Default_Purple_CSP
 TTVarab_munny,Clairen,T_Cla_Default_Blue_CSP
@@ -49,7 +49,7 @@ Robb With 2 Bs,Orcane,T_Orc_Genesis_Neutral_CSP
 Mkok,Zetterburn,T_Zet_Default_Neutral_CSP
 Virgo,Orcane,T_Orc_Clownfish_Green_CSP,Olympia,T_Oly_Lovers_Green_CSP
 Spyker,Zetterburn,T_Zet_Lovers_Neutral_CSP
-JuanSolo,Loxodont,T_Lox_DarkFuture_Neutral_CSP
+JuanSolo,Loxodont,T_Lox_Lovers_Mint_CSP
 BGunn,Olympia,T_Oly_LowPoly_Blue_CSP,Clairen,T_Cla_Champion_Blue_CSP
 Sourkroutt,Clairen,T_Cla_Ranger_Neutral_CSP
 leggy145,Kragg,T_Kra_Rockstar_Neutral_CSP
@@ -82,7 +82,7 @@ Mask,Galvan,T_Gal_Default_Green_CSP,Forsburn,T_For_Retro_Neutral_CSP
 Dr. Grin,Wrastor,T_Wra_Mecha_Midnight_CSP
 Hockey,Zetterburn,T_Zet_Champion_Neutral_CSP
 Ferrari77,Clairen,T_Cla_Mecha_Neutral_CSP
-Waddlespch,Zetterburn,T_Zet_Vampire_Neutral_CSP
+Waddlespch,Zetterburn,T_Zet_Excaliburn_Neutral_CSP
 RubySoul,Forsburn,T_For_Default_Red_CSP
 TekAjpu,Maypul,T_May_Mummy_Blue_CSP
 Gordrack,Etalus,T_Eta_Retro_Green_CSP,Zetterburn,T_Zet_Excaliburn_Red_CSP
@@ -98,10 +98,10 @@ Nebulex,Loxodont,T_Lox_Chef_Red_CSP
 Astrobeat,Absa,T_Abs_Retro_Blue_CSP
 Unleashed,La Reina,T_Lar_Abyss_Blue_CSP
 Lucent,Orcane,T_Orc_Retro_Neutral_CSP
-Guren,Fleet,T_Fle_Sunny_Blue_CSP
+Guren,Fleet,T_Fle_Sunny_Black_CSP
 GirthwormJim,Forsburn,T_For_Wasteland_Blue_CSP
 Turts,Zetterburn,T_Zet_Default_Purple_CSP
-RachnerousBoyToy,La Reina,T_Lar_Pajama_Blue_CSP
+RachnerousBoyToy,La Reina,T_Lar_Evo_Red_CSP
 RivalsRatGod,Olympia,T_Oly_Default_Neutral_CSP
 MX Golli,Zetterburn,T_Zet_Panther_Neutral_CSP
 Tacobros,Clairen,T_Cla_Champion_Neutral_CSP
@@ -141,8 +141,17 @@ Nimbus,Slade,T_Sla_Default_Neutral_CSP,Fleet,T_Fle_Pajama_Neutral_CSP
 Arbs,Kragg,T_Kra_Salaryman_Red_CSP
 LittleBoi,Kragg,T_Kra_LowPoly_Blue_CSP
 Goose,Ranno,T_Ran_Tuxedo_Neutral_CSP
-ProZ,Maypul,T_May_Primal_Blue_CSP
+ProZ,Maypul,T_May_Retro_Red_CSP
 Geo,La Reina,T_Lar_Pajama_Blue_CSP
 JGamer,Etalus,T_Eta_Champion_Blue_CSP
 LemonCake,Orcane,T_Orc_RootBeerFloat_Green_CSP,Slade,T_Sla_Abyss_Blue_CSP,Clairen,T_Cla_RainyDay_Red_CSP
 the problem causer,Orcane,T_Orc_Default_Brown_CSP
+Ant,Ranno,T_Ran_Dart_Foil_CSP
+MonkadZ,Forsburn,T_For_Ranger_Green_CSP
+Fidel Ca$htro,Zetterburn,T_Zet_LowPoly_Red_CSP
+Silly Goose 87,Slade,T_Sla_Lovers_Green_CSP
+maya,Orcane,T_Orc_Demigod_Green_CSP
+Teri,Olympia,T_Oly_Baker_Black_CSP
+Env3lop,Wrastor,T_Wra_Puffin_Neutral_CSP
+DrLobster,Kragg,T_Kra_Salaryman_Neutral_CSP
+Triforce!,Forsburn,T_For_SmokeClan_Yellow_CSP

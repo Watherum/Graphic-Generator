@@ -525,6 +525,15 @@ class RivalsGUI:
         self._editing_label = ttk.Label(right, text="Select a player", font=("Segoe UI", 10, "bold"))
         self._editing_label.pack(anchor="w", pady=(0, 6))
 
+        # Anchor save row to the bottom before packing expanding widgets so it
+        # is never displaced when the skin preview image grows tall.
+        save_row = ttk.Frame(right)
+        save_row.pack(fill="x", side="bottom")
+        ttk.Button(save_row, text="Save Player Database", command=self._save_player_db,
+                   style="Accent.TButton").pack(side="left")
+        ttk.Button(save_row, text="Reload from File", command=self._reload_player_db).pack(side="left", padx=(8, 0))
+        ttk.Separator(right, orient="horizontal").pack(fill="x", pady=6, side="bottom")
+
         # Treeview
         tree_frame = ttk.Frame(right)
         tree_frame.pack(fill="both", expand=True)
@@ -586,14 +595,6 @@ class RivalsGUI:
         self._preview_label = tk.Label(form_right, bg=_BG3, width=22, height=9)
         self._preview_label.pack()
         self._preview_img = None
-
-        ttk.Separator(right, orient="horizontal").pack(fill="x", pady=6)
-
-        save_row = ttk.Frame(right)
-        save_row.pack(fill="x")
-        ttk.Button(save_row, text="Save Player Database", command=self._save_player_db,
-                   style="Accent.TButton").pack(side="left")
-        ttk.Button(save_row, text="Reload from File", command=self._reload_player_db).pack(side="left", padx=(8, 0))
 
         self._reload_player_db()
 
