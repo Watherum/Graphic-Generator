@@ -26,6 +26,7 @@ THUMBNAIL_SCRIPT = ROOT / "Python Scripts" / "generate_rivals_thumbnail.py"
 RENDERS_DIR = ROOT / "Resources" / "Character_Renders" / "Rivals 2 Full Renders"
 PLAYER_DB_PATH = ROOT / "Resources" / "Player_database.csv"
 CHAR_DB_PATH   = ROOT / "Resources" / "Character_database.csv"
+SETTINGS_PATH  = ROOT / "rivals_gui_settings.json"
 
 CHARACTERS = [
     "Absa", "Armando", "Clairen", "Etalus", "Fleet", "Forsburn",
@@ -49,6 +50,26 @@ _FG    = "#ffffff"
 _MUTED = "#999999"
 _SEL   = "#0078d4"
 _GREEN = "#1e7a1e"
+
+
+def _add_placeholder(entry: ttk.Entry, text: str, muted: str = _MUTED, normal: str = _FG) -> None:
+    """Show grey hint text in an Entry when it is empty and unfocused."""
+    def _show():
+        if not entry.get():
+            entry.config(foreground=muted)
+            entry.insert(0, text)
+
+    def _hide(_=None):
+        if entry.get() == text:
+            entry.delete(0, "end")
+            entry.config(foreground=normal)
+
+    def _on_focus_out(_=None):
+        _show()
+
+    entry.bind("<FocusIn>", _hide)
+    entry.bind("<FocusOut>", _on_focus_out)
+    _show()
 
 
 def _apply_theme(root: tk.Tk) -> None:
@@ -224,6 +245,7 @@ class RivalsGUI:
         self.root.resizable(True, True)
 
         _apply_theme(self.root)
+        self._settings = self._load_settings()
 
         notebook = ttk.Notebook(root)
         notebook.pack(fill="both", expand=True, padx=0, pady=0)
@@ -233,6 +255,13 @@ class RivalsGUI:
         self._build_renders_tab(notebook)
         self._build_player_db_tab(notebook)
         self._build_char_db_tab(notebook)
+
+        def _on_tab_changed(_event=None):
+            tab = notebook.tab(notebook.select(), "text")
+            if tab == "Player Database":
+                self._player_listbox.focus_set()
+
+        notebook.bind("<<NotebookTabChanged>>", _on_tab_changed)
 
         # Shared console
         console_frame = ttk.LabelFrame(root, text="Console Output")
@@ -257,11 +286,33 @@ class RivalsGUI:
         ttk.Button(footer, text="Clear Console", command=self._clear_console).pack(side="right")
 
     # ------------------------------------------------------------------ #
+    #  Settings persistence                                               #
+    # ------------------------------------------------------------------ #
+    def _load_settings(self) -> dict:
+        import json
+        try:
+            return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _save_settings(self):
+        import json
+        data = {
+            "last_event_nums": {
+                label: w["num"].get()
+                for label, w in self._fetch_widgets.items()
+            },
+            "last_thumb_series": self._thumb_series.get(),
+        }
+        self._settings = data
+        SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    # ------------------------------------------------------------------ #
     #  Tab: Fetch from start.gg                                           #
     # ------------------------------------------------------------------ #
     def _build_fetch_tab(self, notebook: ttk.Notebook):
         tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Fetch from start.gg")
+        notebook.add(tab, text="Fetch From Start.gg")
 
         self._fetch_widgets = {}
 
@@ -273,16 +324,21 @@ class RivalsGUI:
             row1.pack(fill="x", pady=(0, 4))
 
             ttk.Label(row1, text="Event #:").pack(side="left")
-            num_var = tk.StringVar(value=cfg["default_num"])
+            saved_num = self._settings.get("last_event_nums", {}).get(cfg["label"], cfg["default_num"])
+            num_var = tk.StringVar(value=saved_num)
             ttk.Entry(row1, textvariable=num_var, width=6).pack(side="left", padx=(4, 16))
 
             ttk.Label(row1, text="Top 8 Link:").pack(side="left")
-            link_var = tk.StringVar(value=cfg["default_link"].replace("{n}", cfg["default_num"]))
+            link_var = tk.StringVar(value=cfg["default_link"].replace("{n}", saved_num))
             ttk.Entry(row1, textvariable=link_var, width=32).pack(side="left", padx=4)
 
-            # Auto-fill link when number changes
-            def _on_num_change(name, index, mode, nv=num_var, lv=link_var, t=cfg["default_link"]):
-                lv.set(t.replace("{n}", nv.get().strip()))
+            # Auto-fill link when number changes, sync to Generate tab, and persist
+            def _on_num_change(name, index, mode, nv=num_var, lv=link_var, t=cfg["default_link"], lbl=cfg["label"]):
+                n = nv.get().strip()
+                lv.set(t.replace("{n}", n))
+                if hasattr(self, "_thumb_series") and self._thumb_series.get() == lbl:
+                    self._thumb_num.set(n)
+                self._save_settings()
             num_var.trace_add("write", _on_num_change)
 
             row2 = ttk.Frame(lf)
@@ -319,6 +375,8 @@ class RivalsGUI:
         ttk.Label(row_name, text="Name:", width=10, anchor="w").pack(side="left")
         self._custom_name = tk.StringVar()
         ttk.Entry(row_name, textvariable=self._custom_name, width=36).pack(side="left", padx=4)
+        ttk.Label(row_name, text="e.g. Immortal Fight Night 274",
+                  style="Muted.TLabel").pack(side="left", padx=(4, 0))
 
         row_out = ttk.Frame(lf_custom)
         row_out.pack(fill="x", pady=(0, 4))
@@ -414,8 +472,24 @@ class RivalsGUI:
             template = self._thumb_event_map.get(self._thumb_series.get(), "{n}")
             self._thumb_event_name.set(template.format(n=self._thumb_num.get().strip()))
 
+        def _on_series_change(*_):
+            series = self._thumb_series.get()
+            widgets = self._fetch_widgets.get(series)
+            if widgets:
+                self._thumb_num.set(widgets["num"].get())
+            else:
+                saved = self._settings.get("last_event_nums", {}).get(series)
+                if saved:
+                    self._thumb_num.set(saved)
+            self._save_settings()
+
+        def _on_num_change_thumb(*_):
+            self._save_settings()
+
+        self._thumb_series.trace_add("write", _on_series_change)
         self._thumb_series.trace_add("write", _update_name)
         self._thumb_num.trace_add("write", _update_name)
+        self._thumb_num.trace_add("write", _on_num_change_thumb)
         self._thumb_update_name = _update_name
 
         self._refresh_thumbnail_events()
@@ -428,8 +502,12 @@ class RivalsGUI:
         self._thumb_event_map = {name: tmpl for name, tmpl in events}
         names = [name for name, _ in events]
         self._thumb_series_box["values"] = names
-        if names and self._thumb_series.get() not in names:
-            self._thumb_series.set(names[0])
+        if names:
+            last_series = self._settings.get("last_thumb_series")
+            if last_series in names:
+                self._thumb_series.set(last_series)
+            elif self._thumb_series.get() not in names:
+                self._thumb_series.set(names[0])
         self._thumb_update_name()
 
     def _generate_thumbnails(self):
@@ -500,8 +578,10 @@ class RivalsGUI:
         ttk.Label(left, text="Players", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 2))
 
         self._player_search = tk.StringVar()
-        ttk.Entry(left, textvariable=self._player_search).pack(fill="x", pady=(0, 4))
+        self._player_search_entry = ttk.Entry(left, textvariable=self._player_search)
+        self._player_search_entry.pack(fill="x", pady=(0, 4))
         self._player_search.trace_add("write", lambda *_: self._refresh_player_list())
+        _add_placeholder(self._player_search_entry, "Search players...")
 
         lb_frame = ttk.Frame(left)
         lb_frame.pack(fill="both", expand=True)
@@ -513,7 +593,19 @@ class RivalsGUI:
         lb_sb.config(command=self._player_listbox.yview)
         self._player_listbox.bind("<<ListboxSelect>>", self._on_player_select)
 
-        btn_row = ttk.Frame(left)
+        self._new_player_frame = ttk.Frame(left)
+        ttk.Label(self._new_player_frame, text="Name:").pack(side="left")
+        self._new_player_var = tk.StringVar()
+        self._new_player_entry = ttk.Entry(self._new_player_frame, textvariable=self._new_player_var)
+        self._new_player_entry.pack(side="left", padx=(4, 0), fill="x", expand=True)
+        self._new_player_entry.bind("<Return>", lambda _: self._confirm_add_player())
+        self._new_player_entry.bind("<Escape>", lambda _: self._cancel_add_player())
+        _add_placeholder(self._new_player_entry, "Player name...")
+
+        self._new_player_frame.pack(fill="x", pady=(4, 0))
+
+        self._btn_row = ttk.Frame(left)
+        btn_row = self._btn_row
         btn_row.pack(fill="x", pady=(6, 0))
         ttk.Button(btn_row, text="+ Add", command=self._add_player).pack(side="left", fill="x", expand=True, padx=(0, 2))
         ttk.Button(btn_row, text="- Remove", command=self._remove_player).pack(side="left", fill="x", expand=True, padx=(2, 0))
@@ -606,7 +698,8 @@ class RivalsGUI:
         self._db_selected_player = None
 
     def _refresh_player_list(self):
-        query = self._player_search.get().lower()
+        raw = self._player_search.get()
+        query = "" if raw == "Search players..." else raw.lower()
         self._player_listbox.delete(0, "end")
         for name in self._db_players:
             if query in name.lower():
@@ -633,40 +726,31 @@ class RivalsGUI:
             self._char_tree.delete(row)
 
     def _add_player(self):
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Add Player")
-        dialog.geometry("300x110")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        ttk.Label(dialog, text="Player name:").pack(pady=(14, 4))
-        name_var = tk.StringVar()
-        entry = ttk.Entry(dialog, textvariable=name_var, width=30)
-        entry.pack()
-        entry.focus()
+        self._confirm_add_player()
 
-        def confirm():
-            name = name_var.get().strip()
-            if not name:
-                return
-            if name in self._db_players:
-                self._log(f"[Player '{name}' already exists]\n")
-                dialog.destroy()
-                return
-            self._db_players[name] = []
-            self._player_search.set("")  # clear filter so new player is visible
-            self._refresh_player_list()
-            # find position in the (now unfiltered) listbox
-            all_names = list(self._player_listbox.get(0, "end"))
-            if name in all_names:
-                idx = all_names.index(name)
-                self._player_listbox.selection_clear(0, "end")
-                self._player_listbox.selection_set(idx)
-                self._player_listbox.see(idx)
-                self._on_player_select()
-            dialog.destroy()
+    def _confirm_add_player(self):
+        raw = self._new_player_var.get()
+        name = "" if raw == "Player name..." else raw.strip()
+        if not name:
+            return
+        if name in self._db_players:
+            self._log(f"[Player '{name}' already exists]\n")
+            self._new_player_var.set("")
+            return
+        self._db_players[name] = []
+        self._new_player_var.set("")
+        self._player_search.set("")
+        self._refresh_player_list()
+        all_names = list(self._player_listbox.get(0, "end"))
+        if name in all_names:
+            idx = all_names.index(name)
+            self._player_listbox.selection_clear(0, "end")
+            self._player_listbox.selection_set(idx)
+            self._player_listbox.see(idx)
+            self._on_player_select()
 
-        entry.bind("<Return>", lambda _: confirm())
-        ttk.Button(dialog, text="Add", command=confirm).pack(pady=8)
+    def _cancel_add_player(self):
+        self._new_player_var.set("")
 
     def _remove_player(self):
         if not self._db_selected_player or self._db_selected_player not in self._db_players:
@@ -836,6 +920,16 @@ class RivalsGUI:
         self._cdb_listbox.pack(side="left", fill="both", expand=True)
         cdb_sb.config(command=self._cdb_listbox.yview)
 
+        add_row = ttk.Frame(tab)
+        add_row.pack(fill="x", padx=10, pady=(4, 0))
+        ttk.Label(add_row, text="Name:").pack(side="left")
+        self._cdb_new_var = tk.StringVar()
+        self._cdb_new_entry = ttk.Entry(add_row, textvariable=self._cdb_new_var, width=25)
+        self._cdb_new_entry.pack(side="left", padx=(4, 0))
+        self._cdb_new_entry.bind("<Return>", lambda _: self._cdb_add())
+        self._cdb_new_entry.bind("<Escape>", lambda _: self._cdb_new_var.set(""))
+        _add_placeholder(self._cdb_new_entry, "Character name...")
+
         btn_row = ttk.Frame(tab)
         btn_row.pack(fill="x", padx=10, pady=4)
         ttk.Button(btn_row, text="+ Add",    command=self._cdb_add).pack(side="left", padx=(0, 4))
@@ -868,34 +962,20 @@ class RivalsGUI:
         return int(sel[0]) if sel else None
 
     def _cdb_add(self):
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Add Character")
-        dialog.geometry("280x110")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        ttk.Label(dialog, text="Character name:").pack(pady=(14, 4))
-        name_var = tk.StringVar()
-        entry = ttk.Entry(dialog, textvariable=name_var, width=28)
-        entry.pack()
-        entry.focus()
-
-        def confirm():
-            name = name_var.get().strip()
-            if not name:
-                return
-            if name in self._cdb_chars:
-                self._log(f"['{name}' already in character database]\n")
-                dialog.destroy()
-                return
-            self._cdb_chars.append(name)
-            self._cdb_refresh()
-            idx = len(self._cdb_chars) - 1
-            self._cdb_listbox.selection_set(idx)
-            self._cdb_listbox.see(idx)
-            dialog.destroy()
-
-        entry.bind("<Return>", lambda _: confirm())
-        ttk.Button(dialog, text="Add", command=confirm).pack(pady=8)
+        raw = self._cdb_new_var.get()
+        name = "" if raw == "Character name..." else raw.strip()
+        if not name:
+            return
+        if name in self._cdb_chars:
+            self._log(f"['{name}' already in character database]\n")
+            self._cdb_new_var.set("")
+            return
+        self._cdb_chars.append(name)
+        self._cdb_new_var.set("")
+        self._cdb_refresh()
+        idx = len(self._cdb_chars) - 1
+        self._cdb_listbox.selection_set(idx)
+        self._cdb_listbox.see(idx)
 
     def _cdb_rename(self):
         idx = self._cdb_selected_idx()
