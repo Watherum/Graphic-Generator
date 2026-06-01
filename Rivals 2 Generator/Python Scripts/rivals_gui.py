@@ -26,7 +26,9 @@ THUMBNAIL_SCRIPT = ROOT / "Python Scripts" / "generate_rivals_thumbnail.py"
 RENDERS_DIR = ROOT / "Resources" / "Character_Renders" / "Rivals 2 Full Renders"
 PLAYER_DB_PATH = ROOT / "Resources" / "Player_database.csv"
 CHAR_DB_PATH   = ROOT / "Resources" / "Character_database.csv"
-SETTINGS_PATH  = ROOT / "rivals_gui_settings.json"
+SETTINGS_PATH        = ROOT / "rivals_gui_settings.json"
+CUSTOM_EVENTS_PATH   = ROOT / "rivals_custom_events.json"
+EVENT_CONFIGS_PATH   = ROOT / "rivals_event_configs.json"
 
 CHARACTERS = [
     "Absa", "Armando", "Clairen", "Etalus", "Fleet", "Forsburn",
@@ -291,9 +293,20 @@ class RivalsGUI:
     def _load_settings(self) -> dict:
         import json
         try:
-            return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         except Exception:
-            return {}
+            settings = {}
+        try:
+            self._custom_events: list[dict] = json.loads(CUSTOM_EVENTS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            self._custom_events = []
+        try:
+            self._event_configs: dict = json.loads(EVENT_CONFIGS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            self._event_configs = {}
+        # StringVar references for saved custom rows (keyed by slug_template)
+        self._custom_event_widgets: dict[str, dict] = {}
+        return settings
 
     def _save_settings(self):
         import json
@@ -358,8 +371,15 @@ class RivalsGUI:
 
             self._fetch_widgets[cfg["label"]] = {"num": num_var, "link": link_var}
 
-        # Custom tournament section
-        lf_custom = ttk.LabelFrame(tab, text="Custom Tournament", padding=(8, 6))
+        # Saved custom tournaments section
+        self._saved_custom_lf = ttk.LabelFrame(tab, text="Saved Custom Tournaments", padding=(8, 6))
+        self._saved_custom_lf.pack(fill="x", padx=10, pady=(0, 4))
+        self._saved_custom_frame = ttk.Frame(self._saved_custom_lf)
+        self._saved_custom_frame.pack(fill="x", expand=True)
+        self._build_saved_custom_rows()
+
+        # Add new custom tournament section
+        lf_custom = ttk.LabelFrame(tab, text="Add New Custom Tournament", padding=(8, 6))
         lf_custom.pack(fill="x", padx=10, pady=(0, 8))
 
         row_slug = ttk.Frame(lf_custom)
@@ -367,7 +387,7 @@ class RivalsGUI:
         ttk.Label(row_slug, text="Slug:", width=10, anchor="w").pack(side="left")
         self._custom_slug = tk.StringVar()
         ttk.Entry(row_slug, textvariable=self._custom_slug, width=52).pack(side="left", padx=4)
-        ttk.Label(row_slug, text="e.g. tournament/my-event/event/singles",
+        ttk.Label(row_slug, text="e.g. tournament/{event}-{n}/event/rivals-2-singles",
                   style="Muted.TLabel").pack(side="left", padx=(4, 0))
 
         row_name = ttk.Frame(lf_custom)
@@ -375,46 +395,139 @@ class RivalsGUI:
         ttk.Label(row_name, text="Name:", width=10, anchor="w").pack(side="left")
         self._custom_name = tk.StringVar()
         ttk.Entry(row_name, textvariable=self._custom_name, width=36).pack(side="left", padx=4)
-        ttk.Label(row_name, text="e.g. Immortal Fight Night 274",
+        ttk.Label(row_name, text="e.g. Immortal Fight Night",
                   style="Muted.TLabel").pack(side="left", padx=(4, 0))
 
-        row_out = ttk.Frame(lf_custom)
-        row_out.pack(fill="x", pady=(0, 4))
-        ttk.Label(row_out, text="Output file:", width=10, anchor="w").pack(side="left")
-        self._custom_out = tk.StringVar()
-        ttk.Entry(row_out, textvariable=self._custom_out, width=36).pack(side="left", padx=4)
-        ttk.Label(row_out, text="(saved in Vod_Names/ if no path given)",
-                  style="Muted.TLabel").pack(side="left", padx=(4, 0))
+        row_num = ttk.Frame(lf_custom)
+        row_num.pack(fill="x", pady=(0, 4))
+        ttk.Label(row_num, text="Event #:", width=10, anchor="w").pack(side="left")
+        self._custom_num = tk.StringVar()
+        ttk.Entry(row_num, textvariable=self._custom_num, width=6).pack(side="left", padx=4)
 
-        # Auto-fill output filename when name changes
-        def _on_custom_name_change(*_):
-            name = self._custom_name.get().strip()
-            if name and not self._custom_out.get().strip():
-                self._custom_out.set(f"{name} Names.txt")
-        self._custom_name.trace_add("write", _on_custom_name_change)
-
-        ttk.Button(lf_custom, text="Fetch VOD Names",
+        ttk.Button(lf_custom, text="Save & Fetch VOD Names",
                    command=self._fetch_custom_sets).pack(anchor="w")
 
     def _fetch_custom_sets(self):
-        slug = self._custom_slug.get().strip()
-        name = self._custom_name.get().strip()
-        out  = self._custom_out.get().strip()
-        if not slug:
+        slug_tmpl = self._custom_slug.get().strip()
+        name_tmpl = self._custom_name.get().strip()
+        num = self._custom_num.get().strip()
+        if not slug_tmpl:
             self._log("[Error: slug is required]\n")
             return
-        if not out:
-            self._log("[Error: output filename is required]\n")
-            return
-        # Prepend Vod_Names/ if the user gave just a filename (no path separator)
-        from pathlib import PurePath
-        if "/" not in out and "\\" not in out:
-            out = str(ROOT / "Vod_Names" / out)
-        cmd = [PYTHON, str(ROOT / "Python Scripts" / "fetch_sets.py"), slug]
-        if name:
-            cmd += ["--name", name]
-        cmd += ["--out", out]
+        label = (name_tmpl or slug_tmpl).replace(" {n}", "").replace("{n}", "").strip()
+        slug = slug_tmpl.replace("{n}", num)
+        name = (name_tmpl or slug_tmpl).replace("{n}", num)
+        out  = str(ROOT / "Vod_Names" / f"{name} Names.txt")
+        entry = {
+            "label": label,
+            "slug_template": slug_tmpl,
+            "name_template": name_tmpl or slug_tmpl,
+            "top8_file": f"{label} Top 8 HTML.txt",
+            "current_num": num,
+            "top8_link": "",
+        }
+        idx = next((i for i, e in enumerate(self._custom_events) if e.get("slug_template") == slug_tmpl), None)
+        if idx is not None:
+            entry["top8_link"] = self._custom_events[idx].get("top8_link", "")
+            self._custom_events[idx] = entry
+            self._custom_event_widgets.pop(slug_tmpl, None)
+        else:
+            self._custom_events.append(entry)
+        self._save_custom_events()
+        self._build_saved_custom_rows()
+        if hasattr(self, "_thumb_series_box"):
+            self._refresh_thumbnail_events()
+        cmd = [PYTHON, str(ROOT / "Python Scripts" / "fetch_sets.py"), slug,
+               "--name", name, "--out", out]
         self._run(cmd)
+
+    def _fetch_saved_custom(self, entry: dict, num: str):
+        slug = entry["slug_template"].replace("{n}", num)
+        name = entry["name_template"].replace("{n}", num)
+        out  = str(ROOT / "Vod_Names" / f"{name} Names.txt")
+        cmd = [PYTHON, str(ROOT / "Python Scripts" / "fetch_sets.py"), slug,
+               "--name", name, "--out", out]
+        self._run(cmd)
+
+    def _fetch_saved_custom_top8(self, entry: dict, num: str, link: str):
+        slug = entry["slug_template"].replace("{n}", num)
+        name = entry["name_template"].replace("{n}", num)
+        top8_file = entry.get("top8_file", f"{entry['label']} Top 8 HTML.txt")
+        out_path = ROOT / "Top_8_Texts" / top8_file
+        if not out_path.exists():
+            out_path.touch()
+        cmd = [PYTHON, str(ROOT / "Python Scripts" / "fetch_startgg_top8.py"),
+               slug, "--name", name, "--out", str(out_path)]
+        if link:
+            cmd += ["--link", link]
+        self._run(cmd)
+
+    def _save_custom_events(self):
+        import json
+        CUSTOM_EVENTS_PATH.write_text(json.dumps(self._custom_events, indent=2), encoding="utf-8")
+
+    def _delete_custom_event(self, slug_tmpl: str):
+        self._custom_events = [
+            e for e in self._custom_events
+            if e.get("slug_template", e.get("slug")) != slug_tmpl
+        ]
+        self._custom_event_widgets.pop(slug_tmpl, None)
+        self._save_custom_events()
+        self._build_saved_custom_rows()
+        if hasattr(self, "_thumb_series_box"):
+            self._refresh_thumbnail_events()
+
+    def _build_saved_custom_rows(self):
+        self._saved_custom_frame.destroy()
+        self._saved_custom_frame = ttk.Frame(self._saved_custom_lf)
+        self._saved_custom_frame.pack(fill="x", expand=True)
+        if not self._custom_events:
+            ttk.Label(self._saved_custom_frame, text="No saved custom tournaments",
+                      style="Muted.TLabel").pack(padx=4, pady=4)
+            return
+        for entry in self._custom_events:
+            slug_tmpl = entry.get("slug_template", entry.get("slug", ""))
+            if not slug_tmpl:
+                continue
+            # Create StringVars once; reuse on subsequent rebuilds to keep traces alive
+            if slug_tmpl not in self._custom_event_widgets:
+                num_var  = tk.StringVar(value=entry.get("current_num", ""))
+                link_var = tk.StringVar(value=entry.get("top8_link", ""))
+                def _on_num(*_, e=entry, nv=num_var):
+                    e["current_num"] = nv.get()
+                    self._save_custom_events()
+                def _on_link(*_, e=entry, lv=link_var):
+                    e["top8_link"] = lv.get()
+                    self._save_custom_events()
+                num_var.trace_add("write", _on_num)
+                link_var.trace_add("write", _on_link)
+                self._custom_event_widgets[slug_tmpl] = {"num": num_var, "link": link_var}
+            else:
+                num_var  = self._custom_event_widgets[slug_tmpl]["num"]
+                link_var = self._custom_event_widgets[slug_tmpl]["link"]
+
+            lf = ttk.LabelFrame(self._saved_custom_frame, text=entry["label"], padding=(8, 6))
+            lf.pack(fill="x", padx=0, pady=(0, 4))
+
+            row1 = ttk.Frame(lf)
+            row1.pack(fill="x", pady=(0, 4))
+            ttk.Label(row1, text="Event #:").pack(side="left")
+            ttk.Entry(row1, textvariable=num_var, width=6).pack(side="left", padx=(4, 16))
+            ttk.Label(row1, text="Top 8 Link:").pack(side="left")
+            ttk.Entry(row1, textvariable=link_var, width=32).pack(side="left", padx=4)
+
+            row2 = ttk.Frame(lf)
+            row2.pack(fill="x")
+            ttk.Button(row2, text="Fetch VOD Names",
+                       command=lambda e=entry, nv=num_var: self._fetch_saved_custom(e, nv.get().strip())
+                       ).pack(side="left", padx=(0, 6))
+            ttk.Button(row2, text="Fetch Top 8",
+                       command=lambda e=entry, nv=num_var, lv=link_var: self._fetch_saved_custom_top8(
+                           e, nv.get().strip(), lv.get().strip())
+                       ).pack(side="left", padx=(0, 6))
+            ttk.Button(row2, text="Delete",
+                       command=lambda s=slug_tmpl: self._delete_custom_event(s)
+                       ).pack(side="left")
 
     def _fetch_sets(self, cfg: dict, n: str):
         name = cfg["name_template"].format(n=n)
@@ -478,9 +591,16 @@ class RivalsGUI:
             if widgets:
                 self._thumb_num.set(widgets["num"].get())
             else:
-                saved = self._settings.get("last_event_nums", {}).get(series)
-                if saved:
-                    self._thumb_num.set(saved)
+                custom = next((e for e in self._custom_events if e.get("label") == series), None)
+                if custom:
+                    slug_tmpl = custom.get("slug_template", custom.get("slug", ""))
+                    cw = self._custom_event_widgets.get(slug_tmpl)
+                    num = cw["num"].get() if cw else custom.get("current_num", "")
+                    self._thumb_num.set(num)
+                else:
+                    saved = self._settings.get("last_event_nums", {}).get(series)
+                    if saved:
+                        self._thumb_num.set(saved)
             self._save_settings()
 
         def _on_num_change_thumb(*_):
@@ -494,13 +614,217 @@ class RivalsGUI:
 
         self._refresh_thumbnail_events()
 
+        # Thumbnail Config section
+        lf_cfg = self._make_collapsible_section(tab, "Thumbnail Config")
+
+        self._cfg_series_label = ttk.Label(lf_cfg, text="", style="Muted.TLabel")
+        self._cfg_series_label.pack(anchor="w", pady=(0, 6))
+
+        row_bg = ttk.Frame(lf_cfg)
+        row_bg.pack(fill="x", pady=(0, 4))
+        ttk.Label(row_bg, text="Background:", width=12, anchor="w").pack(side="left")
+        self._cfg_background = tk.StringVar()
+        ttk.Entry(row_bg, textvariable=self._cfg_background, width=40).pack(side="left", padx=4)
+        ttk.Button(row_bg, text="Browse…", command=lambda: self._browse_overlay(self._cfg_background)).pack(side="left")
+
+        row_fg = ttk.Frame(lf_cfg)
+        row_fg.pack(fill="x", pady=(0, 4))
+        ttk.Label(row_fg, text="Foreground:", width=12, anchor="w").pack(side="left")
+        self._cfg_foreground = tk.StringVar()
+        ttk.Entry(row_fg, textvariable=self._cfg_foreground, width=40).pack(side="left", padx=4)
+        ttk.Button(row_fg, text="Browse…", command=lambda: self._browse_overlay(self._cfg_foreground)).pack(side="left")
+
+        row_font = ttk.Frame(lf_cfg)
+        row_font.pack(fill="x", pady=(0, 4))
+        ttk.Label(row_font, text="Font:", width=12, anchor="w").pack(side="left")
+        _font_files = sorted(
+            f.name for f in (ROOT / "Resources" / "Fonts").glob("*")
+            if f.suffix.lower() in (".ttf", ".otf")
+        )
+        self._cfg_font = tk.StringVar()
+        ttk.Combobox(row_font, textvariable=self._cfg_font, values=_font_files,
+                     state="readonly", width=30).pack(side="left", padx=4)
+
+        row_flags = ttk.Frame(lf_cfg)
+        row_flags.pack(fill="x", pady=(0, 4))
+        self._cfg_glow = tk.BooleanVar()
+        ttk.Checkbutton(row_flags, text="Character Glow",
+                        variable=self._cfg_glow).pack(side="left", padx=(0, 20))
+        self._cfg_one_char = tk.BooleanVar()
+        ttk.Checkbutton(row_flags, text="One Character Per Player",
+                        variable=self._cfg_one_char).pack(side="left")
+
+        row_resize = ttk.Frame(lf_cfg)
+        row_resize.pack(fill="x", pady=(0, 4))
+        ttk.Label(row_resize, text="Char Scale:", width=12, anchor="w").pack(side="left")
+        for _lbl, _attr in [("1-char", "_cfg_resize_1"), ("2-char", "_cfg_resize_2"), ("3-char", "_cfg_resize_3")]:
+            ttk.Label(row_resize, text=_lbl).pack(side="left", padx=(8, 2))
+            _var = tk.StringVar()
+            setattr(self, _attr, _var)
+            ttk.Entry(row_resize, textvariable=_var, width=6).pack(side="left")
+
+        ttk.Label(lf_cfg, text="Character Positions  (x, y — normalized −1 to 1):",
+                  style="Muted.TLabel").pack(anchor="w", pady=(4, 2))
+
+        def _pos_row(label, *xy_attrs):
+            row = ttk.Frame(lf_cfg)
+            row.pack(fill="x", pady=1)
+            ttk.Label(row, text=label, width=12, anchor="w").pack(side="left")
+            for i in range(0, len(xy_attrs), 2):
+                if i > 0:
+                    ttk.Label(row, text="").pack(side="left", padx=6)
+                xv = tk.StringVar(); setattr(self, xy_attrs[i],   xv)
+                yv = tk.StringVar(); setattr(self, xy_attrs[i+1], yv)
+                ttk.Label(row, text="x").pack(side="left", padx=(0, 2))
+                ttk.Entry(row, textvariable=xv, width=6).pack(side="left", padx=(0, 6))
+                ttk.Label(row, text="y").pack(side="left", padx=(0, 2))
+                ttk.Entry(row, textvariable=yv, width=6).pack(side="left")
+
+        _pos_row("1-char:",
+                 "_cfg_shift_1_x",   "_cfg_shift_1_y")
+        _pos_row("2-char:",
+                 "_cfg_shift_2_1_x", "_cfg_shift_2_1_y",
+                 "_cfg_shift_2_2_x", "_cfg_shift_2_2_y")
+        _pos_row("3-char:",
+                 "_cfg_shift_3_1_x", "_cfg_shift_3_1_y",
+                 "_cfg_shift_3_2_x", "_cfg_shift_3_2_y",
+                 "_cfg_shift_3_3_x", "_cfg_shift_3_3_y")
+
+        row_sizes = ttk.Frame(lf_cfg)
+        row_sizes.pack(fill="x", pady=(0, 4))
+        ttk.Label(row_sizes, text="Font Sizes:", width=12, anchor="w").pack(side="left")
+        for _lbl, _attr in [("P1", "_cfg_font_p1"), ("P2", "_cfg_font_p2"),
+                             ("Event", "_cfg_font_event"), ("Round", "_cfg_font_round")]:
+            ttk.Label(row_sizes, text=_lbl).pack(side="left", padx=(8, 2))
+            _var = tk.StringVar()
+            setattr(self, _attr, _var)
+            ttk.Entry(row_sizes, textvariable=_var, width=5).pack(side="left")
+        ttk.Label(row_sizes, text="Angle°").pack(side="left", padx=(16, 2))
+        self._cfg_text_angle = tk.StringVar()
+        ttk.Entry(row_sizes, textvariable=self._cfg_text_angle, width=4).pack(side="left")
+
+        row_color = ttk.Frame(lf_cfg)
+        row_color.pack(fill="x", pady=(0, 4))
+        ttk.Label(row_color, text="Font Color:", width=12, anchor="w").pack(side="left")
+        self._cfg_font_color = tk.StringVar(value="#FFFFFF")
+        ttk.Entry(row_color, textvariable=self._cfg_font_color, width=10).pack(side="left", padx=4)
+        self._cfg_color_btn = tk.Button(
+            row_color, text="  ", width=3, relief="flat",
+            bg="#FFFFFF", activebackground="#FFFFFF", cursor="hand2",
+            command=lambda: self._pick_color(self._cfg_font_color, self._cfg_color_btn),
+        )
+        self._cfg_color_btn.pack(side="left")
+
+        def _on_color_entry(*_):
+            c = self._cfg_font_color.get().strip()
+            try:
+                self._cfg_color_btn.config(bg=c, activebackground=c)
+            except Exception:
+                pass
+        self._cfg_font_color.trace_add("write", _on_color_entry)
+
+        row_cfg_btns = ttk.Frame(lf_cfg)
+        row_cfg_btns.pack(fill="x", pady=(4, 0))
+        ttk.Button(row_cfg_btns, text="Save Config",
+                   command=self._save_thumbnail_config).pack(side="left", padx=(0, 6))
+        ttk.Button(row_cfg_btns, text="Clear Config",
+                   command=self._clear_thumbnail_config).pack(side="left")
+
+        self._thumb_series.trace_add("write", lambda *_: self._load_config_into_form(self._thumb_series.get()))
+        self._load_config_into_form(self._thumb_series.get())
+
         ttk.Button(tab, text="Generate Thumbnails", command=self._generate_thumbnails,
                    style="Accent.TButton").pack(padx=10, pady=8, anchor="w")
+
+        # VOD Names editor
+        lf_vod = self._make_collapsible_section(tab, "VOD Names", fill="both", expand=True)
+
+        row_vod = ttk.Frame(lf_vod)
+        row_vod.pack(fill="x", pady=(0, 6))
+        ttk.Label(row_vod, text="File:").pack(side="left")
+        self._vod_file_var = tk.StringVar()
+        self._vod_file_box = ttk.Combobox(row_vod, textvariable=self._vod_file_var,
+                                           state="readonly", width=44)
+        self._vod_file_box.pack(side="left", padx=4)
+        ttk.Button(row_vod, text="↺", command=self._refresh_vod_files).pack(side="left")
+
+        vod_inner = ttk.Frame(lf_vod)
+        vod_inner.pack(fill="both", expand=True)
+        vod_ysb = ttk.Scrollbar(vod_inner)
+        vod_ysb.pack(side="right", fill="y")
+        vod_xsb = ttk.Scrollbar(vod_inner, orient="horizontal")
+        vod_xsb.pack(side="bottom", fill="x")
+        self._vod_text = tk.Text(
+            vod_inner, height=10,
+            bg=_BG, fg=_FG, insertbackground=_FG,
+            font=("Consolas", 9), wrap="none",
+            relief="flat", highlightthickness=0,
+            yscrollcommand=vod_ysb.set,
+            xscrollcommand=vod_xsb.set,
+        )
+        self._vod_text.pack(side="left", fill="both", expand=True)
+        vod_ysb.config(command=self._vod_text.yview)
+        vod_xsb.config(command=self._vod_text.xview)
+
+        ttk.Button(lf_vod, text="Save", command=self._save_vod_file).pack(anchor="w", pady=(6, 0))
+
+        self._vod_file_var.trace_add("write", lambda *_: self._load_vod_file())
+        self._thumb_series.trace_add("write", lambda *_: self._refresh_vod_files())
+        self._refresh_vod_files()
+
+    def _refresh_vod_files(self):
+        vod_dir = ROOT / "Vod_Names"
+        series = self._thumb_series.get()
+        files = []
+        if vod_dir.exists():
+            for f in vod_dir.glob("*.txt"):
+                if not series or f.name.startswith(series):
+                    files.append(f)
+
+        def _sort_key(p):
+            nums = re.findall(r'\d+', p.stem)
+            return (-int(nums[-1]) if nums else 0, p.stem)
+
+        files.sort(key=_sort_key)
+        names = [f.name for f in files]
+        current = self._vod_file_var.get()
+        self._vod_file_box["values"] = names
+        if names:
+            self._vod_file_var.set(current if current in names else names[0])
+        else:
+            self._vod_file_var.set("")
+            self._vod_text.delete("1.0", "end")
+
+    def _load_vod_file(self):
+        name = self._vod_file_var.get()
+        if not name:
+            return
+        try:
+            content = (ROOT / "Vod_Names" / name).read_text(encoding="utf-8")
+        except Exception:
+            content = ""
+        self._vod_text.delete("1.0", "end")
+        self._vod_text.insert("1.0", content)
+
+    def _save_vod_file(self):
+        name = self._vod_file_var.get()
+        if not name:
+            self._log("[Error: no VOD names file selected]\n")
+            return
+        content = self._vod_text.get("1.0", "end-1c")
+        (ROOT / "Vod_Names" / name).write_text(content, encoding="utf-8")
+        self._log(f"[Saved {name}]\n")
 
     def _refresh_thumbnail_events(self):
         events = load_thumbnail_events()
         self._thumb_event_map = {name: tmpl for name, tmpl in events}
         names = [name for name, _ in events]
+        for entry in self._custom_events:
+            label = entry.get("label", "")
+            name_tmpl = entry.get("name_template", "")
+            if label and name_tmpl and label not in self._thumb_event_map:
+                self._thumb_event_map[label] = name_tmpl
+                names.append(label)
         self._thumb_series_box["values"] = names
         if names:
             last_series = self._settings.get("last_thumb_series")
@@ -519,6 +843,237 @@ class RivalsGUI:
             PYTHON, str(ROOT / "Python Scripts" / "generate_rivals_thumbnail.py"),
             "-e", event_name, "-o", "missing.log",
         ])
+
+    def _browse_overlay(self, path_var: tk.StringVar):
+        from tkinter import filedialog
+        import shutil
+        path = filedialog.askopenfilename(
+            title="Select overlay image",
+            filetypes=[("PNG files", "*.png"), ("Image files", "*.png *.jpg *.jpeg"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        dest_dir = ROOT / "Resources" / "Overlays"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / Path(path).name
+        if Path(path).resolve() != dest.resolve():
+            shutil.copy2(path, dest)
+        path_var.set(str(Path("Resources") / "Overlays" / Path(path).name))
+
+    def _pick_color(self, color_var: tk.StringVar, btn: tk.Button):
+        from tkinter import colorchooser
+        current = color_var.get().strip()
+        result = colorchooser.askcolor(color=current or "#FFFFFF", title="Pick color")
+        if result and result[1]:
+            color_var.set(result[1])
+            try:
+                btn.config(bg=result[1], activebackground=result[1])
+            except Exception:
+                pass
+
+    def _get_base_event_props(self, series: str) -> dict:
+        try:
+            import populate_rivals_globals as pg
+            if series.startswith('Straight Into The Abyss'):
+                return pg.setGlobalsStraightIntoTheAbyss(series)
+            elif series.startswith('Immortal Fight Night'):
+                return pg.setGlobalsIFN(series)
+            elif series.startswith('Super Fusion'):
+                return pg.setGlobalsSuperFusion(series)
+            elif series.startswith('Twist of Fate'):
+                return pg.setGlobalsTwistOfFate(series)
+            elif series.startswith('Clip It'):
+                return pg.setGlobalsClipIt(series)
+            elif series.startswith('CR Clash'):
+                return pg.setGlobalsCRClash(series)
+            elif series.startswith('CR Arcadian'):
+                return pg.setGlobalsCRArcadian(series)
+            elif series.startswith('Quarantainment'):
+                return pg.setGlobalsQuarantainment(series)
+            else:
+                return pg.set_default_properties(series)
+        except Exception:
+            return {}
+
+    def _load_config_into_form(self, series: str):
+        self._cfg_series_label.config(text=f"Editing: {series}" if series else "No series selected")
+        saved = self._event_configs.get(series, {})
+        base  = self._get_base_event_props(series)
+        # Saved config overrides base defaults; base fills in anything not yet saved
+        cfg = {**base, **saved}
+        self._cfg_background.set(cfg.get("background_file", ""))
+        self._cfg_foreground.set(cfg.get("foreground_file", ""))
+        font_path = cfg.get("font_location", "")
+        self._cfg_font.set(Path(font_path).name if font_path else "")
+        self._cfg_glow.set(bool(cfg.get("char_glow_bool", False)))
+        self._cfg_one_char.set(bool(cfg.get("one_char_flag", False)))
+        self._cfg_resize_1.set(str(cfg["resize_1"]) if "resize_1" in cfg else "")
+        self._cfg_resize_2.set(str(cfg["resize_2"]) if "resize_2" in cfg else "")
+        self._cfg_resize_3.set(str(cfg["resize_3"]) if "resize_3" in cfg else "")
+
+        def _load_shift(x_attr, y_attr, key):
+            val = cfg.get(key)
+            if val is not None:
+                getattr(self, x_attr).set(str(val[0]))
+                getattr(self, y_attr).set(str(val[1]))
+            else:
+                getattr(self, x_attr).set("")
+                getattr(self, y_attr).set("")
+
+        _load_shift("_cfg_shift_1_x",   "_cfg_shift_1_y",   "center_shift_1")
+        _load_shift("_cfg_shift_2_1_x", "_cfg_shift_2_1_y", "center_shift_2_1")
+        _load_shift("_cfg_shift_2_2_x", "_cfg_shift_2_2_y", "center_shift_2_2")
+        _load_shift("_cfg_shift_3_1_x", "_cfg_shift_3_1_y", "center_shift_3_1")
+        _load_shift("_cfg_shift_3_2_x", "_cfg_shift_3_2_y", "center_shift_3_2")
+        _load_shift("_cfg_shift_3_3_x", "_cfg_shift_3_3_y", "center_shift_3_3")
+
+        self._cfg_font_p1.set(str(cfg["font_player1_size"]) if "font_player1_size" in cfg else "")
+        self._cfg_font_p2.set(str(cfg["font_player2_size"]) if "font_player2_size" in cfg else "")
+        self._cfg_font_event.set(str(cfg["font_event_size"]) if "font_event_size" in cfg else "")
+        self._cfg_font_round.set(str(cfg["font_round_size"]) if "font_round_size" in cfg else "")
+        self._cfg_text_angle.set(str(cfg["text_angle"]) if "text_angle" in cfg else "")
+        color = cfg.get("font_color1", "#FFFFFF")
+        self._cfg_font_color.set(color)
+        try:
+            self._cfg_color_btn.config(bg=color, activebackground=color)
+        except Exception:
+            pass
+
+    def _save_thumbnail_config(self):
+        series = self._thumb_series.get().strip()
+        if not series:
+            self._log("[Error: no series selected]\n")
+            return
+        cfg: dict = {}
+        bg = self._cfg_background.get().strip()
+        fg = self._cfg_foreground.get().strip()
+        font_name = self._cfg_font.get().strip()
+        if bg:
+            cfg["background_file"] = bg
+        if fg:
+            cfg["foreground_file"] = fg
+        if font_name:
+            cfg["font_location"] = str(Path("Resources") / "Fonts" / font_name)
+        cfg["char_glow_bool"] = self._cfg_glow.get()
+        cfg["one_char_flag"]  = self._cfg_one_char.get()
+        for attr, key in [
+            ("_cfg_resize_1", "resize_1"),
+            ("_cfg_resize_2", "resize_2"),
+            ("_cfg_resize_3", "resize_3"),
+        ]:
+            val = getattr(self, attr).get().strip()
+            if val:
+                try:
+                    cfg[key] = float(val)
+                except ValueError:
+                    pass
+
+        def _save_shift(x_attr, y_attr, key):
+            x = getattr(self, x_attr).get().strip()
+            y = getattr(self, y_attr).get().strip()
+            if x and y:
+                try:
+                    cfg[key] = [float(x), float(y)]
+                except ValueError:
+                    pass
+
+        _save_shift("_cfg_shift_1_x",   "_cfg_shift_1_y",   "center_shift_1")
+        _save_shift("_cfg_shift_2_1_x", "_cfg_shift_2_1_y", "center_shift_2_1")
+        _save_shift("_cfg_shift_2_2_x", "_cfg_shift_2_2_y", "center_shift_2_2")
+        _save_shift("_cfg_shift_3_1_x", "_cfg_shift_3_1_y", "center_shift_3_1")
+        _save_shift("_cfg_shift_3_2_x", "_cfg_shift_3_2_y", "center_shift_3_2")
+        _save_shift("_cfg_shift_3_3_x", "_cfg_shift_3_3_y", "center_shift_3_3")
+
+        for attr, key in [
+            ("_cfg_font_p1",    "font_player1_size"),
+            ("_cfg_font_p2",    "font_player2_size"),
+            ("_cfg_font_event", "font_event_size"),
+            ("_cfg_font_round", "font_round_size"),
+        ]:
+            val = getattr(self, attr).get().strip()
+            if val:
+                try:
+                    cfg[key] = int(val)
+                except ValueError:
+                    pass
+        angle = self._cfg_text_angle.get().strip()
+        if angle:
+            try:
+                cfg["text_angle"] = int(angle)
+            except ValueError:
+                pass
+        color = self._cfg_font_color.get().strip()
+        if color:
+            cfg["font_color1"] = color
+            cfg["font_color2"] = color
+            cfg["font_color3"] = color
+            cfg["font_color4"] = color
+        self._event_configs[series] = cfg
+        self._save_event_configs()
+        self._log(f"[Config saved for \"{series}\"]\n")
+
+    def _clear_thumbnail_config(self):
+        series = self._thumb_series.get().strip()
+        if series in self._event_configs:
+            del self._event_configs[series]
+            self._save_event_configs()
+        self._cfg_background.set("")
+        self._cfg_foreground.set("")
+        self._cfg_font.set("")
+        self._cfg_glow.set(False)
+        self._cfg_one_char.set(False)
+        for attr in ("_cfg_resize_1", "_cfg_resize_2", "_cfg_resize_3",
+                     "_cfg_shift_1_x",   "_cfg_shift_1_y",
+                     "_cfg_shift_2_1_x", "_cfg_shift_2_1_y",
+                     "_cfg_shift_2_2_x", "_cfg_shift_2_2_y",
+                     "_cfg_shift_3_1_x", "_cfg_shift_3_1_y",
+                     "_cfg_shift_3_2_x", "_cfg_shift_3_2_y",
+                     "_cfg_shift_3_3_x", "_cfg_shift_3_3_y",
+                     "_cfg_font_p1", "_cfg_font_p2", "_cfg_font_event", "_cfg_font_round",
+                     "_cfg_text_angle"):
+            getattr(self, attr).set("")
+        self._cfg_font_color.set("#FFFFFF")
+        try:
+            self._cfg_color_btn.config(bg="#FFFFFF", activebackground="#FFFFFF")
+        except Exception:
+            pass
+        self._log(f"[Config cleared for \"{series}\"]\n")
+
+    def _save_event_configs(self):
+        import json
+        EVENT_CONFIGS_PATH.write_text(json.dumps(self._event_configs, indent=2), encoding="utf-8")
+
+    def _make_collapsible_section(self, parent, title, fill="x", expand=False, pady=(0, 6), collapsed=False):
+        wrapper = ttk.Frame(parent)
+        wrapper.pack(fill=fill if not collapsed else "x",
+                     expand=expand if not collapsed else False,
+                     padx=10, pady=pady)
+
+        header = ttk.Frame(wrapper)
+        header.pack(fill="x")
+
+        btn = ttk.Button(header, text="▼" if not collapsed else "▶", width=2)
+        btn.pack(side="left", padx=(0, 4))
+        ttk.Label(header, text=title, style="TLabelframe.Label").pack(side="left")
+        ttk.Separator(header, orient="horizontal").pack(side="left", fill="x", expand=True, padx=(8, 0))
+
+        content = ttk.Frame(wrapper, padding=(0, 6, 0, 0))
+        if not collapsed:
+            content.pack(fill=fill, expand=expand)
+
+        def _toggle():
+            if content.winfo_ismapped():
+                content.pack_forget()
+                btn.config(text="▶")
+                wrapper.pack_configure(fill="x", expand=False)
+            else:
+                content.pack(fill=fill, expand=expand)
+                btn.config(text="▼")
+                wrapper.pack_configure(fill=fill, expand=expand)
+
+        btn.config(command=_toggle)
+
+        return content
 
     # ------------------------------------------------------------------ #
     #  Tab: Character Renders                                             #
@@ -701,7 +1256,7 @@ class RivalsGUI:
         raw = self._player_search.get()
         query = "" if raw == "Search players..." else raw.lower()
         self._player_listbox.delete(0, "end")
-        for name in self._db_players:
+        for name in sorted(self._db_players, key=str.casefold):
             if query in name.lower():
                 self._player_listbox.insert("end", name)
 

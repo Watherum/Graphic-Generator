@@ -72,7 +72,18 @@ def setGlobals(weekly_event, property_settings=None):
         global_properties = populate_globals.setGlobalsQuarantainment(weekly_event)
     else:
         global_properties = populate_globals.set_default_properties(weekly_event)
-    # return properties
+    # Apply per-event JSON config overrides (from rivals_event_configs.json)
+    try:
+        import json as _json
+        _cfg_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rivals_event_configs.json")
+        with open(_cfg_path, encoding="utf-8") as _f:
+            _all_cfgs = _json.load(_f)
+        for _label in sorted(_all_cfgs, key=len, reverse=True):
+            if weekly_event.startswith(_label):
+                global_properties.update(_all_cfgs[_label])
+                break
+    except Exception:
+        pass
     return global_properties
 
 
