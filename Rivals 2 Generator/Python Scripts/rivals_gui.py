@@ -243,31 +243,22 @@ class RivalsGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Rivals 2 Generator")
-        self.root.geometry("900x840")
         self.root.resizable(True, True)
+        self.root.state("zoomed")
 
         _apply_theme(self.root)
         self._settings = self._load_settings()
 
         notebook = ttk.Notebook(root)
-        notebook.pack(fill="both", expand=True, padx=0, pady=0)
 
-        self._build_fetch_tab(notebook)
-        self._build_thumbnails_tab(notebook)
-        self._build_renders_tab(notebook)
-        self._build_player_db_tab(notebook)
-        self._build_char_db_tab(notebook)
+        # Pack footer and console from the bottom first so they're always visible,
+        # then let the notebook fill remaining space above them.
+        footer = ttk.Frame(root)
+        footer.pack(side="bottom", fill="x", padx=8, pady=(4, 8))
+        ttk.Button(footer, text="Clear Console", command=self._clear_console).pack(side="right")
 
-        def _on_tab_changed(_event=None):
-            tab = notebook.tab(notebook.select(), "text")
-            if tab == "Player Database":
-                self._player_listbox.focus_set()
-
-        notebook.bind("<<NotebookTabChanged>>", _on_tab_changed)
-
-        # Shared console
         console_frame = ttk.LabelFrame(root, text="Console Output")
-        console_frame.pack(fill="both", expand=True, padx=0, pady=0)
+        console_frame.pack(side="bottom", fill="x", padx=0, pady=0)
 
         console_inner = ttk.Frame(console_frame)
         console_inner.pack(fill="both", expand=True, padx=5, pady=5)
@@ -283,9 +274,21 @@ class RivalsGUI:
         self.console.pack(side="left", fill="both", expand=True)
         console_sb.config(command=self.console.yview)
 
-        footer = ttk.Frame(root)
-        footer.pack(fill="x", padx=8, pady=(4, 8))
-        ttk.Button(footer, text="Clear Console", command=self._clear_console).pack(side="right")
+        notebook.pack(fill="both", expand=True, padx=0, pady=0)
+
+        self._build_fetch_tab(notebook)
+        self._build_thumbnails_tab(notebook)
+        self._build_top8_tab(notebook)
+        self._build_renders_tab(notebook)
+        self._build_player_db_tab(notebook)
+        self._build_char_db_tab(notebook)
+
+        def _on_tab_changed(_event=None):
+            tab = notebook.tab(notebook.select(), "text")
+            if tab == "Player Database":
+                self._player_listbox.focus_set()
+
+        notebook.bind("<<NotebookTabChanged>>", _on_tab_changed)
 
     # ------------------------------------------------------------------ #
     #  Settings persistence                                               #
@@ -327,10 +330,33 @@ class RivalsGUI:
         tab = ttk.Frame(notebook)
         notebook.add(tab, text="Fetch From Start.gg")
 
+        # Scrollable container
+        _canvas = tk.Canvas(tab, bg=_BG, highlightthickness=0)
+        _vsb = ttk.Scrollbar(tab, orient="vertical", command=_canvas.yview)
+        _canvas.configure(yscrollcommand=_vsb.set)
+        _vsb.pack(side="right", fill="y")
+        _canvas.pack(side="left", fill="both", expand=True)
+
+        inner = ttk.Frame(_canvas)
+        _inner_win = _canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_configure(event):
+            _canvas.configure(scrollregion=_canvas.bbox("all"))
+        inner.bind("<Configure>", _on_inner_configure)
+
+        def _on_canvas_configure(event):
+            _canvas.itemconfigure(_inner_win, width=event.width)
+        _canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        _canvas.bind("<Enter>", lambda e: _canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        _canvas.bind("<Leave>", lambda e: _canvas.unbind_all("<MouseWheel>"))
+
         self._fetch_widgets = {}
 
         for cfg in FETCH_EVENTS:
-            lf = ttk.LabelFrame(tab, text=cfg["label"], padding=(8, 6))
+            lf = ttk.LabelFrame(inner, text=cfg["label"], padding=(8, 6))
             lf.pack(fill="x", padx=10, pady=8)
 
             row1 = ttk.Frame(lf)
@@ -372,14 +398,14 @@ class RivalsGUI:
             self._fetch_widgets[cfg["label"]] = {"num": num_var, "link": link_var}
 
         # Saved custom tournaments section
-        self._saved_custom_lf = ttk.LabelFrame(tab, text="Saved Custom Tournaments", padding=(8, 6))
+        self._saved_custom_lf = ttk.LabelFrame(inner, text="Saved Custom Tournaments", padding=(8, 6))
         self._saved_custom_lf.pack(fill="x", padx=10, pady=(0, 4))
         self._saved_custom_frame = ttk.Frame(self._saved_custom_lf)
         self._saved_custom_frame.pack(fill="x", expand=True)
         self._build_saved_custom_rows()
 
         # Add new custom tournament section
-        lf_custom = ttk.LabelFrame(tab, text="Add New Custom Tournament", padding=(8, 6))
+        lf_custom = ttk.LabelFrame(inner, text="Add New Custom Tournament", padding=(8, 6))
         lf_custom.pack(fill="x", padx=10, pady=(0, 8))
 
         row_slug = ttk.Frame(lf_custom)
@@ -554,7 +580,30 @@ class RivalsGUI:
         tab = ttk.Frame(notebook)
         notebook.add(tab, text="Generate Thumbnails")
 
-        lf = ttk.LabelFrame(tab, text="Event", padding=(8, 8))
+        # Scrollable container
+        _canvas = tk.Canvas(tab, bg=_BG, highlightthickness=0)
+        _vsb = ttk.Scrollbar(tab, orient="vertical", command=_canvas.yview)
+        _canvas.configure(yscrollcommand=_vsb.set)
+        _vsb.pack(side="right", fill="y")
+        _canvas.pack(side="left", fill="both", expand=True)
+
+        inner = ttk.Frame(_canvas)
+        _inner_win = _canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_configure(event):
+            _canvas.configure(scrollregion=_canvas.bbox("all"))
+        inner.bind("<Configure>", _on_inner_configure)
+
+        def _on_canvas_configure(event):
+            _canvas.itemconfigure(_inner_win, width=event.width)
+        _canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        _canvas.bind("<Enter>", lambda e: _canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        _canvas.bind("<Leave>", lambda e: _canvas.unbind_all("<MouseWheel>"))
+
+        lf = ttk.LabelFrame(inner, text="Event", padding=(8, 8))
         lf.pack(fill="x", padx=10, pady=10)
 
         row1 = ttk.Frame(lf)
@@ -615,7 +664,7 @@ class RivalsGUI:
         self._refresh_thumbnail_events()
 
         # Thumbnail Config section
-        lf_cfg = self._make_collapsible_section(tab, "Thumbnail Config")
+        lf_cfg = self._make_collapsible_section(inner, "Thumbnail Config")
 
         self._cfg_series_label = ttk.Label(lf_cfg, text="", style="Muted.TLabel")
         self._cfg_series_label.pack(anchor="w", pady=(0, 6))
@@ -703,25 +752,73 @@ class RivalsGUI:
         self._cfg_text_angle = tk.StringVar()
         ttk.Entry(row_sizes, textvariable=self._cfg_text_angle, width=4).pack(side="left")
 
-        row_color = ttk.Frame(lf_cfg)
-        row_color.pack(fill="x", pady=(0, 4))
-        ttk.Label(row_color, text="Font Color:", width=12, anchor="w").pack(side="left")
-        self._cfg_font_color = tk.StringVar(value="#FFFFFF")
-        ttk.Entry(row_color, textvariable=self._cfg_font_color, width=10).pack(side="left", padx=4)
-        self._cfg_color_btn = tk.Button(
-            row_color, text="  ", width=3, relief="flat",
-            bg="#FFFFFF", activebackground="#FFFFFF", cursor="hand2",
-            command=lambda: self._pick_color(self._cfg_font_color, self._cfg_color_btn),
-        )
-        self._cfg_color_btn.pack(side="left")
+        # Font colors — one picker per text element
+        ttk.Label(lf_cfg, text="Font Colors  (P1, P2, Event, Round):",
+                  style="Muted.TLabel").pack(anchor="w", pady=(4, 2))
 
-        def _on_color_entry(*_):
-            c = self._cfg_font_color.get().strip()
-            try:
-                self._cfg_color_btn.config(bg=c, activebackground=c)
-            except Exception:
-                pass
-        self._cfg_font_color.trace_add("write", _on_color_entry)
+        def _make_color_picker(parent, label, var_attr, btn_attr):
+            ttk.Label(parent, text=label, width=7, anchor="w").pack(side="left")
+            var = tk.StringVar(value="#FFFFFF")
+            setattr(self, var_attr, var)
+            ttk.Entry(parent, textvariable=var, width=9).pack(side="left", padx=(0, 2))
+            btn = tk.Button(parent, text="  ", width=2, relief="flat",
+                            bg="#FFFFFF", activebackground="#FFFFFF", cursor="hand2")
+            setattr(self, btn_attr, btn)
+            btn.config(command=lambda v=var, b=btn: self._pick_color(v, b))
+            btn.pack(side="left", padx=(0, 16))
+            def _sync(*_, v=var, b=btn):
+                c = v.get().strip()
+                try: b.config(bg=c, activebackground=c)
+                except Exception: pass
+            var.trace_add("write", _sync)
+
+        row_colors1 = ttk.Frame(lf_cfg)
+        row_colors1.pack(fill="x", pady=1)
+        _make_color_picker(row_colors1, "P1:",    "_cfg_font_color1", "_cfg_color_btn1")
+        _make_color_picker(row_colors1, "P2:",    "_cfg_font_color2", "_cfg_color_btn2")
+
+        row_colors2 = ttk.Frame(lf_cfg)
+        row_colors2.pack(fill="x", pady=1)
+        _make_color_picker(row_colors2, "Event:", "_cfg_font_color3", "_cfg_color_btn3")
+        _make_color_picker(row_colors2, "Round:", "_cfg_font_color4", "_cfg_color_btn4")
+
+        # Text label positions
+        ttk.Label(lf_cfg, text="Text Label Positions  (x, y — normalized 0 to 1):",
+                  style="Muted.TLabel").pack(anchor="w", pady=(4, 2))
+        _pos_row("Player 1:", "_cfg_text_p1_x", "_cfg_text_p1_y")
+        _pos_row("Player 2:", "_cfg_text_p2_x", "_cfg_text_p2_y")
+        _pos_row("Event:",    "_cfg_text_ev_x", "_cfg_text_ev_y")
+        _pos_row("Round:",    "_cfg_text_rd_x", "_cfg_text_rd_y")
+
+        # Character window and offsets
+        row_charwin = ttk.Frame(lf_cfg)
+        row_charwin.pack(fill="x", pady=(4, 2))
+        ttk.Label(row_charwin, text="Char Window:", width=12, anchor="w").pack(side="left")
+        ttk.Label(row_charwin, text="w").pack(side="left", padx=(0, 2))
+        self._cfg_char_win_w = tk.StringVar()
+        ttk.Entry(row_charwin, textvariable=self._cfg_char_win_w, width=6).pack(side="left", padx=(0, 8))
+        ttk.Label(row_charwin, text="h").pack(side="left", padx=(0, 2))
+        self._cfg_char_win_h = tk.StringVar()
+        ttk.Entry(row_charwin, textvariable=self._cfg_char_win_h, width=6).pack(side="left")
+
+        ttk.Label(lf_cfg, text="Character Offsets  (x, y — normalized):",
+                  style="Muted.TLabel").pack(anchor="w", pady=(4, 2))
+        _pos_row("P1 Offset:", "_cfg_offset1_x", "_cfg_offset1_y")
+        _pos_row("P2 Offset:", "_cfg_offset2_x", "_cfg_offset2_y")
+
+        # Event/Round text options
+        row_er = ttk.Frame(lf_cfg)
+        row_er.pack(fill="x", pady=(4, 2))
+        self._cfg_single_text = tk.BooleanVar()
+        ttk.Checkbutton(row_er, text="Single Text Block",
+                        variable=self._cfg_single_text).pack(side="left", padx=(0, 20))
+        ttk.Label(row_er, text="Separator:").pack(side="left")
+        self._cfg_text_split = tk.StringVar()
+        ttk.Entry(row_er, textvariable=self._cfg_text_split, width=10).pack(side="left", padx=4)
+        ttk.Label(lf_cfg,
+                  text="Single Text Block: renders the event name and round as one combined label.\n"
+                       "Separator: the string placed between them, e.g. \" — \" → \"Immortal Fight Night 274 — Grand Finals\".",
+                  style="Muted.TLabel", wraplength=560, justify="left").pack(anchor="w", pady=(2, 4))
 
         row_cfg_btns = ttk.Frame(lf_cfg)
         row_cfg_btns.pack(fill="x", pady=(4, 0))
@@ -733,11 +830,11 @@ class RivalsGUI:
         self._thumb_series.trace_add("write", lambda *_: self._load_config_into_form(self._thumb_series.get()))
         self._load_config_into_form(self._thumb_series.get())
 
-        ttk.Button(tab, text="Generate Thumbnails", command=self._generate_thumbnails,
+        ttk.Button(inner, text="Generate Thumbnails", command=self._generate_thumbnails,
                    style="Accent.TButton").pack(padx=10, pady=8, anchor="w")
 
         # VOD Names editor
-        lf_vod = self._make_collapsible_section(tab, "VOD Names", fill="both", expand=True)
+        lf_vod = self._make_collapsible_section(inner, "VOD Names")
 
         row_vod = ttk.Frame(lf_vod)
         row_vod.pack(fill="x", pady=(0, 6))
@@ -932,12 +1029,37 @@ class RivalsGUI:
         self._cfg_font_event.set(str(cfg["font_event_size"]) if "font_event_size" in cfg else "")
         self._cfg_font_round.set(str(cfg["font_round_size"]) if "font_round_size" in cfg else "")
         self._cfg_text_angle.set(str(cfg["text_angle"]) if "text_angle" in cfg else "")
-        color = cfg.get("font_color1", "#FFFFFF")
-        self._cfg_font_color.set(color)
-        try:
-            self._cfg_color_btn.config(bg=color, activebackground=color)
-        except Exception:
-            pass
+        for attr, btn_attr, key in [
+            ("_cfg_font_color1", "_cfg_color_btn1", "font_color1"),
+            ("_cfg_font_color2", "_cfg_color_btn2", "font_color2"),
+            ("_cfg_font_color3", "_cfg_color_btn3", "font_color3"),
+            ("_cfg_font_color4", "_cfg_color_btn4", "font_color4"),
+        ]:
+            c = cfg.get(key, "#FFFFFF")
+            getattr(self, attr).set(c)
+            try:
+                getattr(self, btn_attr).config(bg=c, activebackground=c)
+            except Exception:
+                pass
+
+        _load_shift("_cfg_text_p1_x", "_cfg_text_p1_y", "text_player1")
+        _load_shift("_cfg_text_p2_x", "_cfg_text_p2_y", "text_player2")
+        _load_shift("_cfg_text_ev_x", "_cfg_text_ev_y", "text_event")
+        _load_shift("_cfg_text_rd_x", "_cfg_text_rd_y", "text_round")
+
+        char_win = cfg.get("char_window")
+        if isinstance(char_win, (list, tuple)) and len(char_win) >= 2:
+            self._cfg_char_win_w.set(str(char_win[0]))
+            self._cfg_char_win_h.set(str(char_win[1]))
+        else:
+            self._cfg_char_win_w.set("")
+            self._cfg_char_win_h.set("")
+
+        _load_shift("_cfg_offset1_x", "_cfg_offset1_y", "char_offset1")
+        _load_shift("_cfg_offset2_x", "_cfg_offset2_y", "char_offset2")
+
+        self._cfg_single_text.set(bool(cfg.get("event_round_single_text", False)))
+        self._cfg_text_split.set(cfg.get("event_round_text_split", ""))
 
     def _save_thumbnail_config(self):
         series = self._thumb_series.get().strip()
@@ -1002,12 +1124,37 @@ class RivalsGUI:
                 cfg["text_angle"] = int(angle)
             except ValueError:
                 pass
-        color = self._cfg_font_color.get().strip()
-        if color:
-            cfg["font_color1"] = color
-            cfg["font_color2"] = color
-            cfg["font_color3"] = color
-            cfg["font_color4"] = color
+        for attr, key in [
+            ("_cfg_font_color1", "font_color1"),
+            ("_cfg_font_color2", "font_color2"),
+            ("_cfg_font_color3", "font_color3"),
+            ("_cfg_font_color4", "font_color4"),
+        ]:
+            c = getattr(self, attr).get().strip()
+            if c:
+                cfg[key] = c
+
+        _save_shift("_cfg_text_p1_x", "_cfg_text_p1_y", "text_player1")
+        _save_shift("_cfg_text_p2_x", "_cfg_text_p2_y", "text_player2")
+        _save_shift("_cfg_text_ev_x", "_cfg_text_ev_y", "text_event")
+        _save_shift("_cfg_text_rd_x", "_cfg_text_rd_y", "text_round")
+
+        w = self._cfg_char_win_w.get().strip()
+        h = self._cfg_char_win_h.get().strip()
+        if w and h:
+            try:
+                cfg["char_window"] = [float(w), float(h)]
+            except ValueError:
+                pass
+
+        _save_shift("_cfg_offset1_x", "_cfg_offset1_y", "char_offset1")
+        _save_shift("_cfg_offset2_x", "_cfg_offset2_y", "char_offset2")
+
+        cfg["event_round_single_text"] = self._cfg_single_text.get()
+        split = self._cfg_text_split.get()
+        if split:
+            cfg["event_round_text_split"] = split
+
         self._event_configs[series] = cfg
         self._save_event_configs()
         self._log(f"[Config saved for \"{series}\"]\n")
@@ -1032,11 +1179,27 @@ class RivalsGUI:
                      "_cfg_font_p1", "_cfg_font_p2", "_cfg_font_event", "_cfg_font_round",
                      "_cfg_text_angle"):
             getattr(self, attr).set("")
-        self._cfg_font_color.set("#FFFFFF")
-        try:
-            self._cfg_color_btn.config(bg="#FFFFFF", activebackground="#FFFFFF")
-        except Exception:
-            pass
+        for attr, btn_attr in [
+            ("_cfg_font_color1", "_cfg_color_btn1"),
+            ("_cfg_font_color2", "_cfg_color_btn2"),
+            ("_cfg_font_color3", "_cfg_color_btn3"),
+            ("_cfg_font_color4", "_cfg_color_btn4"),
+        ]:
+            getattr(self, attr).set("#FFFFFF")
+            try:
+                getattr(self, btn_attr).config(bg="#FFFFFF", activebackground="#FFFFFF")
+            except Exception:
+                pass
+        for attr in ("_cfg_text_p1_x", "_cfg_text_p1_y",
+                     "_cfg_text_p2_x", "_cfg_text_p2_y",
+                     "_cfg_text_ev_x", "_cfg_text_ev_y",
+                     "_cfg_text_rd_x", "_cfg_text_rd_y",
+                     "_cfg_char_win_w", "_cfg_char_win_h",
+                     "_cfg_offset1_x", "_cfg_offset1_y",
+                     "_cfg_offset2_x", "_cfg_offset2_y",
+                     "_cfg_text_split"):
+            getattr(self, attr).set("")
+        self._cfg_single_text.set(False)
         self._log(f"[Config cleared for \"{series}\"]\n")
 
     def _save_event_configs(self):
@@ -1074,6 +1237,285 @@ class RivalsGUI:
         btn.config(command=_toggle)
 
         return content
+
+    # ------------------------------------------------------------------ #
+    #  Tab: Generate Top 8s                                              #
+    # ------------------------------------------------------------------ #
+    def _build_top8_tab(self, notebook: ttk.Notebook):
+        tab = ttk.Frame(notebook)
+        notebook.add(tab, text="Generate Top 8s")
+
+        # Scrollable container
+        _canvas = tk.Canvas(tab, bg=_BG, highlightthickness=0)
+        _vsb = ttk.Scrollbar(tab, orient="vertical", command=_canvas.yview)
+        _canvas.configure(yscrollcommand=_vsb.set)
+        _vsb.pack(side="right", fill="y")
+        _canvas.pack(side="left", fill="both", expand=True)
+
+        inner = ttk.Frame(_canvas)
+        _inner_win = _canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_configure(event):
+            _canvas.configure(scrollregion=_canvas.bbox("all"))
+        inner.bind("<Configure>", _on_inner_configure)
+
+        def _on_canvas_configure(event):
+            _canvas.itemconfigure(_inner_win, width=event.width)
+        _canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        _canvas.bind("<Enter>", lambda e: _canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        _canvas.bind("<Leave>", lambda e: _canvas.unbind_all("<MouseWheel>"))
+
+        # Event selection
+        lf = ttk.LabelFrame(inner, text="Event", padding=(8, 8))
+        lf.pack(fill="x", padx=10, pady=10)
+
+        row1 = ttk.Frame(lf)
+        row1.pack(fill="x", pady=(0, 6))
+        ttk.Label(row1, text="Series:").pack(side="left")
+        self._top8_series = tk.StringVar()
+        self._top8_series_box = ttk.Combobox(
+            row1, textvariable=self._top8_series, state="readonly", width=26,
+        )
+        self._top8_series_box.pack(side="left", padx=(4, 4))
+        ttk.Button(row1, text="↺", command=self._refresh_top8_series).pack(side="left", padx=(0, 12))
+        ttk.Label(row1, text="# / Suffix:").pack(side="left")
+        self._top8_num = tk.StringVar()
+        ttk.Entry(row1, textvariable=self._top8_num, width=8).pack(side="left", padx=4)
+
+        row2 = ttk.Frame(lf)
+        row2.pack(fill="x")
+        ttk.Label(row2, text="Event name:").pack(side="left")
+        self._top8_event_name_label = ttk.Label(row2, text="", style="Muted.TLabel")
+        self._top8_event_name_label.pack(side="left", padx=4)
+
+        def _update_top8_name(*_):
+            template = self._thumb_event_map.get(self._top8_series.get(), self._top8_series.get())
+            name = template.format(n=self._top8_num.get().strip())
+            self._top8_event_name_label.config(text=name)
+
+        def _on_top8_event_change(*_):
+            _update_top8_name()
+            self._refresh_top8_files()
+
+        self._top8_series.trace_add("write", _on_top8_event_change)
+        self._top8_num.trace_add("write", _on_top8_event_change)
+
+        # Top 8 Text editor
+        lf_txt = self._make_collapsible_section(inner, "Top 8 Text Data")
+        self._top8_text_path_label = ttk.Label(lf_txt, text="", style="Muted.TLabel")
+        self._top8_text_path_label.pack(anchor="w", pady=(0, 4))
+
+        txt_inner = ttk.Frame(lf_txt)
+        txt_inner.pack(fill="both", expand=True)
+        txt_ysb = ttk.Scrollbar(txt_inner)
+        txt_ysb.pack(side="right", fill="y")
+        txt_xsb = ttk.Scrollbar(txt_inner, orient="horizontal")
+        txt_xsb.pack(side="bottom", fill="x")
+        self._top8_text = tk.Text(
+            txt_inner, height=14,
+            bg=_BG, fg=_FG, insertbackground=_FG,
+            font=("Consolas", 9), wrap="none",
+            relief="flat", highlightthickness=0,
+            yscrollcommand=txt_ysb.set,
+            xscrollcommand=txt_xsb.set,
+        )
+        self._top8_text.pack(side="left", fill="both", expand=True)
+        txt_ysb.config(command=self._top8_text.yview)
+        txt_xsb.config(command=self._top8_text.xview)
+        ttk.Button(lf_txt, text="Save", command=self._save_top8_text).pack(anchor="w", pady=(6, 0))
+
+        # Top 8 HTML editor
+        lf_html = self._make_collapsible_section(inner, "Top 8 HTML Result")
+        row_html = ttk.Frame(lf_html)
+        row_html.pack(fill="x", pady=(0, 6))
+        ttk.Label(row_html, text="File:").pack(side="left")
+        self._top8_html_file_var = tk.StringVar()
+        self._top8_html_file_box = ttk.Combobox(
+            row_html, textvariable=self._top8_html_file_var, state="readonly", width=40,
+        )
+        self._top8_html_file_box.pack(side="left", padx=4)
+        ttk.Button(row_html, text="↺", command=self._refresh_top8_html_files).pack(side="left", padx=(0, 6))
+        ttk.Button(row_html, text="Open in Browser", command=self._open_top8_html_in_browser).pack(side="left")
+
+        # Warning packed between file row and editor; use text="" to hide visually
+        self._top8_html_warning = ttk.Label(
+            lf_html, text="", foreground="#E08000",
+            wraplength=560, justify="left",
+        )
+        self._top8_html_warning.pack(anchor="w")
+
+        ttk.Label(
+            lf_html,
+            text=(
+                "The HTML files are designed for OBS's fixed canvas, not for interactive browser viewing. "
+                "The browser preview is really just for spot-checking the data (player names, placements, etc.) "
+                "rather than pixel-perfect layout review.\n\n"
+                "To see it closer to actual size in the browser you can hit Ctrl + + to zoom in, or Ctrl+0 to reset. "
+                "If you want a quick way to get back to ~actual size, you could also set the browser zoom to something "
+                "like 150–200% depending on your monitor scaling."
+            ),
+            style="Muted.TLabel", wraplength=620, justify="left",
+        ).pack(anchor="w", pady=(0, 6))
+
+        html_inner = ttk.Frame(lf_html)
+        html_inner.pack(fill="both", expand=True)
+        html_ysb = ttk.Scrollbar(html_inner)
+        html_ysb.pack(side="right", fill="y")
+        html_xsb = ttk.Scrollbar(html_inner, orient="horizontal")
+        html_xsb.pack(side="bottom", fill="x")
+        self._top8_html_text = tk.Text(
+            html_inner, height=30,
+            bg=_BG, fg=_FG, insertbackground=_FG,
+            font=("Consolas", 9), wrap="none",
+            relief="flat", highlightthickness=0,
+            yscrollcommand=html_ysb.set,
+            xscrollcommand=html_xsb.set,
+        )
+        self._top8_html_text.pack(side="left", fill="both", expand=True)
+        html_ysb.config(command=self._top8_html_text.yview)
+        html_xsb.config(command=self._top8_html_text.xview)
+
+        self._top8_html_file_var.trace_add("write", lambda *_: self._load_top8_html())
+        ttk.Button(lf_html, text="Save", command=self._save_top8_html).pack(anchor="w", pady=(6, 0))
+
+        # Populate series dropdown using the same event map as thumbnails tab
+        self._refresh_top8_series()
+
+    def _refresh_top8_series(self):
+        names = list(getattr(self, "_thumb_event_map", {}).keys())
+        self._top8_series_box["values"] = names
+        if names and self._top8_series.get() not in names:
+            self._top8_series.set(names[0])
+        self._refresh_top8_files()
+
+    def _get_top8_text_path(self) -> "Path":
+        series = self._top8_series.get()
+        for cfg in FETCH_EVENTS:
+            if cfg["label"] == series:
+                return ROOT / "Top_8_Texts" / cfg["top8_file"]
+        for entry in self._custom_events:
+            if entry.get("label") == series:
+                fname = entry.get("top8_file", f"{series} Top 8 HTML.txt")
+                return ROOT / "Top_8_Texts" / fname
+        return ROOT / "Top_8_Texts" / f"{series} Top 8 HTML.txt"
+
+    def _refresh_top8_files(self):
+        self._load_top8_text()
+        self._refresh_top8_html_files()
+
+    def _load_top8_text(self):
+        path = self._get_top8_text_path()
+        self._top8_text_path_label.config(text=str(path.relative_to(ROOT)) if path.is_absolute() else str(path))
+        if not path.exists():
+            series = self._top8_series.get()
+            template = self._thumb_event_map.get(series, series)
+            event_name = template.format(n=self._top8_num.get().strip())
+            content = (
+                "# Top 8 Graphic\n"
+                "# All information is tab deliminated\n\n"
+                "#Graphic Information\n"
+                f"Event name:\t{event_name}\n"
+                "Event link:\t\n"
+                "Event entrants:\t Competitors\n"
+                "Event date:\t\n\n"
+                "# Placements\n"
+                "# place, name, sponsor, characters\n"
+                "1,,,\n2,,,\n3,,,\n4,,,\n5,,,\n5,,,\n7,,,\n7,,,"
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            self._log(f"[Auto-created {path.name}]\n")
+        self._top8_text.config(state="normal")
+        self._top8_text.delete("1.0", "end")
+        self._top8_text.insert("end", path.read_text(encoding="utf-8"))
+        self._top8_text.config(state="normal")
+
+    def _save_top8_text(self):
+        path = self._get_top8_text_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._top8_text.get("1.0", "end-1c"), encoding="utf-8")
+        self._log(f"[Saved {path.name}]\n")
+
+    def _refresh_top8_html_files(self):
+        results_dir = ROOT / "Top_8_Results"
+        files = sorted(f.name for f in results_dir.glob("*.html")) if results_dir.exists() else []
+        self._top8_html_file_box["values"] = files
+        if files:
+            self._top8_html_warning.config(text="")
+            if self._top8_html_file_var.get() not in files:
+                self._top8_html_file_var.set(files[0])
+            else:
+                self._load_top8_html()
+        else:
+            self._top8_html_file_var.set("")
+            self._top8_html_text.config(state="normal")
+            self._top8_html_text.delete("1.0", "end")
+            self._top8_html_warning.config(
+                text="⚠ No Top 8 HTML file found in Top_8_Results/. "
+                     "Create one by copying an existing template."
+            )
+
+    def _load_top8_html(self):
+        name = self._top8_html_file_var.get()
+        if not name:
+            return
+        path = ROOT / "Top_8_Results" / name
+        if not path.exists():
+            return
+        self._top8_html_text.config(state="normal")
+        self._top8_html_text.delete("1.0", "end")
+        self._top8_html_text.insert("end", path.read_text(encoding="utf-8"))
+
+    def _save_top8_html(self):
+        name = self._top8_html_file_var.get()
+        if not name:
+            self._log("[Error: no HTML file selected]\n")
+            return
+        path = ROOT / "Top_8_Results" / name
+        path.write_text(self._top8_html_text.get("1.0", "end-1c"), encoding="utf-8")
+        self._log(f"[Saved {name}]\n")
+
+    def _open_top8_html_in_browser(self):
+        import webbrowser
+        import threading
+        import http.server
+        import socketserver
+        import socket
+
+        name = self._top8_html_file_var.get()
+        if not name:
+            self._log("[Error: no HTML file selected]\n")
+            return
+
+        # Start local HTTP server on first use; reuse on subsequent calls
+        if not getattr(self, "_http_server", None):
+            # Find a free port
+            with socket.socket() as s:
+                s.bind(("", 0))
+                port = s.getsockname()[1]
+
+            import functools
+            handler = functools.partial(
+                http.server.SimpleHTTPRequestHandler,
+                directory=str(ROOT),
+            )
+            server = socketserver.TCPServer(("", port), handler)
+            server.allow_reuse_address = True
+
+            thread = threading.Thread(
+                target=server.serve_forever, daemon=True, name="top8-http-server"
+            )
+            thread.start()
+            self._http_server = server
+            self._http_server_port = port
+            self._log(f"[Local server started on port {port}]\n")
+
+        url = f"http://localhost:{self._http_server_port}/Top_8_Results/{name}"
+        webbrowser.open(url)
+        self._log(f"[Opened {url}]\n")
 
     # ------------------------------------------------------------------ #
     #  Tab: Character Renders                                             #
