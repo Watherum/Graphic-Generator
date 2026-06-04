@@ -1,24 +1,28 @@
 """
 Download character render images (CSPs) from dragdown.wiki for Rivals of Aether 2.
 
-For each character, fetches their wiki page, finds all image files in the gallery,
-and saves them to:
+For each character, queries the MediaWiki API for all images on their wiki page,
+filters down to CSP renders, and saves them to:
   Resources/Character_Renders_Source/{CharacterName}/
 
 Already-downloaded files are skipped.
+
+NOTE: dragdown.wiki HTML pages are behind a Cloudflare JavaScript challenge
+(they return 403 to plain HTTP clients), so we use the MediaWiki API at /w/api.php
+instead — it is not challenged and returns direct image URLs in one request.
 """
 
-import requests
-from bs4 import BeautifulSoup
-import re
 import time
 from pathlib import Path
-from typing import Optional, List
+from typing import Dict, List
+
+import requests
 
 BASE_URL = "https://dragdown.wiki"
+API_URL = f"{BASE_URL}/w/api.php"
 SOURCE_DIR = Path(__file__).parent.parent / "Resources" / "Character_Renders_Source"
 
-# Character name -> wiki URL slug (spaces become underscores)
+# Character name -> wiki page slug (spaces become underscores)
 CHARACTERS = [
     "Ranno", "Clairen", "Fleet", "Kragg", "Loxodont", "Maypul",
     "Wrastor", "Zetterburn", "Orcane", "Forsburn", "Etalus",
@@ -27,79 +31,57 @@ CHARACTERS = [
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
+    "User-Agent": "RoA2-render-downloader/1.0 (https://dragdown.wiki; contact: aacal050@gmail.com)",
+    "Accept-Encoding": "gzip, deflate",
 })
 
 
-def fetch_html(url: str, referer: str = BASE_URL) -> BeautifulSoup:
-    SESSION.headers["Referer"] = referer
-    resp = SESSION.get(url, timeout=20)
-    resp.raise_for_status()
-    return BeautifulSoup(resp.text, "html.parser")
+def get_csp_images(char_slug: str) -> Dict[str, str]:
+    """Return {filename: direct_url} for every CSP image on the character's page.
 
+    Uses generator=images to list all File: pages embedded on the page, plus
+    prop=imageinfo to resolve each one's direct download URL in the same query.
+    """
+    images: Dict[str, str] = {}
+    params = {
+        "action": "query",
+        "generator": "images",
+        "titles": f"RoA2/{char_slug}",
+        "gimlimit": "max",
+        "prop": "imageinfo",
+        "iiprop": "url",
+        "format": "json",
+    }
 
-def get_image_filenames(char_slug: str) -> List[str]:
-    """Return all image filenames linked from the character's wiki page."""
-    url = f"{BASE_URL}/wiki/RoA2/{char_slug}"
-    soup = fetch_html(url, referer=f"{BASE_URL}/wiki/RoA2")
+    while True:
+        resp = SESSION.get(API_URL, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
 
-    filenames = []
-    seen = set()
-    for a in soup.find_all("a", href=re.compile(r"/wiki/File:.*CSP.*\.png", re.IGNORECASE)):
-        filename = a["href"].split("/wiki/File:")[-1]
-        if filename not in seen:
-            seen.add(filename)
-            filenames.append(filename)
+        for page in data.get("query", {}).get("pages", {}).values():
+            title = page.get("title", "")  # e.g. "File:T Ran Abyss Neutral CSP.png"
+            if "CSP" not in title.upper():
+                continue
+            info = page.get("imageinfo")
+            if not info:
+                continue
+            url = info[0].get("url")
+            if not url:
+                continue
+            # Use the canonical (underscored) filename from the URL, dropping the "File:" prefix.
+            filename = title.split("File:", 1)[-1].replace(" ", "_")
+            images[filename] = url
 
-    return filenames
+        # MediaWiki paginates large image lists via "continue".
+        if "continue" in data:
+            params.update(data["continue"])
+        else:
+            break
 
-
-def get_direct_url(filename: str, char_page_url: str) -> Optional[str]:
-    """Resolve a wiki File: page to the direct image download URL."""
-    file_page_url = f"{BASE_URL}/wiki/File:{filename}"
-    soup = fetch_html(file_page_url, referer=char_page_url)
-
-    # MediaWiki puts the original-file link inside div.fullMedia
-    full_media = soup.find("div", class_="fullMedia")
-    if full_media:
-        a = full_media.find("a")
-        if a and a.get("href"):
-            href = a["href"]
-            if href.startswith("//"):
-                return "https:" + href
-            if href.startswith("/"):
-                return BASE_URL + href
-            return href
-
-    # Fallback: find an <img> whose src contains the filename stem
-    stem = filename.rsplit(".", 1)[0]
-    for img in soup.find_all("img"):
-        src = img.get("src", "")
-        if stem in src:
-            if src.startswith("//"):
-                return "https:" + src
-            if src.startswith("/"):
-                return BASE_URL + src
-            return src
-
-    return None
+    return images
 
 
 def download_file(url: str, dest: Path) -> None:
-    SESSION.headers["Referer"] = BASE_URL
     resp = SESSION.get(url, timeout=60, stream=True)
     resp.raise_for_status()
     with open(dest, "wb") as f:
@@ -111,40 +93,29 @@ def main() -> None:
     for char_slug in CHARACTERS:
         char_display = char_slug.replace("_", " ")
         char_dir = SOURCE_DIR / char_display
-        char_page_url = f"{BASE_URL}/wiki/RoA2/{char_slug}"
 
         print(f"\n{'='*50}")
         print(f"  {char_display}")
         print(f"{'='*50}")
 
         try:
-            filenames = get_image_filenames(char_slug)
+            images = get_csp_images(char_slug)
         except Exception as e:
-            print(f"  ERROR fetching page: {e}")
+            print(f"  ERROR querying API: {e}")
             continue
 
-        if not filenames:
-            print("  No images found on page.")
+        if not images:
+            print("  No CSP images found on page.")
             continue
 
-        print(f"  Found {len(filenames)} image(s)")
+        print(f"  Found {len(images)} image(s)")
         char_dir.mkdir(parents=True, exist_ok=True)
 
-        for filename in filenames:
+        for filename, img_url in sorted(images.items()):
             dest = char_dir / filename
 
             if dest.exists():
                 print(f"  [skip] {filename}")
-                continue
-
-            try:
-                img_url = get_direct_url(filename, char_page_url)
-            except Exception as e:
-                print(f"  [error] {filename}: could not fetch File page — {e}")
-                continue
-
-            if not img_url:
-                print(f"  [error] {filename}: could not resolve direct URL")
                 continue
 
             try:

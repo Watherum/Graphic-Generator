@@ -2,18 +2,18 @@
 # All information is tab deliminated
 
 #Graphic Information
-Event name:	Straight Into The Abyss 51
-Event link: https://start.gg/SITA51
-Event entrants:	28 Competitors
-Event date:	5/27/2026
+Event name:	Straight Into The Abyss 52
+Event link: https://start.gg/SITA52
+Event entrants:	33 Competitors
+Event date:	6/3/2026
 
 # Placements
 # place, name, sponsor, characters
 1,Sophilo,Shrug Club,Zetterburn
-2,DrLobster,,Kragg
-3,waddlespch,EGG,Zetterburn
-4,MonkadZ,,Forsburn
-5,SapphireGD,AoC,Zetterburn
-5,Env3lop,COMO,Wrastor
-7,JuanSolo,ÑFC,Loxodont
-7,Nothigh,ravel,Loxodont
+2,Viviana,NS,Slade
+3,Nori,,Absa
+4,Shard,,Fleet
+5,Turnap,BLZE,Ranno
+5,ybm,RATS,Wrastor
+7,B-Rabbit,LD,Ranno
+7,Triforce!,:^),Forsburn

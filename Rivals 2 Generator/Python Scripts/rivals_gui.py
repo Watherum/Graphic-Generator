@@ -486,7 +486,7 @@ class RivalsGUI:
                slug, "--name", name, "--out", str(out_path)]
         if link:
             cmd += ["--link", link]
-        self._run(cmd)
+        self._run(cmd, on_done=lambda: self._select_top8_event(entry["label"], num))
 
     def _save_custom_events(self):
         import json
@@ -571,7 +571,19 @@ class RivalsGUI:
         self._run([
             PYTHON, str(ROOT / "Python Scripts" / "fetch_startgg_top8.py"),
             slug, "--name", name, "--link", link, "--out", out,
-        ])
+        ], on_done=lambda: self._select_top8_event(cfg["label"], n))
+
+    def _select_top8_event(self, label: str, num: str):
+        """Point the Top 8 tab at the given event and reload its text editor.
+
+        Called after a start.gg Top 8 fetch completes so the freshly written
+        Top_8_Texts file is shown without the user having to switch tabs/reselect.
+        """
+        self._top8_series.set(label)
+        self._top8_num.set(str(num))
+        # Series/num traces also trigger a refresh, but call explicitly so the
+        # reload still happens when the values were already current (trace no-op).
+        self._refresh_top8_files()
 
     # ------------------------------------------------------------------ #
     #  Tab: Generate Thumbnails                                           #
@@ -852,7 +864,7 @@ class RivalsGUI:
         vod_xsb = ttk.Scrollbar(vod_inner, orient="horizontal")
         vod_xsb.pack(side="bottom", fill="x")
         self._vod_text = tk.Text(
-            vod_inner, height=10,
+            vod_inner, height=22,
             bg=_BG, fg=_FG, insertbackground=_FG,
             font=("Consolas", 9), wrap="none",
             relief="flat", highlightthickness=0,
@@ -862,6 +874,7 @@ class RivalsGUI:
         self._vod_text.pack(side="left", fill="both", expand=True)
         vod_ysb.config(command=self._vod_text.yview)
         vod_xsb.config(command=self._vod_text.xview)
+        self._add_resize_grip(lf_vod, self._vod_text)
 
         ttk.Button(lf_vod, text="Save", command=self._save_vod_file).pack(anchor="w", pady=(6, 0))
 
@@ -1238,6 +1251,39 @@ class RivalsGUI:
 
         return content
 
+    def _add_resize_grip(self, parent, text_widget, min_rows=4):
+        """Add a draggable grip below a Text widget so the user can resize its height.
+
+        Dragging the grip up/down changes the widget's `height` (in rows). Used to make
+        the text-editing sections scalable inside the vertically-scrolling tab, where
+        `expand=True` alone can't grow a fixed-height Text widget.
+        """
+        grip = tk.Frame(parent, height=7, bg=_BG3, cursor="sb_v_double_arrow")
+        grip.pack(fill="x", pady=(2, 0))
+        # Visual affordance: a centered handle line so it reads as draggable.
+        tk.Frame(grip, height=2, bg=_FG).place(relx=0.5, rely=0.5, relwidth=0.08, anchor="center")
+
+        state = {"y": 0, "rows": 0, "line_px": 16}
+
+        def _start(event):
+            state["y"] = event.y_root
+            state["rows"] = int(text_widget.cget("height"))
+            try:
+                import tkinter.font as tkfont
+                state["line_px"] = max(1, tkfont.Font(font=text_widget.cget("font")).metrics("linespace"))
+            except Exception:
+                state["line_px"] = 16
+
+        def _drag(event):
+            delta_rows = (event.y_root - state["y"]) // state["line_px"]
+            new_rows = max(min_rows, state["rows"] + int(delta_rows))
+            if new_rows != int(text_widget.cget("height")):
+                text_widget.config(height=new_rows)
+
+        grip.bind("<Button-1>", _start)
+        grip.bind("<B1-Motion>", _drag)
+        return grip
+
     # ------------------------------------------------------------------ #
     #  Tab: Generate Top 8s                                              #
     # ------------------------------------------------------------------ #
@@ -1325,6 +1371,7 @@ class RivalsGUI:
         self._top8_text.pack(side="left", fill="both", expand=True)
         txt_ysb.config(command=self._top8_text.yview)
         txt_xsb.config(command=self._top8_text.xview)
+        self._add_resize_grip(lf_txt, self._top8_text)
         ttk.Button(lf_txt, text="Save", command=self._save_top8_text).pack(anchor="w", pady=(6, 0))
 
         # Top 8 HTML editor
@@ -1377,6 +1424,7 @@ class RivalsGUI:
         self._top8_html_text.pack(side="left", fill="both", expand=True)
         html_ysb.config(command=self._top8_html_text.yview)
         html_xsb.config(command=self._top8_html_text.xview)
+        self._add_resize_grip(lf_html, self._top8_html_text)
 
         self._top8_html_file_var.trace_add("write", lambda *_: self._load_top8_html())
         ttk.Button(lf_html, text="Save", command=self._save_top8_html).pack(anchor="w", pady=(6, 0))
@@ -2042,9 +2090,10 @@ class RivalsGUI:
     # ------------------------------------------------------------------ #
     #  Process runners                                                    #
     # ------------------------------------------------------------------ #
-    def _run(self, cmd: list):
+    def _run(self, cmd: list, on_done=None):
         def worker():
             self._log(f"> {' '.join(str(c) for c in cmd)}\n")
+            success = False
             try:
                 proc = subprocess.Popen(
                     cmd, cwd=str(ROOT),
@@ -2054,9 +2103,13 @@ class RivalsGUI:
                 for line in proc.stdout:
                     self._log(line)
                 proc.wait()
+                success = proc.returncode == 0
                 self._log(f"[Done — exit {proc.returncode}]\n\n")
             except Exception as exc:
                 self._log(f"[Error: {exc}]\n\n")
+            # Fire completion callback on the main thread (worker runs off-thread).
+            if success and on_done is not None:
+                self.root.after(0, on_done)
         threading.Thread(target=worker, daemon=True).start()
 
     def _run_sequential(self, *cmds: list):

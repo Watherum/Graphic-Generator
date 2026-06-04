@@ -67,7 +67,7 @@ Ross,Zetterburn,T_Zet_Flavorburn_Green_CSP
 Drewsephix,Orcane,T_Orc_Genesis_Neutral_CSP,Absa,T_Abs_Mecha_Red_CSP,Slade,T_Sla_Lovers_Neutral_CSP
 Bowler,Clairen,T_Cla_Default_CoolBlue_CSP
 hotel pneumario,Etalus,T_Eta_Striped_Red_CSP
-Shard,Fleet,T_Fle_Summer_Blue_CSP,Maypul,T_May_Pirate_Red_CSP,Absa,T_Abs_Abyss_Blue_CSP
+Shard,Fleet,T_Fle_Summer_Red_CSP,Maypul,T_May_Pirate_Red_CSP,Absa,T_Abs_Abyss_Blue_CSP
 SapphireGD,Zetterburn,T_Zet_Cheetah_Blue_CSP
 Nothigh,Loxodont,T_Lox_Lovers_Neutral_CSP,La Reina,T_Lar_Abyss_Red_CSP
 Turnap,Ranno,T_Ran_Default_Summer_CSP,La Reina,T_Lar_Default_Blue_CSP
@@ -77,7 +77,7 @@ UniTy,Absa,T_Abs_Retro_Blue_CSP
 SassyFlygon,Clairen,T_Cla_Default_Green_CSP
 Bionicle,Maypul,T_May_Pirate_Neutral_CSP
 JoshElChelito,Etalus,T_Eta_Primal_Green_CSP
-Viviana,Loxodont,T_Lox_Lovers_White_CSP,Galvan,T_Gal_Genesis_Red_CSP,Kragg,T_Kra_Luchador_Neutral_CSP,La Reina,T_Lar_Evo_Blue_CSP,Zetterburn,T_Zet_Cheetah_Green_CSP,Clairen,T_Cla_Samurai_Red_CSP,Slade,T_Sla_Wobbegong_Green_CSP
+Viviana,Loxodont,T_Lox_Lovers_Neutral_CSP,Galvan,T_Gal_Genesis_Red_CSP,Kragg,T_Kra_Luchador_Neutral_CSP,La Reina,T_Lar_Evo_Blue_CSP,Zetterburn,T_Zet_Cheetah_Green_CSP,Clairen,T_Cla_Samurai_Red_CSP,Slade,T_Sla_PoolParty_Green_CSP
 Mask,Galvan,T_Gal_Default_Green_CSP,Forsburn,T_For_Retro_Neutral_CSP
 Dr. Grin,Wrastor,T_Wra_Mecha_Midnight_CSP
 Hockey,Zetterburn,T_Zet_Champion_Neutral_CSP
@@ -128,7 +128,7 @@ Lucius,Ranno,T_Ran_Default_Blue_CSP
 Switch,Galvan,T_Gal_Default_Red_CSP
 Windforce,Ranno,T_Ran_Default_Red_CSP
 Hyperflame,Zetterburn,T_Zet_Default_Neutral_CSP
-Nori,Absa,T_Abs_Witch_Neutral_CSP
+Nori,Absa,T_Abs_Abyss_Midnight_CSP,Ranno,T_Ran_Default_Pink_CSP
 AliceisAdjective,Maypul,T_May_Sylvan_Red_CSP
 Alkali,Orcane,T_Orc_Abyss_Neutral_CSP
 F4keNotR3al,Loxodont,T_Lox_Gardener_Blue_CSP
@@ -154,4 +154,6 @@ maya,Orcane,T_Orc_Demigod_Green_CSP
 Teri,Olympia,T_Oly_Baker_Black_CSP
 Env3lop,Wrastor,T_Wra_Puffin_Neutral_CSP
 DrLobster,Kragg,T_Kra_Salaryman_Neutral_CSP
-Triforce!,Forsburn,T_For_SmokeClan_Yellow_CSP
+Triforce!,Forsburn,T_For_Summer_Green_CSP
+B-Rabbit,Ranno,T_Ran_Clown_Yellow_CSP
+Cap Aigis,Ranno,T_Ran_Clown_Yellow_CSP
