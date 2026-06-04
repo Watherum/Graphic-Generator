@@ -20,6 +20,13 @@ try:
 except ImportError:
     _SV_TTK_AVAILABLE = False
 
+import json
+
+try:
+    import populate_rivals_globals as _pg
+except ImportError:
+    _pg = None
+
 ROOT = Path(__file__).parent.parent
 PYTHON = sys.executable
 THUMBNAIL_SCRIPT = ROOT / "Python Scripts" / "generate_rivals_thumbnail.py"
@@ -294,7 +301,6 @@ class RivalsGUI:
     #  Settings persistence                                               #
     # ------------------------------------------------------------------ #
     def _load_settings(self) -> dict:
-        import json
         try:
             settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         except Exception:
@@ -312,7 +318,6 @@ class RivalsGUI:
         return settings
 
     def _save_settings(self):
-        import json
         data = {
             "last_event_nums": {
                 label: w["num"].get()
@@ -322,6 +327,21 @@ class RivalsGUI:
         }
         self._settings = data
         SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _setup_scrollable_canvas(self, canvas, inner, inner_win):
+        """Wire up a scrollable canvas with debounced scrollregion updates."""
+        _job = [None]
+        def _update_scroll():
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            _job[0] = None
+        def _on_inner_configure(e):
+            if _job[0]:
+                canvas.after_cancel(_job[0])
+            _job[0] = canvas.after(50, _update_scroll)
+        def _on_canvas_configure(e):
+            canvas.itemconfigure(inner_win, width=e.width)
+        inner.bind("<Configure>", _on_inner_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
 
     # ------------------------------------------------------------------ #
     #  Tab: Fetch from start.gg                                           #
@@ -339,14 +359,7 @@ class RivalsGUI:
 
         inner = ttk.Frame(_canvas)
         _inner_win = _canvas.create_window((0, 0), window=inner, anchor="nw")
-
-        def _on_inner_configure(event):
-            _canvas.configure(scrollregion=_canvas.bbox("all"))
-        inner.bind("<Configure>", _on_inner_configure)
-
-        def _on_canvas_configure(event):
-            _canvas.itemconfigure(_inner_win, width=event.width)
-        _canvas.bind("<Configure>", _on_canvas_configure)
+        self._setup_scrollable_canvas(_canvas, inner, _inner_win)
 
         def _on_mousewheel(event):
             _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
@@ -488,8 +501,13 @@ class RivalsGUI:
             cmd += ["--link", link]
         self._run(cmd, on_done=lambda: self._select_top8_event(entry["label"], num))
 
+    def _schedule_custom_save(self):
+        if hasattr(self, "_custom_save_job") and self._custom_save_job:
+            self.after_cancel(self._custom_save_job)
+        self._custom_save_job = self.after(500, self._save_custom_events)
+
     def _save_custom_events(self):
-        import json
+        self._custom_save_job = None
         CUSTOM_EVENTS_PATH.write_text(json.dumps(self._custom_events, indent=2), encoding="utf-8")
 
     def _delete_custom_event(self, slug_tmpl: str):
@@ -521,10 +539,10 @@ class RivalsGUI:
                 link_var = tk.StringVar(value=entry.get("top8_link", ""))
                 def _on_num(*_, e=entry, nv=num_var):
                     e["current_num"] = nv.get()
-                    self._save_custom_events()
+                    self._schedule_custom_save()
                 def _on_link(*_, e=entry, lv=link_var):
                     e["top8_link"] = lv.get()
-                    self._save_custom_events()
+                    self._schedule_custom_save()
                 num_var.trace_add("write", _on_num)
                 link_var.trace_add("write", _on_link)
                 self._custom_event_widgets[slug_tmpl] = {"num": num_var, "link": link_var}
@@ -601,14 +619,7 @@ class RivalsGUI:
 
         inner = ttk.Frame(_canvas)
         _inner_win = _canvas.create_window((0, 0), window=inner, anchor="nw")
-
-        def _on_inner_configure(event):
-            _canvas.configure(scrollregion=_canvas.bbox("all"))
-        inner.bind("<Configure>", _on_inner_configure)
-
-        def _on_canvas_configure(event):
-            _canvas.itemconfigure(_inner_win, width=event.width)
-        _canvas.bind("<Configure>", _on_canvas_configure)
+        self._setup_scrollable_canvas(_canvas, inner, _inner_win)
 
         def _on_mousewheel(event):
             _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
@@ -857,26 +868,36 @@ class RivalsGUI:
         self._vod_file_box.pack(side="left", padx=4)
         ttk.Button(row_vod, text="↺", command=self._refresh_vod_files).pack(side="left")
 
-        vod_inner = ttk.Frame(lf_vod)
-        vod_inner.pack(fill="both", expand=True)
-        vod_ysb = ttk.Scrollbar(vod_inner)
-        vod_ysb.pack(side="right", fill="y")
-        vod_xsb = ttk.Scrollbar(vod_inner, orient="horizontal")
-        vod_xsb.pack(side="bottom", fill="x")
-        self._vod_text = tk.Text(
-            vod_inner, height=22,
-            bg=_BG, fg=_FG, insertbackground=_FG,
-            font=("Consolas", 9), wrap="none",
-            relief="flat", highlightthickness=0,
-            yscrollcommand=vod_ysb.set,
-            xscrollcommand=vod_xsb.set,
-        )
-        self._vod_text.pack(side="left", fill="both", expand=True)
-        vod_ysb.config(command=self._vod_text.yview)
-        vod_xsb.config(command=self._vod_text.xview)
-        self._add_resize_grip(lf_vod, self._vod_text)
+        vod_list_frame = ttk.Frame(lf_vod)
+        vod_list_frame.pack(fill="both", expand=True)
+        vod_vsb = ttk.Scrollbar(vod_list_frame)
+        vod_vsb.pack(side="right", fill="y")
+        self._vod_canvas = tk.Canvas(vod_list_frame, bg=_BG, highlightthickness=0, height=330)
+        self._vod_canvas.pack(fill="both", expand=True)
+        self._vod_canvas.configure(yscrollcommand=vod_vsb.set)
+        vod_vsb.config(command=self._vod_canvas.yview)
 
-        ttk.Button(lf_vod, text="Save", command=self._save_vod_file).pack(anchor="w", pady=(6, 0))
+        self._vod_row_frame = tk.Frame(self._vod_canvas, bg=_BG)
+        _vod_win = self._vod_canvas.create_window((0, 0), window=self._vod_row_frame, anchor="nw")
+        self._setup_scrollable_canvas(self._vod_canvas, self._vod_row_frame, _vod_win)
+        self._vod_canvas.bind("<MouseWheel>",
+            lambda e: self._vod_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+
+        self._vod_rows = []
+
+        vod_grip = tk.Frame(lf_vod, height=7, bg=_BG3, cursor="sb_v_double_arrow")
+        vod_grip.pack(fill="x", pady=(2, 0))
+        tk.Frame(vod_grip, height=2, bg=_FG).place(relx=0.5, rely=0.5, relwidth=0.08, anchor="center")
+        _vg = {"y": 0, "h": 0}
+        def _vg_start(e): _vg["y"] = e.y_root; _vg["h"] = self._vod_canvas.winfo_height()
+        def _vg_drag(e): self._vod_canvas.config(height=max(80, _vg["h"] + e.y_root - _vg["y"]))
+        vod_grip.bind("<Button-1>", _vg_start)
+        vod_grip.bind("<B1-Motion>", _vg_drag)
+
+        vod_btn_row = ttk.Frame(lf_vod)
+        vod_btn_row.pack(fill="x", pady=(6, 0))
+        ttk.Button(vod_btn_row, text="Save", command=self._save_vod_file).pack(side="left")
+        ttk.Button(vod_btn_row, text="Delete Marked", command=self._vod_delete_marked).pack(side="left", padx=(6, 0))
 
         self._vod_file_var.trace_add("write", lambda *_: self._load_vod_file())
         self._thumb_series.trace_add("write", lambda *_: self._refresh_vod_files())
@@ -903,9 +924,83 @@ class RivalsGUI:
             self._vod_file_var.set(current if current in names else names[0])
         else:
             self._vod_file_var.set("")
-            self._vod_text.delete("1.0", "end")
+            self._vod_clear_rows()
+
+    def _vod_clear_rows(self):
+        if hasattr(self, "_vod_load_job") and self._vod_load_job:
+            self.after_cancel(self._vod_load_job)
+            self._vod_load_job = None
+        for w in self._vod_row_frame.winfo_children():
+            w.destroy()
+        self._vod_rows.clear()
+
+    def _vod_add_row(self, line_text: str):
+        row = tk.Frame(self._vod_row_frame, bg=_BG)
+        row.pack(fill="x")
+
+        check_var = tk.IntVar(value=0)
+        text_var = tk.StringVar(value=line_text)
+
+        cb = tk.Checkbutton(row, variable=check_var,
+                            bg=_BG, activebackground=_BG, selectcolor=_BG2,
+                            relief="flat", bd=0, cursor="hand2")
+        cb.pack(side="left", padx=(4, 0))
+
+        copy_btn = ttk.Button(row, text="⎘", width=2,
+                              command=lambda v=text_var: self._vod_copy_text(v.get()))
+        copy_btn.pack(side="left", padx=(2, 2))
+
+        del_btn = ttk.Button(row, text="✕", width=2,
+                             command=lambda v=text_var: self._vod_delete_row(v))
+        del_btn.pack(side="left", padx=(0, 4))
+
+        entry = tk.Entry(row, textvariable=text_var, bg=_BG, fg=_FG,
+                         insertbackground=_FG, font=("Consolas", 9),
+                         relief="flat", highlightthickness=0, bd=0)
+        entry.pack(side="left", fill="x", expand=True, pady=1)
+
+        colored = [row, cb, entry]
+
+        def _on_check():
+            color = "#1e3a5f" if check_var.get() else _BG
+            for w in colored:
+                w.config(bg=color)
+            cb.config(activebackground=color)
+
+        cb.config(command=_on_check)
+
+        def _wheel(e):
+            self._vod_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        row.bind("<MouseWheel>", _wheel)
+        cb.bind("<MouseWheel>", _wheel)
+
+        self._vod_rows.append({"check_var": check_var, "text_var": text_var, "row_frame": row})
+
+    def _vod_copy_text(self, text: str):
+        self.clipboard_clear()
+        self.clipboard_append(text)
+
+    def _vod_delete_row(self, text_var: tk.StringVar):
+        row = next((r for r in self._vod_rows if r["text_var"] is text_var), None)
+        if row:
+            row["row_frame"].destroy()
+            self._vod_rows.remove(row)
+            self._vod_canvas.configure(scrollregion=self._vod_canvas.bbox("all"))
+
+    def _vod_delete_marked(self):
+        to_delete = [r for r in self._vod_rows if r["check_var"].get()]
+        for r in to_delete:
+            r["row_frame"].destroy()
+        self._vod_rows = [r for r in self._vod_rows if not r["check_var"].get()]
+        self._vod_canvas.configure(scrollregion=self._vod_canvas.bbox("all"))
 
     def _load_vod_file(self):
+        self._vod_clear_rows()
+        # Cancel any in-progress batch load from a previous file selection
+        if hasattr(self, "_vod_load_job") and self._vod_load_job:
+            self.after_cancel(self._vod_load_job)
+            self._vod_load_job = None
+
         name = self._vod_file_var.get()
         if not name:
             return
@@ -913,15 +1008,46 @@ class RivalsGUI:
             content = (ROOT / "Vod_Names" / name).read_text(encoding="utf-8")
         except Exception:
             content = ""
-        self._vod_text.delete("1.0", "end")
-        self._vod_text.insert("1.0", content)
+
+        lines = [l for l in content.splitlines() if l.strip()]
+        if not lines:
+            return
+
+        self._vod_loading_label = tk.Label(
+            self._vod_row_frame, text=f"Loading 0 / {len(lines)}…",
+            bg=_BG, fg=_MUTED, font=("Consolas", 9))
+        self._vod_loading_label.pack(anchor="w", padx=6)
+
+        self._vod_load_job = None
+        self._vod_canvas.yview_moveto(0)
+        self._vod_load_batch(lines, 0)
+
+    _VOD_BATCH = 20
+
+    def _vod_load_batch(self, lines: list, offset: int):
+        batch = lines[offset:offset + self._VOD_BATCH]
+        for line in batch:
+            self._vod_add_row(line)
+
+        done = offset + len(batch)
+        if hasattr(self, "_vod_loading_label") and self._vod_loading_label.winfo_exists():
+            if done < len(lines):
+                self._vod_loading_label.config(text=f"Loading {done} / {len(lines)}…")
+                self._vod_loading_label.lift()
+            else:
+                self._vod_loading_label.destroy()
+
+        if done < len(lines):
+            self._vod_load_job = self.after(0, self._vod_load_batch, lines, done)
+        else:
+            self._vod_load_job = None
 
     def _save_vod_file(self):
         name = self._vod_file_var.get()
         if not name:
             self._log("[Error: no VOD names file selected]\n")
             return
-        content = self._vod_text.get("1.0", "end-1c")
+        content = "\n".join(r["text_var"].get() for r in self._vod_rows)
         (ROOT / "Vod_Names" / name).write_text(content, encoding="utf-8")
         self._log(f"[Saved {name}]\n")
 
@@ -982,26 +1108,27 @@ class RivalsGUI:
                 pass
 
     def _get_base_event_props(self, series: str) -> dict:
+        if _pg is None:
+            return {}
         try:
-            import populate_rivals_globals as pg
             if series.startswith('Straight Into The Abyss'):
-                return pg.setGlobalsStraightIntoTheAbyss(series)
+                return _pg.setGlobalsStraightIntoTheAbyss(series)
             elif series.startswith('Immortal Fight Night'):
-                return pg.setGlobalsIFN(series)
+                return _pg.setGlobalsIFN(series)
             elif series.startswith('Super Fusion'):
-                return pg.setGlobalsSuperFusion(series)
+                return _pg.setGlobalsSuperFusion(series)
             elif series.startswith('Twist of Fate'):
-                return pg.setGlobalsTwistOfFate(series)
+                return _pg.setGlobalsTwistOfFate(series)
             elif series.startswith('Clip It'):
-                return pg.setGlobalsClipIt(series)
+                return _pg.setGlobalsClipIt(series)
             elif series.startswith('CR Clash'):
-                return pg.setGlobalsCRClash(series)
+                return _pg.setGlobalsCRClash(series)
             elif series.startswith('CR Arcadian'):
-                return pg.setGlobalsCRArcadian(series)
+                return _pg.setGlobalsCRArcadian(series)
             elif series.startswith('Quarantainment'):
-                return pg.setGlobalsQuarantainment(series)
+                return _pg.setGlobalsQuarantainment(series)
             else:
-                return pg.set_default_properties(series)
+                return _pg.set_default_properties(series)
         except Exception:
             return {}
 
@@ -1216,7 +1343,6 @@ class RivalsGUI:
         self._log(f"[Config cleared for \"{series}\"]\n")
 
     def _save_event_configs(self):
-        import json
         EVENT_CONFIGS_PATH.write_text(json.dumps(self._event_configs, indent=2), encoding="utf-8")
 
     def _make_collapsible_section(self, parent, title, fill="x", expand=False, pady=(0, 6), collapsed=False):
@@ -1300,14 +1426,7 @@ class RivalsGUI:
 
         inner = ttk.Frame(_canvas)
         _inner_win = _canvas.create_window((0, 0), window=inner, anchor="nw")
-
-        def _on_inner_configure(event):
-            _canvas.configure(scrollregion=_canvas.bbox("all"))
-        inner.bind("<Configure>", _on_inner_configure)
-
-        def _on_canvas_configure(event):
-            _canvas.itemconfigure(_inner_win, width=event.width)
-        _canvas.bind("<Configure>", _on_canvas_configure)
+        self._setup_scrollable_canvas(_canvas, inner, _inner_win)
 
         def _on_mousewheel(event):
             _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
@@ -1625,7 +1744,7 @@ class RivalsGUI:
         self._player_search = tk.StringVar()
         self._player_search_entry = ttk.Entry(left, textvariable=self._player_search)
         self._player_search_entry.pack(fill="x", pady=(0, 4))
-        self._player_search.trace_add("write", lambda *_: self._refresh_player_list())
+        self._player_search.trace_add("write", lambda *_: self._debounce_player_search())
         _add_placeholder(self._player_search_entry, "Search players...")
 
         lb_frame = ttk.Frame(left)
@@ -1732,6 +1851,9 @@ class RivalsGUI:
         self._preview_label = tk.Label(form_right, bg=_BG3, width=22, height=9)
         self._preview_label.pack()
         self._preview_img = None
+        self._preview_cache = {}
+        self._preview_debounce_job = None
+        self._preview_loading_stem = None
 
         self._reload_player_db()
 
@@ -1741,6 +1863,11 @@ class RivalsGUI:
         self._clear_char_tree()
         self._editing_label.config(text="Select a player")
         self._db_selected_player = None
+
+    def _debounce_player_search(self):
+        if hasattr(self, "_player_search_job") and self._player_search_job:
+            self.after_cancel(self._player_search_job)
+        self._player_search_job = self.after(200, self._refresh_player_list)
 
     def _refresh_player_list(self):
         raw = self._player_search.get()
@@ -1834,22 +1961,45 @@ class RivalsGUI:
     def _show_preview(self, skin_stem: str):
         if not _PIL_AVAILABLE:
             return
+        if self._preview_debounce_job:
+            self.after_cancel(self._preview_debounce_job)
+        self._preview_debounce_job = self.after(150, self._load_preview, skin_stem)
+
+    def _load_preview(self, skin_stem: str):
+        self._preview_debounce_job = None
         if not skin_stem:
             self._clear_preview()
+            return
+        if skin_stem in self._preview_cache:
+            photo, w, h = self._preview_cache[skin_stem]
+            self._preview_img = photo
+            self._preview_label.config(image=photo, width=w, height=h)
             return
         path = RENDERS_DIR / f"{skin_stem}.png"
         if not path.exists():
             self._clear_preview()
             return
-        try:
-            img = Image.open(path)
-            w = 220
-            h = round(img.height * w / img.width)
-            img = img.resize((w, h), Image.LANCZOS)
-            self._preview_img = ImageTk.PhotoImage(img)
-            self._preview_label.config(image=self._preview_img, width=w, height=h)
-        except Exception:
-            self._clear_preview()
+        self._preview_loading_stem = skin_stem
+
+        def _worker():
+            try:
+                img = Image.open(path)
+                w = 220
+                h = round(img.height * w / img.width)
+                img = img.resize((w, h), Image.LANCZOS)
+                self.after(0, self._apply_preview, skin_stem, img, w, h)
+            except Exception:
+                self.after(0, self._clear_preview)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_preview(self, skin_stem: str, img, w: int, h: int):
+        if self._preview_loading_stem != skin_stem:
+            return
+        photo = ImageTk.PhotoImage(img)
+        self._preview_cache[skin_stem] = (photo, w, h)
+        self._preview_img = photo
+        self._preview_label.config(image=photo, width=w, height=h)
 
     def _clear_preview(self):
         self._preview_img = None
