@@ -60,6 +60,13 @@ _MUTED = "#999999"
 _SEL   = "#0078d4"
 _GREEN = "#1e7a1e"
 
+# Syntax highlighting palette (VS Code "Dark+" inspired)
+_SYN_COMMENT = "#6a9955"   # green   – comment lines / <!-- -->
+_SYN_KEY     = "#9cdcfe"   # l. blue – field keys / HTML attribute names
+_SYN_STRING  = "#ce9178"   # orange  – quoted strings
+_SYN_TAG     = "#569cd6"   # blue    – HTML tag names
+_SYN_NUMBER  = "#b5cea8"   # l. green – placement row numbers
+
 
 def _add_placeholder(entry: ttk.Entry, text: str, muted: str = _MUTED, normal: str = _FG) -> None:
     """Show grey hint text in an Entry when it is empty and unfocused."""
@@ -129,8 +136,18 @@ def _apply_theme(root: tk.Tk) -> None:
 
 
 def get_skins_for_char(char_name: str) -> list[str]:
+    if not RENDERS_DIR.exists():
+        return []
+    if char_name == "Random":
+        # Random has no CSP renders; it uses placeholder files named
+        # T_Ran_<Color>.png (no _CSP suffix). These share Ranno's "Ran" prefix,
+        # so exclude the _CSP files to keep the two rosters from mixing.
+        return sorted(
+            f.stem for f in RENDERS_DIR.glob("T_Ran_*.png")
+            if not f.stem.endswith("_CSP")
+        )
     abbrev = CHAR_ABBREVS.get(char_name)
-    if not abbrev or not RENDERS_DIR.exists():
+    if not abbrev:
         return []
     return sorted(f.stem for f in RENDERS_DIR.glob(f"T_{abbrev}_*_CSP.png"))
 
@@ -503,8 +520,8 @@ class RivalsGUI:
 
     def _schedule_custom_save(self):
         if hasattr(self, "_custom_save_job") and self._custom_save_job:
-            self.after_cancel(self._custom_save_job)
-        self._custom_save_job = self.after(500, self._save_custom_events)
+            self.root.after_cancel(self._custom_save_job)
+        self._custom_save_job = self.root.after(500, self._save_custom_events)
 
     def _save_custom_events(self):
         self._custom_save_job = None
@@ -928,7 +945,7 @@ class RivalsGUI:
 
     def _vod_clear_rows(self):
         if hasattr(self, "_vod_load_job") and self._vod_load_job:
-            self.after_cancel(self._vod_load_job)
+            self.root.after_cancel(self._vod_load_job)
             self._vod_load_job = None
         for w in self._vod_row_frame.winfo_children():
             w.destroy()
@@ -977,15 +994,18 @@ class RivalsGUI:
         self._vod_rows.append({"check_var": check_var, "text_var": text_var, "row_frame": row})
 
     def _vod_copy_text(self, text: str):
-        self.clipboard_clear()
-        self.clipboard_append(text)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self._log(f"[Copied to clipboard: {text}]\n")
 
     def _vod_delete_row(self, text_var: tk.StringVar):
         row = next((r for r in self._vod_rows if r["text_var"] is text_var), None)
         if row:
+            deleted = text_var.get()
             row["row_frame"].destroy()
             self._vod_rows.remove(row)
             self._vod_canvas.configure(scrollregion=self._vod_canvas.bbox("all"))
+            self._log(f"[Deleted row: {deleted}]\n")
 
     def _vod_delete_marked(self):
         to_delete = [r for r in self._vod_rows if r["check_var"].get()]
@@ -993,12 +1013,16 @@ class RivalsGUI:
             r["row_frame"].destroy()
         self._vod_rows = [r for r in self._vod_rows if not r["check_var"].get()]
         self._vod_canvas.configure(scrollregion=self._vod_canvas.bbox("all"))
+        if to_delete:
+            self._log(f"[Deleted {len(to_delete)} marked row(s)]\n")
+        else:
+            self._log("[No rows marked to delete]\n")
 
     def _load_vod_file(self):
         self._vod_clear_rows()
         # Cancel any in-progress batch load from a previous file selection
         if hasattr(self, "_vod_load_job") and self._vod_load_job:
-            self.after_cancel(self._vod_load_job)
+            self.root.after_cancel(self._vod_load_job)
             self._vod_load_job = None
 
         name = self._vod_file_var.get()
@@ -1038,7 +1062,7 @@ class RivalsGUI:
                 self._vod_loading_label.destroy()
 
         if done < len(lines):
-            self._vod_load_job = self.after(0, self._vod_load_batch, lines, done)
+            self._vod_load_job = self.root.after(0, self._vod_load_batch, lines, done)
         else:
             self._vod_load_job = None
 
@@ -1491,6 +1515,7 @@ class RivalsGUI:
         txt_ysb.config(command=self._top8_text.yview)
         txt_xsb.config(command=self._top8_text.xview)
         self._add_resize_grip(lf_txt, self._top8_text)
+        self._setup_text_data_highlighting(self._top8_text)
         ttk.Button(lf_txt, text="Save", command=self._save_top8_text).pack(anchor="w", pady=(6, 0))
 
         # Top 8 HTML editor
@@ -1544,6 +1569,7 @@ class RivalsGUI:
         html_ysb.config(command=self._top8_html_text.yview)
         html_xsb.config(command=self._top8_html_text.xview)
         self._add_resize_grip(lf_html, self._top8_html_text)
+        self._setup_html_highlighting(self._top8_html_text)
 
         self._top8_html_file_var.trace_add("write", lambda *_: self._load_top8_html())
         ttk.Button(lf_html, text="Save", command=self._save_top8_html).pack(anchor="w", pady=(6, 0))
@@ -1599,6 +1625,7 @@ class RivalsGUI:
         self._top8_text.delete("1.0", "end")
         self._top8_text.insert("end", path.read_text(encoding="utf-8"))
         self._top8_text.config(state="normal")
+        self._highlight_text_data(self._top8_text)
 
     def _save_top8_text(self):
         path = self._get_top8_text_path()
@@ -1635,6 +1662,7 @@ class RivalsGUI:
         self._top8_html_text.config(state="normal")
         self._top8_html_text.delete("1.0", "end")
         self._top8_html_text.insert("end", path.read_text(encoding="utf-8"))
+        self._highlight_html(self._top8_html_text)
 
     def _save_top8_html(self):
         name = self._top8_html_file_var.get()
@@ -1644,6 +1672,83 @@ class RivalsGUI:
         path = ROOT / "Top_8_Results" / name
         path.write_text(self._top8_html_text.get("1.0", "end-1c"), encoding="utf-8")
         self._log(f"[Saved {name}]\n")
+
+    # ------------------------------------------------------------------ #
+    #  Syntax highlighting for the Top 8 editors                          #
+    # ------------------------------------------------------------------ #
+    # Both editors are plain tk.Text widgets; we colour them with tags    #
+    # that are re-applied on load and (debounced) on every keystroke.     #
+    def _setup_text_data_highlighting(self, widget: tk.Text):
+        """Configure tags + key binding for the tab-delimited data editor."""
+        # Created low→high priority so a comment always wins on overlap
+        # (key < number < comment).
+        widget.tag_configure("key", foreground=_SYN_KEY)
+        widget.tag_configure("number", foreground=_SYN_NUMBER)
+        widget.tag_configure("comment", foreground=_SYN_COMMENT)
+        widget.bind(
+            "<KeyRelease>",
+            lambda _e: self._schedule_highlight(widget, self._highlight_text_data),
+        )
+
+    def _setup_html_highlighting(self, widget: tk.Text):
+        """Configure tags + key binding for the HTML editor."""
+        # Created low→high priority so later tags win on overlap
+        # (tag name < attr < string < comment).
+        widget.tag_configure("tag", foreground=_SYN_TAG)
+        widget.tag_configure("attr", foreground=_SYN_KEY)
+        widget.tag_configure("string", foreground=_SYN_STRING)
+        widget.tag_configure("comment", foreground=_SYN_COMMENT)
+        widget.bind(
+            "<KeyRelease>",
+            lambda _e: self._schedule_highlight(widget, self._highlight_html),
+        )
+
+    def _schedule_highlight(self, widget: tk.Text, func):
+        """Debounce re-highlighting so typing in large files stays smooth."""
+        job = getattr(widget, "_hl_job", None)
+        if job is not None:
+            try:
+                widget.after_cancel(job)
+            except Exception:
+                pass
+        widget._hl_job = widget.after(150, lambda: func(widget))
+
+    @staticmethod
+    def _apply_tag(widget: tk.Text, tag: str, start: int, end: int):
+        """Tag a [start, end) character span. Tk char indices include the
+        newline at each line's end, matching Python str offsets exactly."""
+        widget.tag_add(tag, f"1.0+{start}c", f"1.0+{end}c")
+
+    def _highlight_text_data(self, widget: tk.Text):
+        content = widget.get("1.0", "end-1c")
+        for tag in ("comment", "key", "number"):
+            widget.tag_remove(tag, "1.0", "end")
+        # Field keys: "Event name:" etc. at the start of a non-comment line
+        for m in re.finditer(r"(?m)^[^#\n][^:\t\n]*:", content):
+            self._apply_tag(widget, "key", m.start(), m.end())
+        # Placement rows: leading integer (the place number)
+        for m in re.finditer(r"(?m)^\d+", content):
+            self._apply_tag(widget, "number", m.start(), m.end())
+        # Comment lines (applied last; highest-priority tag overrides keys)
+        for m in re.finditer(r"(?m)^[ \t]*#.*$", content):
+            self._apply_tag(widget, "comment", m.start(), m.end())
+
+    def _highlight_html(self, widget: tk.Text):
+        content = widget.get("1.0", "end-1c")
+        for tag in ("tag", "attr", "string", "comment"):
+            widget.tag_remove(tag, "1.0", "end")
+        # Tag names: <div, </div, <br/
+        for m in re.finditer(r"</?[a-zA-Z][\w:-]*", content):
+            self._apply_tag(widget, "tag", m.start(), m.end())
+        # Attribute names: foo= (the name immediately before '=')
+        for m in re.finditer(r"[a-zA-Z_:][\w:-]*(?==)", content):
+            self._apply_tag(widget, "attr", m.start(), m.end())
+        # Quoted strings (single or double, may span lines)
+        for m in re.finditer(r"\"[^\"]*\"|'[^']*'", content, re.DOTALL):
+            self._apply_tag(widget, "string", m.start(), m.end())
+        # Comments override everything inside them
+        for m in re.finditer(r"<!--.*?-->", content, re.DOTALL):
+            self._apply_tag(widget, "comment", m.start(), m.end())
 
     def _open_top8_html_in_browser(self):
         import webbrowser
@@ -1866,8 +1971,8 @@ class RivalsGUI:
 
     def _debounce_player_search(self):
         if hasattr(self, "_player_search_job") and self._player_search_job:
-            self.after_cancel(self._player_search_job)
-        self._player_search_job = self.after(200, self._refresh_player_list)
+            self.root.after_cancel(self._player_search_job)
+        self._player_search_job = self.root.after(200, self._refresh_player_list)
 
     def _refresh_player_list(self):
         raw = self._player_search.get()
@@ -1962,8 +2067,8 @@ class RivalsGUI:
         if not _PIL_AVAILABLE:
             return
         if self._preview_debounce_job:
-            self.after_cancel(self._preview_debounce_job)
-        self._preview_debounce_job = self.after(150, self._load_preview, skin_stem)
+            self.root.after_cancel(self._preview_debounce_job)
+        self._preview_debounce_job = self.root.after(150, self._load_preview, skin_stem)
 
     def _load_preview(self, skin_stem: str):
         self._preview_debounce_job = None
@@ -1987,9 +2092,9 @@ class RivalsGUI:
                 w = 220
                 h = round(img.height * w / img.width)
                 img = img.resize((w, h), Image.LANCZOS)
-                self.after(0, self._apply_preview, skin_stem, img, w, h)
+                self.root.after(0, self._apply_preview, skin_stem, img, w, h)
             except Exception:
-                self.after(0, self._clear_preview)
+                self.root.after(0, self._clear_preview)
 
         threading.Thread(target=_worker, daemon=True).start()
 
