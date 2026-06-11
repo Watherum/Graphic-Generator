@@ -2,6 +2,7 @@
 """GUI launcher for the Rivals 2 Generator toolset."""
 import tkinter as tk
 from tkinter import ttk
+import os
 import subprocess
 import threading
 import sys
@@ -870,8 +871,16 @@ class RivalsGUI:
         self._thumb_series.trace_add("write", lambda *_: self._load_config_into_form(self._thumb_series.get()))
         self._load_config_into_form(self._thumb_series.get())
 
-        ttk.Button(inner, text="Generate Thumbnails", command=self._generate_thumbnails,
-                   style="Accent.TButton").pack(padx=10, pady=8, anchor="w")
+        row_gen = ttk.Frame(inner)
+        row_gen.pack(padx=10, pady=8, anchor="w", fill="x")
+        ttk.Button(row_gen, text="Generate Thumbnails", command=self._generate_thumbnails,
+                   style="Accent.TButton").pack(side="left")
+        self._open_thumb_folder_btn = ttk.Button(
+            row_gen, text="Open Output Folder",
+            command=self._open_thumbnail_folder, state="disabled")
+        self._open_thumb_folder_btn.pack(side="left", padx=(6, 0))
+        self._thumb_event_name.trace_add("write", lambda *_: self._refresh_open_folder_btn())
+        self._refresh_open_folder_btn()
 
         # VOD Names editor
         lf_vod = self._make_collapsible_section(inner, "VOD Names")
@@ -914,7 +923,14 @@ class RivalsGUI:
         vod_btn_row = ttk.Frame(lf_vod)
         vod_btn_row.pack(fill="x", pady=(6, 0))
         ttk.Button(vod_btn_row, text="Save", command=self._save_vod_file).pack(side="left")
-        ttk.Button(vod_btn_row, text="Delete Marked", command=self._vod_delete_marked).pack(side="left", padx=(6, 0))
+        ttk.Button(vod_btn_row, text="Add Row", command=self._vod_add_new_row).pack(side="left", padx=(6, 0))
+        self._vod_delete_btn = ttk.Button(vod_btn_row, text="Delete Marked",
+                                           command=self._vod_delete_marked, state="disabled")
+        self._vod_delete_btn.pack(side="left", padx=(6, 0))
+        ttk.Button(vod_btn_row, text="Check All",
+                   command=lambda: self._vod_set_all(True)).pack(side="left", padx=(6, 0))
+        ttk.Button(vod_btn_row, text="Uncheck All",
+                   command=lambda: self._vod_set_all(False)).pack(side="left", padx=(6, 0))
 
         self._vod_file_var.trace_add("write", lambda *_: self._load_vod_file())
         self._thumb_series.trace_add("write", lambda *_: self._refresh_vod_files())
@@ -950,6 +966,7 @@ class RivalsGUI:
         for w in self._vod_row_frame.winfo_children():
             w.destroy()
         self._vod_rows.clear()
+        self._vod_update_delete_btn()
 
     def _vod_add_row(self, line_text: str):
         row = tk.Frame(self._vod_row_frame, bg=_BG)
@@ -983,6 +1000,7 @@ class RivalsGUI:
             for w in colored:
                 w.config(bg=color)
             cb.config(activebackground=color)
+            self._vod_update_delete_btn()
 
         cb.config(command=_on_check)
 
@@ -991,7 +1009,8 @@ class RivalsGUI:
         row.bind("<MouseWheel>", _wheel)
         cb.bind("<MouseWheel>", _wheel)
 
-        self._vod_rows.append({"check_var": check_var, "text_var": text_var, "row_frame": row})
+        self._vod_rows.append({"check_var": check_var, "text_var": text_var,
+                               "row_frame": row, "recolor": _on_check, "entry": entry})
 
     def _vod_copy_text(self, text: str):
         self.root.clipboard_clear()
@@ -1005,6 +1024,7 @@ class RivalsGUI:
             row["row_frame"].destroy()
             self._vod_rows.remove(row)
             self._vod_canvas.configure(scrollregion=self._vod_canvas.bbox("all"))
+            self._vod_update_delete_btn()
             self._log(f"[Deleted row: {deleted}]\n")
 
     def _vod_delete_marked(self):
@@ -1013,10 +1033,31 @@ class RivalsGUI:
             r["row_frame"].destroy()
         self._vod_rows = [r for r in self._vod_rows if not r["check_var"].get()]
         self._vod_canvas.configure(scrollregion=self._vod_canvas.bbox("all"))
+        self._vod_update_delete_btn()
         if to_delete:
             self._log(f"[Deleted {len(to_delete)} marked row(s)]\n")
         else:
             self._log("[No rows marked to delete]\n")
+
+    def _vod_add_new_row(self):
+        self._vod_add_row("")
+        self._vod_canvas.configure(scrollregion=self._vod_canvas.bbox("all"))
+        self._vod_canvas.yview_moveto(1.0)
+        new_row = self._vod_rows[-1]
+        new_row["entry"].focus_set()
+
+    def _vod_update_delete_btn(self):
+        btn = getattr(self, "_vod_delete_btn", None)
+        if btn is None:
+            return
+        any_checked = any(r["check_var"].get() for r in self._vod_rows)
+        btn.config(state="normal" if any_checked else "disabled")
+
+    def _vod_set_all(self, checked: bool):
+        for r in self._vod_rows:
+            r["check_var"].set(1 if checked else 0)
+            r["recolor"]()
+        self._vod_update_delete_btn()
 
     def _load_vod_file(self):
         self._vod_clear_rows()
@@ -1102,7 +1143,26 @@ class RivalsGUI:
         self._run([
             PYTHON, str(ROOT / "Python Scripts" / "generate_rivals_thumbnail.py"),
             "-e", event_name, "-o", "missing.log",
-        ])
+        ], on_done=self._refresh_open_folder_btn)
+
+    def _refresh_open_folder_btn(self):
+        """Enable the Open Output Folder button only if the folder exists."""
+        btn = getattr(self, "_open_thumb_folder_btn", None)
+        if btn is None:
+            return
+        event_name = self._thumb_event_name.get().strip()
+        folder = ROOT / "Youtube_Thumbnails" / event_name
+        btn.config(state="normal" if event_name and folder.is_dir() else "disabled")
+
+    def _open_thumbnail_folder(self):
+        folder = ROOT / "Youtube_Thumbnails" / self._thumb_event_name.get().strip()
+        if not folder.is_dir():
+            self._log(f"[Error: output folder not found: {folder}]\n")
+            return
+        try:
+            os.startfile(str(folder))
+        except Exception as exc:
+            self._log(f"[Error opening folder: {exc}]\n")
 
     def _browse_overlay(self, path_var: tk.StringVar):
         from tkinter import filedialog

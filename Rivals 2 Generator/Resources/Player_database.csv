@@ -50,7 +50,7 @@ Mkok,Zetterburn,T_Zet_Default_Neutral_CSP
 Virgo,Orcane,T_Orc_Clownfish_Green_CSP,Olympia,T_Oly_Lovers_Green_CSP
 Spyker,Zetterburn,T_Zet_Lovers_Neutral_CSP
 JuanSolo,Loxodont,T_Lox_Lovers_Mint_CSP
-BGunn,Olympia,T_Oly_Champion_Blue_CSP,Clairen,T_Cla_Champion_Blue_CSP
+BGunn,Olympia,T_Oly_Evo_Blue_CSP,Clairen,T_Cla_Champion_Blue_CSP
 Sourkroutt,Clairen,T_Cla_Ranger_Neutral_CSP
 leggy145,Kragg,T_Kra_Rockstar_Neutral_CSP
 Godly,Ranno,T_Ran_Champion_Blue_CSP
@@ -117,7 +117,7 @@ Joshua,Fleet,T_Fle_Default_Neutral_CSP
 Rx,Clairen,T_Cla_Leopard_Neutral_CSP
 Matthewnoid8,Orcane,T_Orc_Demigod_Blue_CSP
 ThrowOut,Forsburn,T_For_Wasteland_Neutral_CSP
-BlazingPasta,Galvan,T_Gal_Default_Green_CSP
+BlazingPasta,Galvan,T_Gal_Yuletide_Neutral_CSP
 Spypie,Fleet,T_Fle_Princess_Blue_CSP
 Gab,La Reina,T_Lar_Abyss_Midnight_CSP
 Rayne,Kragg,T_Kra_Abyss_Midnight_CSP
@@ -158,3 +158,7 @@ Triforce!,Forsburn,T_For_Summer_Green_CSP
 B-Rabbit,Ranno,T_Ran_Clown_Yellow_CSP
 Cap Aigis,Ranno,T_Ran_Clown_Yellow_CSP
 Mimi,Galvan,T_Gal_Yuletide_Neutral_CSP
+JollyRoger,Clairen,T_Cla_Pirate_Neutral_CSP
+edith,Clairen,T_Cla_Tiger_Red_CSP
+Jessu,Slade,T_Sla_Champion_Blue_CSP
+AlphaStone,Fleet,T_Fle_Ranger_Blue_CSP
