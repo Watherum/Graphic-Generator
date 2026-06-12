@@ -282,11 +282,21 @@ FETCH_EVENTS = [
 
 
 
+_OUTPUT_FOLDERS = [
+    "Vod_Names",
+    "Youtube_Thumbnails",
+    "Top_8_Texts",
+    "Results_Posts",
+]
+
+
 class RivalsGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Rivals 2 Generator")
         self.root.resizable(True, True)
+        for folder in _OUTPUT_FOLDERS:
+            (ROOT / folder).mkdir(exist_ok=True)
         self.root.state("zoomed")
 
         _apply_theme(self.root)

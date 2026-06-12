@@ -27,3 +27,6 @@ Melee Generator/Top_8_Texts/*
 Ultimate Generator/Top_8_Infos/*
 Ultimate Generator/Top_8_Texts/*
 app.properties
+
+# Keep folder markers even inside ignored directories
+!.gitkeep
