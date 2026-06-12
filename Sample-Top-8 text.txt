@@ -1,28 +1,19 @@
-# Top 8 Graphic example
-# All information is tab deliminated
+# Top 8 Graphic example - Straight Into The Abyss format
+# All information is tab delimited
 
 #Graphic Information
-Event name:	Quarantainment 90
-Event date:	03/16/2022
-Event entrants:	29 Entrants
-
-#Set to Watch information
-# info, match, player1, player2
-Set to Watch:	Losers Finals	Cortex	Ace$
-
-#Archive information
-Twitter:	@CR_Jetstream
-YouTube:	Matches Archived - CR_Jetsream
-Twitch:	twitch.tv/cr_jetstream
-Bracket Link:	smash.gg/quarantainment-90
+Event name:	Straight Into The Abyss 1
+Event link:	https://start.gg/SITA1
+Event entrants:	32 Competitors
+Event date:	1/1/2025
 
 # Placements
-# place, name, twitter, characters
-1:	OG-Mustaine	@OG_Mustaine_SSB	Terry
-2:	Cortex	@flargglesnaff	Pac Man	Bowser Jr
-3:	Ace$	@	Ness
-4:	RULES	@	Pyra
-5:	S1rlo	@S1rlo_	Pyra
-6:	Seels	@wifiseels	Sora
-7:	Taskbot	@Taskbot_SSBU	Wolf
-8:	SudoSSB	@SudoSSB	Falco 8	Cloud
+# place, name, sponsor, characters
+1,Viviana,,Galvan
+2,SapphireGD,AoC,Zetterburn
+3,Turnap,BLZE,Ranno
+4,Bowler,,Clairen
+5,NatySolo,,Orcane
+5,Markrealth,,Etalus
+7,Dr. Grin,,Wrastor
+7,Drewsephix,,Orcane
