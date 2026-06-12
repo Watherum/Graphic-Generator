@@ -47,6 +47,8 @@ Pull match data and top 8 standings directly from start.gg.
 - Enter a starting event number
 - Click **Save & Fetch VOD Names** — the tournament is saved and will appear in Saved Custom Tournaments on future boots
 
+> **Fetch Top 8** always writes to both the event-specific text file and `Top_8_Texts/Default Top 8 HTML.txt`, keeping the default template in sync with the latest event.
+
 ---
 
 ### 2. Generate Thumbnails
@@ -55,7 +57,7 @@ Pull match data and top 8 standings directly from start.gg.
 - Choose a series from the dropdown (includes preset and saved custom tournaments)
 - Enter the event number/suffix — the full event name is built automatically
 
-**Thumbnail Config** *(collapsible)*
+**Thumbnail Config** *(collapsible, starts collapsed)*
 
 Configure rendering for the selected series. Settings are saved per-series to `rivals_event_configs.json` and applied at generation time on top of any hardcoded defaults.
 
@@ -85,14 +87,16 @@ Click **Generate Thumbnails** to run the pipeline. Output goes to `Youtube_Thumb
 
 ### 3. Generate Top 8s
 
-View and edit the Top 8 data file for the selected event, then generate the HTML bracket graphic.
+Edit Top 8 placement data and preview the HTML bracket graphic.
 
-- Select a series and event number — the matching `Top_8_Texts/` file is loaded automatically
-- Edit placements, sponsors, and characters directly in the text editor (syntax highlighted)
-- Click **Save** to write changes, then **Generate Top 8** to produce the graphic
-- A local preview opens in your browser automatically
+**Top 8 Text Data** *(collapsible)*
 
-Top 8 data files live in `Top_8_Texts/` and use this format:
+- Select a series and event number — the matching `Top_8_Texts/` file loads automatically
+- Selecting **Default Top 8.html** in the HTML file dropdown loads `Default Top 8 HTML.txt` instead
+- Edit placements, sponsors, and characters directly in the syntax-highlighted text area
+- Click **Save** to write changes
+
+Data file format:
 
 ```
 Event name:	Straight Into The Abyss 1
@@ -105,6 +109,34 @@ Event date:	1/1/2025
 3,Turnap,BLZE,Ranno
 ...
 ```
+
+Fields per placement row: `place, player name, sponsor (blank if none), character`
+
+**Top 8 HTML Result** *(collapsible)*
+
+The Top 8 graphic is a self-contained HTML file that reads the data file and renders placements, character renders, and sponsor tags live via JavaScript. There is no separate generation step — saving the text data is all that's needed.
+
+- Select the HTML file for the current series from the dropdown (event-specific files plus **Default Top 8.html** are shown)
+- Click **Open in Browser** to preview — designed for OBS's fixed canvas, not interactive browser use
+
+**Layout Config** *(collapsible, starts collapsed)*
+
+A visual config form for adjusting the layout of the selected HTML file without touching the raw HTML. Changes apply to whichever HTML file is currently selected.
+
+| Section | Fields |
+|---|---|
+| Colors | Label color, Sponsor color (hex + color picker) |
+| Event Info | Top %, Left %, Size px per field (Name / Link / Entrants / Date); color override for Name |
+| Character Renders | Top %, Left %, Height % for each of the 8 placement slots |
+| Placement Numbers | Top %, Left %, Size px for each slot |
+| Player Names | Top %, Left %, Size px for each slot |
+| Sponsors | Top %, Left %, Size px for each slot |
+
+Click **Apply Config** to push the form values into the HTML editor, then **Save** (in the HTML Source section) to write to disk.
+
+**HTML Source** *(collapsible, starts collapsed)*
+
+Raw HTML editor for direct editing. Syntax highlighted. Click **Save** to write changes to disk.
 
 ---
 
@@ -238,9 +270,11 @@ Rivals_2_Generator/
 │   ├── Overlays/                  # Background/foreground templates
 │   └── Fonts/                     # TTF/OTF fonts
 │
-├── Vod_Names/                     # Input: match data .txt files
+├── Vod_Names/                     # Input: match data .txt files; missing.log written here
 ├── Top_8_Texts/                   # Input/output: top 8 data files
+│   └── Default Top 8 HTML.txt    # Always updated on any Fetch Top 8
 ├── Youtube_Thumbnails/            # Output: generated thumbnails
-├── Top_8_Results/                 # Output: generated bracket graphics
+├── Top_8_Results/                 # Output: HTML bracket graphics
+│   └── Default Top 8.html        # Generic template usable for any series
 └── Results_Posts/                 # Output: generated results posts
 ```
