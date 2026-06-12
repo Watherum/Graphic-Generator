@@ -1,0 +1,7 @@
+﻿@REM Usage:
+@REM   py -3.12 fetch_sets.py <event-slug> [--name "My Tournament"] [--station N] [--out sets.txt]
+
+@echo off
+cd /d "%~dp0.."
+py -3.12 "Python_Scripts\fetch_sets.py" tournament/ultimate-immortal-fight-night-272/event/ultimate-singles --name "IFN 272" --out Sets.txt
+pause

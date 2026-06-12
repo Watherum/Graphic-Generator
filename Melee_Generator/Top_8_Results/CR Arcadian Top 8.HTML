@@ -1,0 +1,252 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CR Arcadian Top 8</title>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+        }
+
+        #canvas {
+            position: relative;
+            display: inline-block;
+        }
+
+        #canvas img {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        /* First child stays in flow to give the container its natural size */
+        #canvas img:first-child {
+            position: relative;
+        }
+
+        @font-face {
+            font-family: 'HKModular';
+            src: url('../Resources/Fonts/HKModular-Bold.otf') format('opentype');
+            font-weight: bold;
+        }
+
+        #canvas .label {
+            position: absolute;
+            font-family: 'HKModular', sans-serif;
+            font-weight: bold;
+            color: #fff;
+            white-space: nowrap;
+            text-align: center;
+            transform: translateX(-50%);
+        }
+
+        #canvas .sponsor {
+            color: #FFD700;
+        }
+
+        #canvas .render {
+            position: absolute;
+            width: auto;
+        }
+
+        /* Hide until all images are loaded */
+        #canvas.loading {
+            visibility: hidden;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="canvas" class="loading">
+        <!-- Background first so it renders behind everything -->
+        <img src="../Resources/Top_8_Images/CR Arcadian/CR Arcadian Background.png" alt=""/>
+        <img src="../Resources/Top_8_Images/CR Arcadian/CR Arcadian Player Boxes.png" alt=""/>
+
+        <!-- Character renders (sit between the box layers and the text overlay) -->
+        <img id="place-1-render" class="render" style="top: 32%;  left: 3%;    height: 55%;" alt=""/>
+        <img id="place-2-render" class="render" style="top: 27%;  left: 33%;   height: 37%;" alt=""/>
+        <img id="place-3-render" class="render" style="top: 27%;  left: 54%;   height: 37%;" alt=""/>
+        <img id="place-4-render" class="render" style="top: 27%;  left: 76%;   height: 37%;" alt=""/>
+        <img id="place-5-render" class="render" style="top: 65%;  left: 33%;   height: 26%;" alt=""/>
+        <img id="place-6-render" class="render" style="top: 65%;  left: 50%;   height: 26%;" alt=""/>
+        <img id="place-7-render" class="render" style="top: 65%;  left: 66%;   height: 26%;" alt=""/>
+        <img id="place-8-render" class="render" style="top: 65%;  left: 83%;   height: 26%;" alt=""/>
+
+        <img src="../Resources/Top_8_Images/CR Arcadian/CR Arcadian Text Boxes.png" alt=""/>
+        <img src="../Resources/Top_8_Images/CR Arcadian/CR Arcadian Number Boxes.png" alt=""/>
+        <img src="../Resources/Top_8_Images/CR Arcadian/CR Arcadian Logos.png" alt=""/>
+
+        <!-- Event info -->
+        <span id="event-name"    class="label" style="top: 4%;    left: 50%;   font-size: 50px; color: yellow;"></span>
+        <span id="event-link"    class="label" style="top: 11%;   left: 50%;   font-size: 40px; color: yellow;"></span>
+        <span id="event-entrants"class="label" style="top: 16.5%; left: 50%;   font-size: 40px; color: yellow;"></span>
+        <span id="event-date"    class="label" style="top: 22%;   left: 50%;   font-size: 40px; color: yellow;"></span>
+
+        <!-- Placement numbers -->
+        <span id="place-1-num" class="label" style="top: 29.5%; left: 6.5%;    font-size: 100px;"></span>
+        <span id="place-2-num" class="label" style="top: 30.4%; left: 37%;     font-size: 75px;"></span>
+        <span id="place-3-num" class="label" style="top: 30.4%; left: 58.9%;   font-size: 75px;"></span>
+        <span id="place-4-num" class="label" style="top: 30.4%; left: 80.5%;   font-size: 75px;"></span>
+        <span id="place-5-num" class="label" style="top: 67%;   left: 36.1%;   font-size: 50px;"></span>
+        <span id="place-6-num" class="label" style="top: 67%;   left: 52.6%;   font-size: 50px;"></span>
+        <span id="place-7-num" class="label" style="top: 67%;   left: 69.3%;   font-size: 50px;"></span>
+        <span id="place-8-num" class="label" style="top: 67%;   left: 85.8%;   font-size: 50px;"></span>
+
+        <!-- Player names -->
+        <span id="place-1-name" class="label" style="top: 88%;   left: 17%;    font-size: 60px;"></span>
+        <span id="place-2-name" class="label" style="top: 55.8%; left: 43.5%;  font-size: 40px;"></span>
+        <span id="place-3-name" class="label" style="top: 55.8%; left: 65.6%;  font-size: 40px;"></span>
+        <span id="place-4-name" class="label" style="top: 55.8%; left: 87%;    font-size: 40px;"></span>
+        <span id="place-5-name" class="label" style="top: 89%;   left: 41%;    font-size: 30px;"></span>
+        <span id="place-6-name" class="label" style="top: 89%;   left: 57.5%;  font-size: 30px;"></span>
+        <span id="place-7-name" class="label" style="top: 89%;   left: 74%;    font-size: 30px;"></span>
+        <span id="place-8-name" class="label" style="top: 89%;   left: 90.5%;  font-size: 30px;"></span>
+
+        <!-- Sponsors -->
+        <span id="place-1-sponsor" class="label sponsor" style="top: 84%;   left: 17%;    font-size: 30px;"></span>
+        <span id="place-2-sponsor" class="label sponsor" style="top: 53.4%; left: 36.1%;  font-size: 25px;"></span>
+        <span id="place-3-sponsor" class="label sponsor" style="top: 53.4%; left: 58.9%;  font-size: 25px;"></span>
+        <span id="place-4-sponsor" class="label sponsor" style="top: 53.4%; left: 81.6%;  font-size: 25px;"></span>
+        <span id="place-5-sponsor" class="label sponsor" style="top: 86.3%; left: 37.1%;  font-size: 22px;"></span>
+        <span id="place-6-sponsor" class="label sponsor" style="top: 86.3%; left: 55.5%;  font-size: 22px;"></span>
+        <span id="place-7-sponsor" class="label sponsor" style="top: 86.3%; left: 71.3%;  font-size: 22px;"></span>
+        <span id="place-8-sponsor" class="label sponsor" style="top: 86.3%; left: 86.6%;  font-size: 22px;"></span>
+    </div>
+
+    <script>
+        const DATA_FILE       = '../Top_8_Texts/CR Arcadian Top 8 HTML.txt';
+        const PLAYER_DB_FILE  = '../Resources/Player_database.csv';
+        const RENDER_DIR      = '../Resources/Character_Renders/Melee_Full_Renders';
+
+        function parseDataFile(text) {
+            const info = {};
+            const placements = [];
+            for (const raw of text.split('\n')) {
+                const line = raw.trim();
+                if (!line || line.startsWith('#')) continue;
+                const colonIdx = line.indexOf(':');
+                if (colonIdx !== -1 && !/^\d/.test(line)) {
+                    const key = line.slice(0, colonIdx).trim().toLowerCase().replace(/\s+/g, '_');
+                    info[key] = line.slice(colonIdx + 1).trim();
+                    continue;
+                }
+                if (/^\d/.test(line)) {
+                    const [place, name, sponsor, character] = line.split(',').map(s => s.trim());
+                    placements.push({ place, name, sponsor, character });
+                }
+            }
+            return { info, placements };
+        }
+
+        function parsePlayerDB(text) {
+            const db = {};
+            for (const raw of text.split('\n')) {
+                const line = raw.trim();
+                if (!line || line.startsWith('#')) continue;
+                const parts = line.split(',').map(s => s.trim());
+                const playerName = parts[0];
+                if (!playerName) continue;
+                const chars = {};
+                const charList = [];
+                for (let i = 1; i + 1 < parts.length; i += 2) {
+                    const charName = parts[i];
+                    const alt      = parts[i + 1];
+                    if (charName) {
+                        chars[charName.toLowerCase()] = alt || '1';
+                        if (!charList.includes(charName)) charList.push(charName);
+                    }
+                }
+                db[playerName.toLowerCase()] = { chars, charList };
+            }
+            return db;
+        }
+
+        function resolveRenderPath(playerName, characterName, playerDB) {
+            const playerEntry = playerDB[playerName.toLowerCase()];
+            if (!characterName && playerEntry?.charList.length)
+                characterName = playerEntry.charList[0];
+            if (!characterName) return '';
+            const alt = playerEntry?.chars[characterName.toLowerCase()] ?? '1';
+            return `${RENDER_DIR}/${characterName} (${alt}).png`;
+        }
+
+        const SLOT_MAX_WIDTHS     = [0.165, 0.11, 0.11, 0.11, 0.9,  0.9,  0.9,  0.08];
+        const SLOT_MAX_HEIGHTS    = [0.07,  0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05];
+        const SLOT_ALLOW_WRAPPING = [false,  true, true, true, true, true, true, true];
+        function fitText(el, maxWidthPct, allowWrap = true, maxHeightPct = 1) {
+            if (!el || !el.textContent) return;
+            const canvas    = document.getElementById('canvas');
+            const maxWidth  = canvas.offsetWidth  * maxWidthPct;
+            const maxHeight = canvas.offsetHeight * maxHeightPct;
+
+            if (allowWrap && el.scrollWidth > maxWidth) {
+                const spaceIdx = el.textContent.lastIndexOf(' ');
+                if (spaceIdx !== -1) {
+                    const full = el.textContent;
+                    el.style.whiteSpace = 'pre-line';
+                    el.textContent = full.slice(0, spaceIdx) + '\n' + full.slice(spaceIdx + 1);
+                }
+            }
+
+            let size = parseFloat(el.style.fontSize);
+            while ((el.scrollWidth > maxWidth || el.scrollHeight > maxHeight) && size > 8) {
+                size -= 1;
+                el.style.fontSize = size + 'px';
+            }
+        }
+
+        function populate({ info, placements }, playerDB) {
+            const set = (id, text) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = text ?? '';
+            };
+
+            set('event-name',     info['event_name']);
+            set('event-link',     info['event_link']);
+            set('event-entrants', info['event_entrants']);
+            set('event-date',     info['event_date']);
+
+            placements.forEach(({ place, name, sponsor, character }, i) => {
+                const slot = i + 1;
+                const maxW = SLOT_MAX_WIDTHS[i];
+                const maxH = SLOT_MAX_HEIGHTS[i];
+                const wrap = SLOT_ALLOW_WRAPPING[i];
+                set(`place-${slot}-num`,     place);
+                set(`place-${slot}-name`,    name);
+                fitText(document.getElementById(`place-${slot}-name`), maxW, wrap, maxH);
+                set(`place-${slot}-sponsor`, sponsor);
+                fitText(document.getElementById(`place-${slot}-sponsor`), maxW, wrap, maxH);
+
+                const renderEl = document.getElementById(`place-${slot}-render`);
+                if (renderEl) {
+                    const path = resolveRenderPath(name, character, playerDB);
+                    if (path) renderEl.src = path;
+                }
+            });
+        }
+
+        const canvas = document.getElementById('canvas');
+        const overlayImgs = canvas.querySelectorAll('img[src]');
+        let loaded = 0;
+        const onImgDone = () => { if (++loaded === overlayImgs.length) canvas.classList.remove('loading'); };
+        overlayImgs.forEach(img => {
+            if (img.complete) onImgDone();
+            else { img.addEventListener('load', onImgDone); img.addEventListener('error', onImgDone); }
+        });
+
+        Promise.all([
+            fetch(DATA_FILE).then(r => r.text()),
+            fetch(PLAYER_DB_FILE).then(r => r.text()),
+        ])
+        .then(([dataText, dbText]) => {
+            const data     = parseDataFile(dataText);
+            const playerDB = parsePlayerDB(dbText);
+            populate(data, playerDB);
+        })
+        .catch(err => console.error('Could not load data files:', err));
+    </script>
+
+</body>
+</html>

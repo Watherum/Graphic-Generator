@@ -1,4 +1,4 @@
-# Graphic Generation
+﻿# Graphic Generation
 This project is based off the work of my good friend CR_Jetstream!
 
 This project is now mainly focused on generating thumbnails and top 8 graphics for Rivals 2.
@@ -20,7 +20,7 @@ Currently these scripts only run with Python 3.9. An exe is included.
 Launch the GUI from the generator folder:
 
 ```
-Rivals 2 Generator\Launch_Rivals_GUI.cmd
+Rivals_2_Generator\Launch_Rivals_GUI.cmd
 ```
 
 The GUI has five tabs:
@@ -106,13 +106,13 @@ Manage the list of recognised character names used during thumbnail generation.
 
 ```bash
 # Generate thumbnails
-python "Rivals 2 Generator\Python Scripts\generate_rivals_thumbnail.py" -e "Immortal Fight Night 278" -o missing.log
+python "Rivals_2_Generator\Python_Scripts\generate_rivals_thumbnail.py" -e "Immortal Fight Night 278" -o missing.log
 
 # Fetch match data from start.gg
-python "Rivals 2 Generator\Python Scripts\fetch_sets.py" tournament/ultimate-immortal-fight-night-278/event/rivals-2-singles --name "Immortal Fight Night 278" --out "Vod_Names\Immortal Fight Night 278 Names.txt"
+python "Rivals_2_Generator\Python_Scripts\fetch_sets.py" tournament/ultimate-immortal-fight-night-278/event/rivals-2-singles --name "Immortal Fight Night 278" --out "Vod_Names\Immortal Fight Night 278 Names.txt"
 
 # Fetch top 8 bracket data
-python "Rivals 2 Generator\Python Scripts\fetch_startgg_top8.py" tournament/ultimate-immortal-fight-night-278/event/rivals-2-singles --name "Immortal Fight Night 278" --link "https://start.gg/UIFN278" --out "Top_8_Texts\Immortal Fight Night Top 8 HTML.txt"
+python "Rivals_2_Generator\Python_Scripts\fetch_startgg_top8.py" tournament/ultimate-immortal-fight-night-278/event/rivals-2-singles --name "Immortal Fight Night 278" --link "https://start.gg/UIFN278" --out "Top_8_Texts\Immortal Fight Night Top 8 HTML.txt"
 ```
 
 ---
@@ -132,7 +132,7 @@ Alternatively, use the GUI **Thumbnail Config** tab to configure overlays, fonts
 
 | Task | How |
 |---|---|
-| Add new character skins | Place PNGs in `Resources/Character_Renders/Rivals 2 Full Renders/` |
+| Add new character skins | Place PNGs in `Resources/Character_Renders/Rivals_2_Full_Renders/` |
 | Add new characters | Add name to `Resources/Character_database.csv` |
 | Add/update players | Use GUI → Player Database tab |
 | Add overlay images | Place in `Resources/Overlays/` or use Browse in Thumbnail Config |

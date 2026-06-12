@@ -1,4 +1,4 @@
-.idea
+﻿.idea
 __pycache__
 venv
 Graphic Generator/Resources/Character_Renders_Source/Input_Folder
@@ -11,21 +11,21 @@ dist
 *.spec
 CLAUDE.md
 .claude
-Melee Generator/Youtube_Thumbnails/*
-Rivals 2 Generator/Youtube_Thumbnails/*
-Ultimate Generator/Youtube_Thumbnails/*
-Melee Generator/Vod_Names/*
-Rivals 2 Generator/Vod_Names/*
-Ultimate Generator/Vod_Names/*
-Rivals 2 Generator/Resources/Fonts/HKModular-Bold.otf
-Rivals 2 Generator/Resources/Fonts/HKModular-BoldRounded.otf
-Rivals 2 Generator/Top_8_Infos/*
-Rivals 2 Generator/Top_8_Texts/*
-Rivals 2 Generator/Results_Posts/*
-Melee Generator/Top_8_Infos/*
-Melee Generator/Top_8_Texts/*
-Ultimate Generator/Top_8_Infos/*
-Ultimate Generator/Top_8_Texts/*
+Melee_Generator/Youtube_Thumbnails/*
+Rivals_2_Generator/Youtube_Thumbnails/*
+Ultimate_Generator/Youtube_Thumbnails/*
+Melee_Generator/Vod_Names/*
+Rivals_2_Generator/Vod_Names/*
+Ultimate_Generator/Vod_Names/*
+Rivals_2_Generator/Resources/Fonts/HKModular-Bold.otf
+Rivals_2_Generator/Resources/Fonts/HKModular-BoldRounded.otf
+Rivals_2_Generator/Top_8_Infos/*
+Rivals_2_Generator/Top_8_Texts/*
+Rivals_2_Generator/Results_Posts/*
+Melee_Generator/Top_8_Infos/*
+Melee_Generator/Top_8_Texts/*
+Ultimate_Generator/Top_8_Infos/*
+Ultimate_Generator/Top_8_Texts/*
 app.properties
 
 # Keep folder markers even inside ignored directories
