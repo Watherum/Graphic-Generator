@@ -440,7 +440,7 @@ class MeleeGUI:
             return
         self._run([
             PYTHON, str(ROOT / "Python_Scripts" / "generate_melee_thumbnails.py"),
-            "-e", event_name, "-o", "missing.log",
+            "-e", event_name, "-o", str(ROOT / "Vod_Names" / "missing.log"),
         ])
 
     # ------------------------------------------------------------------ #
