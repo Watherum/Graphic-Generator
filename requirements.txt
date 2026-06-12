@@ -12,5 +12,6 @@ pyinstaller-hooks-contrib==2023.9
 pywin32-ctypes==0.2.1
 beautifulsoup4
 sv-ttk
+tkcalendar
 requests==2.25.1
 urllib3==1.26.4

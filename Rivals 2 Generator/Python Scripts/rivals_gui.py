@@ -21,6 +21,12 @@ try:
 except ImportError:
     _SV_TTK_AVAILABLE = False
 
+try:
+    from tkcalendar import DateEntry as _DateEntry
+    _TKCALENDAR_AVAILABLE = True
+except ImportError:
+    _TKCALENDAR_AVAILABLE = False
+
 import json
 
 try:
@@ -164,6 +170,16 @@ def skin_label(stem: str) -> str:
     return inner.replace("_", " ")
 
 
+def _ordinal_date(date) -> str:
+    """Format a datetime.date as 'June 17th', 'July 1st', etc."""
+    import datetime as _dt
+    if not isinstance(date, _dt.date):
+        return ""
+    day = date.day
+    suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return date.strftime(f"%B {day}{suffix}")
+
+
 def load_player_db() -> tuple[list[str], dict[str, list[tuple[str, str]]]]:
     header_comments: list[str] = []
     players: dict[str, list[tuple[str, str]]] = {}
@@ -251,6 +267,7 @@ FETCH_EVENTS = [
         "default_num": "274",
         "default_link": "https://start.gg/UIFN{n}",
         "top8_file": "Immortal Fight Night Top 8 HTML.txt",
+        "tweet_link": "https://start.gg/UIFN",
     },
     {
         "label": "Straight Into The Abyss",
@@ -259,6 +276,7 @@ FETCH_EVENTS = [
         "default_num": "47",
         "default_link": "https://start.gg/SITA{n}",
         "top8_file": "Straight Into The Abyss Top 8 HTML.txt",
+        "tweet_link": "https://start.gg/SITA",
     },
 ]
 
@@ -304,6 +322,7 @@ class RivalsGUI:
         self._build_fetch_tab(notebook)
         self._build_thumbnails_tab(notebook)
         self._build_top8_tab(notebook)
+        self._build_posts_tab(notebook)
         self._build_renders_tab(notebook)
         self._build_player_db_tab(notebook)
         self._build_char_db_tab(notebook)
@@ -336,12 +355,27 @@ class RivalsGUI:
         return settings
 
     def _save_settings(self):
+        series = self._posts_series.get() if hasattr(self, "_posts_series") else ""
+        posts_cfg = dict(self._settings.get("posts_cfg", {}))
+        if series and hasattr(self, "_posts_has_next"):
+            if _TKCALENDAR_AVAILABLE and hasattr(self, "_posts_date_picker") and self._posts_date_picker:
+                next_date_save = self._posts_date_picker.get_date().isoformat()
+            else:
+                next_date_save = self._posts_next_date.get() if hasattr(self, "_posts_next_date") else ""
+            posts_cfg[series] = {
+                "next_date": next_date_save,
+                "next_link": self._posts_next_link.get(),
+                "vods": self._posts_vods.get(),
+                "has_next": self._posts_has_next.get(),
+            }
         data = {
             "last_event_nums": {
                 label: w["num"].get()
                 for label, w in self._fetch_widgets.items()
             },
             "last_thumb_series": self._thumb_series.get(),
+            "last_posts_series": series,
+            "posts_cfg": posts_cfg,
         }
         self._settings = data
         SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -402,12 +436,14 @@ class RivalsGUI:
             link_var = tk.StringVar(value=cfg["default_link"].replace("{n}", saved_num))
             ttk.Entry(row1, textvariable=link_var, width=32).pack(side="left", padx=4)
 
-            # Auto-fill link when number changes, sync to Generate tab, and persist
+            # Auto-fill link when number changes, sync to Generate/Posts tabs, and persist
             def _on_num_change(name, index, mode, nv=num_var, lv=link_var, t=cfg["default_link"], lbl=cfg["label"]):
                 n = nv.get().strip()
                 lv.set(t.replace("{n}", n))
                 if hasattr(self, "_thumb_series") and self._thumb_series.get() == lbl:
                     self._thumb_num.set(n)
+                if hasattr(self, "_posts_series") and self._posts_series.get() == lbl:
+                    self._posts_num.set(n)
                 self._save_settings()
             num_var.trace_add("write", _on_num_change)
 
@@ -1850,6 +1886,284 @@ class RivalsGUI:
         self._log(f"[Opened {url}]\n")
 
     # ------------------------------------------------------------------ #
+    #  Tab: Generate Posts                                                #
+    # ------------------------------------------------------------------ #
+    def _build_posts_tab(self, notebook: ttk.Notebook):
+        tab = ttk.Frame(notebook)
+        notebook.add(tab, text="Generate Posts")
+
+        # Scrollable container (same pattern as other tabs so resize grip works)
+        _canvas = tk.Canvas(tab, bg=_BG, highlightthickness=0)
+        _vsb = ttk.Scrollbar(tab, orient="vertical", command=_canvas.yview)
+        _canvas.configure(yscrollcommand=_vsb.set)
+        _vsb.pack(side="right", fill="y")
+        _canvas.pack(side="left", fill="both", expand=True)
+
+        inner = ttk.Frame(_canvas)
+        _inner_win = _canvas.create_window((0, 0), window=inner, anchor="nw")
+        self._setup_scrollable_canvas(_canvas, inner, _inner_win)
+
+        def _on_mousewheel(event):
+            _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        _canvas.bind("<Enter>", lambda e: _canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        _canvas.bind("<Leave>", lambda e: _canvas.unbind_all("<MouseWheel>"))
+
+        # ── Event selector ─────────────────────────────────────────────
+        lf_event = ttk.LabelFrame(inner, text="Event", padding=(8, 8))
+        lf_event.pack(fill="x", padx=10, pady=(10, 4))
+
+        row1 = ttk.Frame(lf_event)
+        row1.pack(fill="x", pady=(0, 4))
+        ttk.Label(row1, text="Series:").pack(side="left")
+        self._posts_series = tk.StringVar()
+        self._posts_series_box = ttk.Combobox(
+            row1, textvariable=self._posts_series, state="readonly", width=26,
+        )
+        self._posts_series_box.pack(side="left", padx=(4, 4))
+        ttk.Button(row1, text="↺", command=self._refresh_posts_events).pack(side="left", padx=(0, 12))
+        ttk.Label(row1, text="# / Suffix:").pack(side="left")
+        self._posts_num = tk.StringVar(value="")
+        ttk.Entry(row1, textvariable=self._posts_num, width=8).pack(side="left", padx=4)
+
+        row2 = ttk.Frame(lf_event)
+        row2.pack(fill="x")
+        ttk.Label(row2, text="Event name:").pack(side="left")
+        self._posts_event_name = tk.StringVar()
+        ttk.Entry(row2, textvariable=self._posts_event_name, width=40,
+                  state="readonly").pack(side="left", padx=4)
+
+        # ── Post settings ──────────────────────────────────────────────
+        lf_cfg = ttk.LabelFrame(inner, text="Post Settings", padding=(8, 8))
+        lf_cfg.pack(fill="x", padx=10, pady=(0, 4))
+
+        # Next event toggle + date + link on one row
+        self._posts_has_next = tk.BooleanVar(value=True)
+        self._posts_next_date = tk.StringVar()  # used only when tkcalendar unavailable
+        self._posts_next_link = tk.StringVar()
+        self._posts_vods = tk.StringVar()
+
+        row_next = ttk.Frame(lf_cfg)
+        row_next.pack(fill="x", pady=(0, 4))
+        ttk.Checkbutton(row_next, text="Next Event",
+                        variable=self._posts_has_next,
+                        command=self._update_posts_next_state).pack(side="left", padx=(0, 8))
+        ttk.Label(row_next, text="Date:").pack(side="left")
+        if _TKCALENDAR_AVAILABLE:
+            import datetime as _dt
+            self._posts_date_picker = _DateEntry(
+                row_next, width=12, justify="center",
+                showweeknumbers=False, firstweekday="sunday",
+            )
+            self._posts_date_picker.pack(side="left", padx=(4, 16))
+            self._posts_next_date_entry = self._posts_date_picker
+        else:
+            self._posts_date_picker = None
+            self._posts_next_date_entry = ttk.Entry(
+                row_next, textvariable=self._posts_next_date, width=14)
+            self._posts_next_date_entry.pack(side="left", padx=(4, 16))
+        ttk.Label(row_next, text="Link:").pack(side="left")
+        self._posts_next_link_entry = ttk.Entry(
+            row_next, textvariable=self._posts_next_link, width=34)
+        self._posts_next_link_entry.pack(side="left", padx=4)
+
+        row_vods = ttk.Frame(lf_cfg)
+        row_vods.pack(fill="x", pady=(0, 6))
+        ttk.Label(row_vods, text="Vods link:").pack(side="left")
+        ttk.Entry(row_vods, textvariable=self._posts_vods, width=56).pack(side="left", padx=4)
+
+        row_btns = ttk.Frame(lf_cfg)
+        row_btns.pack(fill="x")
+        ttk.Button(row_btns, text="Fetch Twitter",
+                   command=lambda: self._run_fetch_post("twitter")).pack(side="left", padx=(0, 6))
+        ttk.Button(row_btns, text="Fetch Discord",
+                   command=lambda: self._run_fetch_post("discord")).pack(side="left", padx=(0, 16))
+        ttk.Button(row_btns, text="Save",
+                   command=self._save_post_file).pack(side="left", padx=(0, 6))
+        ttk.Button(row_btns, text="Copy",
+                   command=self._copy_post_text).pack(side="left")
+
+        self._posts_next_link.trace_add("write", lambda *_: self._save_settings())
+        self._posts_has_next.trace_add("write", lambda *_: self._save_settings())
+        self._posts_vods.trace_add("write", lambda *_: self._save_settings())
+
+        # ── Collapsible editable text area ─────────────────────────────
+        lf_text = self._make_collapsible_section(inner, "Post Text")
+
+        txt_inner = ttk.Frame(lf_text)
+        txt_inner.pack(fill="both", expand=True)
+        txt_sb = ttk.Scrollbar(txt_inner)
+        txt_sb.pack(side="right", fill="y")
+        self._posts_text = tk.Text(
+            txt_inner, height=20,
+            bg=_BG, fg=_FG, insertbackground=_FG,
+            font=("Consolas", 10), wrap="word",
+            relief="flat", highlightthickness=0,
+            yscrollcommand=txt_sb.set,
+        )
+        self._posts_text.pack(side="left", fill="both", expand=True)
+        txt_sb.config(command=self._posts_text.yview)
+        self._add_resize_grip(lf_text, self._posts_text)
+
+        # ── Wire up series/num traces (after all StringVars exist) ─────
+        def _on_posts_series_change(*_):
+            series = self._posts_series.get()
+            widgets = self._fetch_widgets.get(series)
+            if widgets:
+                self._posts_num.set(widgets["num"].get())
+            else:
+                custom = next((e for e in self._custom_events if e.get("label") == series), None)
+                if custom:
+                    slug_tmpl = custom.get("slug_template", custom.get("slug", ""))
+                    cw = self._custom_event_widgets.get(slug_tmpl)
+                    self._posts_num.set(cw["num"].get() if cw else custom.get("current_num", ""))
+                else:
+                    saved = self._settings.get("last_event_nums", {}).get(series)
+                    if saved:
+                        self._posts_num.set(saved)
+            # Load per-series post config fields
+            saved_cfg = self._settings.get("posts_cfg", {}).get(series, {})
+            saved_date = saved_cfg.get("next_date", "")
+            if _TKCALENDAR_AVAILABLE and hasattr(self, "_posts_date_picker") and self._posts_date_picker:
+                import datetime as _dt
+                try:
+                    self._posts_date_picker.set_date(_dt.date.fromisoformat(saved_date))
+                except (ValueError, TypeError):
+                    pass
+            else:
+                self._posts_next_date.set(saved_date)
+            self._posts_next_link.set(saved_cfg.get("next_link",
+                next((c.get("tweet_link", "") for c in FETCH_EVENTS if c["label"] == series), "")))
+            self._posts_vods.set(saved_cfg.get("vods", ""))
+            self._posts_has_next.set(saved_cfg.get("has_next", True))
+            self._update_posts_next_state()
+            self._save_settings()
+
+        def _update_posts_name(*_):
+            template = self._posts_event_map.get(self._posts_series.get(), "{n}")
+            self._posts_event_name.set(template.format(n=self._posts_num.get().strip()))
+            self._posts_load_file()
+
+        self._posts_series.trace_add("write", _on_posts_series_change)
+        self._posts_series.trace_add("write", _update_posts_name)
+        self._posts_num.trace_add("write", _update_posts_name)
+
+        self._posts_active_file = None
+        self._posts_event_map = {}
+        self._refresh_posts_events()
+
+    def _update_posts_next_state(self):
+        state = "normal" if self._posts_has_next.get() else "disabled"
+        self._posts_next_date_entry.config(state=state)
+        self._posts_next_link_entry.config(state=state)
+
+    def _refresh_posts_events(self):
+        events = load_thumbnail_events()
+        self._posts_event_map = {name: tmpl for name, tmpl in events}
+        names = [name for name, _ in events]
+        for entry in self._custom_events:
+            label = entry.get("label", "")
+            name_tmpl = entry.get("name_template", "")
+            if label and name_tmpl and label not in self._posts_event_map:
+                self._posts_event_map[label] = name_tmpl
+                names.append(label)
+        self._posts_series_box["values"] = names
+        if names:
+            last = self._settings.get("last_posts_series")
+            if last in names:
+                self._posts_series.set(last)
+            elif self._posts_series.get() not in names:
+                self._posts_series.set(names[0])
+
+    def _get_posts_cfg(self):
+        """Return the FETCH_EVENTS config for the selected series, or None."""
+        series = self._posts_series.get()
+        return next((c for c in FETCH_EVENTS if c["label"] == series), None)
+
+    def _posts_load_file(self):
+        """Load the most recently generated post file for the current event into the text area."""
+        event_name = self._posts_event_name.get().strip()
+        if not event_name:
+            return
+        folder = ROOT / "Results_Posts"
+        # Prefer whichever file exists (twitter first, then discord)
+        for platform in ("twitter", "discord"):
+            path = folder / f"{event_name} {platform.capitalize()} Post.txt"
+            if path.exists():
+                self._posts_active_file = path
+                self._posts_text.delete("1.0", "end")
+                self._posts_text.insert("1.0", path.read_text(encoding="utf-8").rstrip())
+                return
+        self._posts_active_file = None
+        self._posts_text.delete("1.0", "end")
+
+    def _run_fetch_post(self, platform: str):
+        series = self._posts_series.get()
+        n = self._posts_num.get().strip()
+        event_name = self._posts_event_name.get().strip()
+        if not event_name:
+            self._log("[Error: no event selected]\n")
+            return
+
+        cfg = self._get_posts_cfg()
+        if cfg:
+            slug = cfg["slug_template"].format(n=n)
+        else:
+            custom = next((e for e in self._custom_events if e.get("label") == series), None)
+            if not custom:
+                self._log("[Error: no slug found for this event series]\n")
+                return
+            slug = custom["slug_template"].replace("{n}", n)
+
+        out_path = ROOT / "Results_Posts" / f"{event_name} {platform.capitalize()} Post.txt"
+        self._posts_active_file = out_path
+
+        cmd = [
+            PYTHON, str(ROOT / "Python Scripts" / "fetch_results_tweet.py"),
+            slug, "--name", event_name, "--platform", platform, "--out", str(out_path),
+        ]
+        if self._posts_has_next.get():
+            next_link = self._posts_next_link.get().strip()
+            if next_link:
+                cmd += ["--link", next_link]
+            if _TKCALENDAR_AVAILABLE and self._posts_date_picker:
+                next_date = _ordinal_date(self._posts_date_picker.get_date())
+            else:
+                next_date = self._posts_next_date.get().strip()
+            if next_date:
+                cmd += ["--next", next_date]
+        vods = self._posts_vods.get().strip()
+        if vods:
+            cmd += ["--vods", vods]
+
+        def _on_done():
+            if out_path.exists():
+                self._posts_text.delete("1.0", "end")
+                self._posts_text.insert("1.0", out_path.read_text(encoding="utf-8").rstrip())
+
+        self._run(cmd, on_done=_on_done)
+
+    def _save_post_file(self):
+        if not self._posts_active_file:
+            event_name = self._posts_event_name.get().strip()
+            if not event_name:
+                self._log("[Error: no event selected]\n")
+                return
+            self._posts_active_file = ROOT / "Results_Posts" / f"{event_name} Post.txt"
+        self._posts_active_file.parent.mkdir(parents=True, exist_ok=True)
+        content = self._posts_text.get("1.0", "end-1c")
+        self._posts_active_file.write_text(content + "\n", encoding="utf-8")
+        self._log(f"[Saved {self._posts_active_file.name}]\n")
+
+    def _copy_post_text(self):
+        content = self._posts_text.get("1.0", "end-1c")
+        if content.strip():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(content)
+            self._log("[Copied post to clipboard]\n")
+        else:
+            self._log("[Nothing to copy — fetch a post first]\n")
+
+    # ------------------------------------------------------------------ #
     #  Tab: Character Renders                                             #
     # ------------------------------------------------------------------ #
     def _build_renders_tab(self, notebook: ttk.Notebook):
@@ -2413,7 +2727,7 @@ class RivalsGUI:
                 proc = subprocess.Popen(
                     cmd, cwd=str(ROOT),
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1,
+                    text=True, encoding="utf-8", errors="replace", bufsize=1,
                 )
                 for line in proc.stdout:
                     self._log(line)
@@ -2435,7 +2749,7 @@ class RivalsGUI:
                     proc = subprocess.Popen(
                         cmd, cwd=str(ROOT),
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, bufsize=1,
+                        text=True, encoding="utf-8", errors="replace", bufsize=1,
                     )
                     for line in proc.stdout:
                         self._log(line)

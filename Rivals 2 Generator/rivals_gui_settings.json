@@ -3,5 +3,30 @@
     "Immortal Fight Night": "279",
     "Straight Into The Abyss": "53"
   },
-  "last_thumb_series": "Straight Into The Abyss"
+  "last_thumb_series": "Straight Into The Abyss",
+  "last_posts_series": "Straight Into The Abyss",
+  "posts_cfg": {
+    "Straight Into The Abyss": {
+      "next_date": "2026-06-12",
+      "next_link": "https://start.gg/SITA",
+      "vods": "https://www.youtube.com/playlist?list=PLMzPAhEZVwSMwfiuyrTygEOaKe88weSyR",
+      "has_next": true
+    },
+    "Immortal Fight Night": {
+      "next_date": "",
+      "next_link": "https://start.gg/UIFN",
+      "vods": ""
+    },
+    "Super Fusion": {
+      "next_date": "",
+      "next_link": "",
+      "vods": "",
+      "has_next": false
+    },
+    "Last Stock": {
+      "next_date": "",
+      "next_link": "",
+      "vods": ""
+    }
+  }
 }
