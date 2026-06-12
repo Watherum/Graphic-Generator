@@ -554,6 +554,7 @@ class RivalsGUI:
         self._run(cmd)
 
     def _fetch_saved_custom_top8(self, entry: dict, num: str, link: str):
+        import shutil
         slug = entry["slug_template"].replace("{n}", num)
         name = entry["name_template"].replace("{n}", num)
         top8_file = entry.get("top8_file", f"{entry['label']} Top 8 HTML.txt")
@@ -564,7 +565,13 @@ class RivalsGUI:
                slug, "--name", name, "--out", str(out_path)]
         if link:
             cmd += ["--link", link]
-        self._run(cmd, on_done=lambda: self._select_top8_event(entry["label"], num))
+        def _on_done():
+            try:
+                shutil.copy2(out_path, ROOT / "Top_8_Texts" / "Default Top 8 HTML.txt")
+            except Exception:
+                pass
+            self._select_top8_event(entry["label"], num)
+        self._run(cmd, on_done=_on_done)
 
     def _schedule_custom_save(self):
         if hasattr(self, "_custom_save_job") and self._custom_save_job:
@@ -648,13 +655,20 @@ class RivalsGUI:
         ])
 
     def _fetch_top8(self, cfg: dict, n: str, link: str):
+        import shutil
         name = cfg["name_template"].format(n=n)
         slug = cfg["slug_template"].format(n=n)
-        out  = str(ROOT / "Top_8_Texts" / cfg["top8_file"])
+        out  = ROOT / "Top_8_Texts" / cfg["top8_file"]
+        def _on_done():
+            try:
+                shutil.copy2(out, ROOT / "Top_8_Texts" / "Default Top 8 HTML.txt")
+            except Exception:
+                pass
+            self._select_top8_event(cfg["label"], n)
         self._run([
             PYTHON, str(ROOT / "Python_Scripts" / "fetch_startgg_top8.py"),
-            slug, "--name", name, "--link", link, "--out", out,
-        ], on_done=lambda: self._select_top8_event(cfg["label"], n))
+            slug, "--name", name, "--link", link, "--out", str(out),
+        ], on_done=_on_done)
 
     def _select_top8_event(self, label: str, num: str):
         """Point the Top 8 tab at the given event and reload its text editor.
@@ -752,7 +766,7 @@ class RivalsGUI:
         self._refresh_thumbnail_events()
 
         # Thumbnail Config section
-        lf_cfg = self._make_collapsible_section(inner, "Thumbnail Config")
+        lf_cfg = self._make_collapsible_section(inner, "Thumbnail Config", collapsed=True)
 
         self._cfg_series_label = ttk.Label(lf_cfg, text="", style="Muted.TLabel")
         self._cfg_series_label.pack(anchor="w", pady=(0, 6))
@@ -1611,7 +1625,7 @@ class RivalsGUI:
         txt_xsb = ttk.Scrollbar(txt_inner, orient="horizontal")
         txt_xsb.pack(side="bottom", fill="x")
         self._top8_text = tk.Text(
-            txt_inner, height=14,
+            txt_inner, height=22,
             bg=_BG, fg=_FG, insertbackground=_FG,
             font=("Consolas", 9), wrap="none",
             relief="flat", highlightthickness=0,
@@ -1658,7 +1672,11 @@ class RivalsGUI:
             style="Muted.TLabel", wraplength=620, justify="left",
         ).pack(anchor="w", pady=(0, 6))
 
-        html_inner = ttk.Frame(lf_html)
+        self._build_default_top8_config(lf_html)
+
+        lf_html_src = self._make_collapsible_section(lf_html, "HTML Source", collapsed=True)
+
+        html_inner = ttk.Frame(lf_html_src)
         html_inner.pack(fill="both", expand=True)
         html_ysb = ttk.Scrollbar(html_inner)
         html_ysb.pack(side="right", fill="y")
@@ -1675,11 +1693,11 @@ class RivalsGUI:
         self._top8_html_text.pack(side="left", fill="both", expand=True)
         html_ysb.config(command=self._top8_html_text.yview)
         html_xsb.config(command=self._top8_html_text.xview)
-        self._add_resize_grip(lf_html, self._top8_html_text)
+        self._add_resize_grip(lf_html_src, self._top8_html_text)
         self._setup_html_highlighting(self._top8_html_text)
+        ttk.Button(lf_html_src, text="Save", command=self._save_top8_html).pack(anchor="w", pady=(6, 0))
 
-        self._top8_html_file_var.trace_add("write", lambda *_: self._load_top8_html())
-        ttk.Button(lf_html, text="Save", command=self._save_top8_html).pack(anchor="w", pady=(6, 0))
+        self._top8_html_file_var.trace_add("write", lambda *_: self._schedule_load_top8_html())
 
         # Populate series dropdown using the same event map as thumbnails tab
         self._refresh_top8_series()
@@ -1692,6 +1710,8 @@ class RivalsGUI:
         self._refresh_top8_files()
 
     def _get_top8_text_path(self) -> "Path":
+        if getattr(self, "_top8_html_file_var", None) and self._top8_html_file_var.get() == "Default Top 8.html":
+            return ROOT / "Top_8_Texts" / "Default Top 8 HTML.txt"
         series = self._top8_series.get()
         for cfg in FETCH_EVENTS:
             if cfg["label"] == series:
@@ -1742,7 +1762,9 @@ class RivalsGUI:
 
     def _refresh_top8_html_files(self):
         results_dir = ROOT / "Top_8_Results"
-        files = sorted(f.name for f in results_dir.glob("*.html")) if results_dir.exists() else []
+        series = self._top8_series.get()
+        all_files = sorted(f.name for f in results_dir.glob("*.html")) if results_dir.exists() else []
+        files = [f for f in all_files if f.startswith(series) or f == "Default Top 8.html"]
         self._top8_html_file_box["values"] = files
         if files:
             self._top8_html_warning.config(text="")
@@ -1759,17 +1781,29 @@ class RivalsGUI:
                      "Create one by copying an existing template."
             )
 
+    def _schedule_load_top8_html(self):
+        if hasattr(self, "_top8_html_load_job") and self._top8_html_load_job:
+            self.root.after_cancel(self._top8_html_load_job)
+        self._top8_html_load_job = self.root.after(80, self._load_top8_html)
+
     def _load_top8_html(self):
+        self._top8_html_load_job = None
         name = self._top8_html_file_var.get()
         if not name:
             return
         path = ROOT / "Top_8_Results" / name
         if not path.exists():
             return
+
         self._top8_html_text.config(state="normal")
         self._top8_html_text.delete("1.0", "end")
         self._top8_html_text.insert("end", path.read_text(encoding="utf-8"))
-        self._highlight_html(self._top8_html_text)
+        self._schedule_highlight(self._top8_html_text, self._highlight_html)
+
+        if name != getattr(self, "_d8_last_html_file", None):
+            self._d8_last_html_file = name
+            self._load_default_top8_config()
+            self._load_top8_text()
 
     def _save_top8_html(self):
         name = self._top8_html_file_var.get()
@@ -1779,6 +1813,211 @@ class RivalsGUI:
         path = ROOT / "Top_8_Results" / name
         path.write_text(self._top8_html_text.get("1.0", "end-1c"), encoding="utf-8")
         self._log(f"[Saved {name}]\n")
+
+    # ------------------------------------------------------------------ #
+    #  Default Top 8 layout config form                                    #
+    # ------------------------------------------------------------------ #
+    def _build_default_top8_config(self, parent):
+        import re as _re
+        frame = self._make_collapsible_section(parent, "Layout Config", collapsed=True)
+
+        self._d8_label_color   = tk.StringVar()
+        self._d8_sponsor_color = tk.StringVar()
+        self._d8_event = [
+            {"top": tk.StringVar(), "left": tk.StringVar(), "size": tk.StringVar(), "color": tk.StringVar()}
+            if i == 0 else
+            {"top": tk.StringVar(), "left": tk.StringVar(), "size": tk.StringVar()}
+            for i in range(4)
+        ]
+        self._d8_renders  = [{"top": tk.StringVar(), "left": tk.StringVar(), "height": tk.StringVar()} for _ in range(8)]
+        self._d8_nums     = [{"top": tk.StringVar(), "left": tk.StringVar(), "size": tk.StringVar()} for _ in range(8)]
+        self._d8_names    = [{"top": tk.StringVar(), "left": tk.StringVar(), "size": tk.StringVar()} for _ in range(8)]
+        self._d8_sponsors = [{"top": tk.StringVar(), "left": tk.StringVar(), "size": tk.StringVar()} for _ in range(8)]
+
+        def _color_btn(p, var):
+            btn = tk.Button(p, text="  ", width=2, relief="flat", cursor="hand2", bg=_BG3)
+            def _pick():
+                from tkinter import colorchooser
+                c = colorchooser.askcolor(color=var.get() or None, parent=p)
+                if c and c[1]:
+                    var.set(c[1])
+            def _sync(*_):
+                try:
+                    btn.config(bg=var.get())
+                except Exception:
+                    pass
+            btn.config(command=_pick)
+            var.trace_add("write", _sync)
+            return btn
+
+        def _entry(p, var, w=6):
+            return ttk.Entry(p, textvariable=var, width=w)
+
+        # Colors
+        lf_col = ttk.LabelFrame(frame, text="Colors", padding=(6, 4))
+        lf_col.pack(fill="x", pady=(0, 6))
+        row = ttk.Frame(lf_col)
+        row.pack(anchor="w")
+        ttk.Label(row, text="Label:").pack(side="left")
+        _entry(row, self._d8_label_color, 8).pack(side="left", padx=(4, 2))
+        _color_btn(row, self._d8_label_color).pack(side="left", padx=(0, 20))
+        ttk.Label(row, text="Sponsor:").pack(side="left")
+        _entry(row, self._d8_sponsor_color, 8).pack(side="left", padx=(4, 2))
+        _color_btn(row, self._d8_sponsor_color).pack(side="left")
+
+        # Event Info
+        lf_evt = ttk.LabelFrame(frame, text="Event Info", padding=(6, 4))
+        lf_evt.pack(fill="x", pady=(0, 6))
+        hdr = ttk.Frame(lf_evt)
+        hdr.pack(fill="x")
+        for ci, (txt, w) in enumerate([("", 9), ("Top %", 6), ("Left %", 6), ("Size px", 7), ("Color", 9)]):
+            ttk.Label(hdr, text=txt, style="Muted.TLabel", width=w).grid(row=0, column=ci, padx=2, sticky="w")
+        for i, lbl in enumerate(["Name", "Link", "Entrants", "Date"]):
+            r = ttk.Frame(lf_evt)
+            r.pack(fill="x", pady=1)
+            f = self._d8_event[i]
+            ttk.Label(r, text=lbl + ":", width=9).grid(row=0, column=0, padx=2, sticky="w")
+            _entry(r, f["top"]).grid(row=0, column=1, padx=2)
+            _entry(r, f["left"]).grid(row=0, column=2, padx=2)
+            _entry(r, f["size"], 7).grid(row=0, column=3, padx=2)
+            if "color" in f:
+                _entry(r, f["color"], 9).grid(row=0, column=4, padx=2)
+                _color_btn(r, f["color"]).grid(row=0, column=5, padx=2)
+
+        def _slot_section(title, vars_list, col3_lbl, key3):
+            lf = ttk.LabelFrame(frame, text=title, padding=(6, 4))
+            lf.pack(fill="x", pady=(0, 6))
+            hdr = ttk.Frame(lf)
+            hdr.pack(fill="x")
+            for ci, (txt, w) in enumerate([("Place", 5), ("Top %", 6), ("Left %", 6), (col3_lbl, 7)]):
+                ttk.Label(hdr, text=txt, style="Muted.TLabel", width=w).grid(row=0, column=ci, padx=3, sticky="w")
+            for i, f in enumerate(vars_list):
+                r = ttk.Frame(lf)
+                r.pack(fill="x", pady=1)
+                ttk.Label(r, text=str(i + 1), width=5).grid(row=0, column=0, padx=3, sticky="w")
+                _entry(r, f["top"]).grid(row=0, column=1, padx=3)
+                _entry(r, f["left"]).grid(row=0, column=2, padx=3)
+                _entry(r, f[key3], 7).grid(row=0, column=3, padx=3)
+
+        _slot_section("Character Renders", self._d8_renders,  "Height %", "height")
+        _slot_section("Placement Numbers", self._d8_nums,     "Size px",  "size")
+        _slot_section("Player Names",      self._d8_names,    "Size px",  "size")
+        _slot_section("Sponsors",          self._d8_sponsors, "Size px",  "size")
+
+        ttk.Button(frame, text="Apply Config", command=self._apply_default_top8_config,
+                   style="Accent.TButton").pack(anchor="w", pady=(6, 0))
+
+        self._d8_config_frame = frame
+
+    def _load_default_top8_config(self):
+        import re
+        html = self._top8_html_text.get("1.0", "end-1c")
+
+        def get_style(elem_id):
+            m = re.search(rf'id="{re.escape(elem_id)}"[^>]*?style="([^"]*)"', html)
+            return m.group(1) if m else ""
+
+        def num_prop(style, name):
+            m = re.search(rf'{re.escape(name)}:\s*([\d.]+)', style)
+            return m.group(1) if m else ""
+
+        def color_prop(style):
+            m = re.search(r'color:\s*(#[0-9a-fA-F]+)', style)
+            return m.group(1) if m else ""
+
+        m = re.search(r'#canvas \.label \{[^}]*color:\s*(#[0-9a-fA-F]+)', html, re.DOTALL)
+        self._d8_label_color.set(m.group(1) if m else "#ffffff")
+        m = re.search(r'#canvas \.sponsor \{[^}]*color:\s*(#[0-9a-fA-F]+)', html, re.DOTALL)
+        self._d8_sponsor_color.set(m.group(1) if m else "#FFD700")
+
+        for i, eid in enumerate(["event-name", "event-link", "event-entrants", "event-date"]):
+            s = get_style(eid)
+            f = self._d8_event[i]
+            f["top"].set(num_prop(s, "top"))
+            f["left"].set(num_prop(s, "left"))
+            f["size"].set(num_prop(s, "font-size"))
+            if "color" in f:
+                f["color"].set(color_prop(s) or "#ffffff")
+
+        for i in range(8):
+            n = i + 1
+            s = get_style(f"place-{n}-render")
+            self._d8_renders[i]["top"].set(num_prop(s, "top"))
+            self._d8_renders[i]["left"].set(num_prop(s, "left"))
+            self._d8_renders[i]["height"].set(num_prop(s, "height"))
+
+            s = get_style(f"place-{n}-num")
+            self._d8_nums[i]["top"].set(num_prop(s, "top"))
+            self._d8_nums[i]["left"].set(num_prop(s, "left"))
+            self._d8_nums[i]["size"].set(num_prop(s, "font-size"))
+
+            s = get_style(f"place-{n}-name")
+            self._d8_names[i]["top"].set(num_prop(s, "top"))
+            self._d8_names[i]["left"].set(num_prop(s, "left"))
+            self._d8_names[i]["size"].set(num_prop(s, "font-size"))
+
+            s = get_style(f"place-{n}-sponsor")
+            self._d8_sponsors[i]["top"].set(num_prop(s, "top"))
+            self._d8_sponsors[i]["left"].set(num_prop(s, "left"))
+            self._d8_sponsors[i]["size"].set(num_prop(s, "font-size"))
+
+    def _apply_default_top8_config(self):
+        import re
+        html = self._top8_html_text.get("1.0", "end-1c")
+
+        def patch_style(h, elem_id, props):
+            def repl(m):
+                style = m.group(2)
+                for prop, val, unit in props:
+                    if unit == "color":
+                        style = re.sub(rf'(color:\s*)#[0-9a-fA-F]+', rf'\g<1>{val}', style)
+                    elif unit in ("%", "px"):
+                        style = re.sub(rf'({re.escape(prop)}:\s*)[\d.]+({re.escape(unit)})', rf'\g<1>{val}\2', style)
+                return m.group(1) + style + '"'
+            return re.sub(rf'(id="{re.escape(elem_id)}"[^>]*?style=")([^"]*)"', repl, h)
+
+        label_color   = self._d8_label_color.get()
+        sponsor_color = self._d8_sponsor_color.get()
+        html = re.sub(r'(#canvas \.label \{[^}]*color:\s*)#[0-9a-fA-F]+',
+                      rf'\g<1>{label_color}', html, flags=re.DOTALL)
+        html = re.sub(r'(#canvas \.sponsor \{[^}]*color:\s*)#[0-9a-fA-F]+',
+                      rf'\g<1>{sponsor_color}', html, flags=re.DOTALL)
+
+        for i, eid in enumerate(["event-name", "event-link", "event-entrants", "event-date"]):
+            f = self._d8_event[i]
+            props = [("top", f["top"].get(), "%"), ("left", f["left"].get(), "%"),
+                     ("font-size", f["size"].get(), "px")]
+            if "color" in f:
+                props.append(("color", f["color"].get(), "color"))
+            html = patch_style(html, eid, props)
+
+        for i in range(8):
+            n = i + 1
+            f = self._d8_renders[i]
+            html = patch_style(html, f"place-{n}-render", [
+                ("top", f["top"].get(), "%"), ("left", f["left"].get(), "%"),
+                ("height", f["height"].get(), "%"),
+            ])
+            f = self._d8_nums[i]
+            html = patch_style(html, f"place-{n}-num", [
+                ("top", f["top"].get(), "%"), ("left", f["left"].get(), "%"),
+                ("font-size", f["size"].get(), "px"),
+            ])
+            f = self._d8_names[i]
+            html = patch_style(html, f"place-{n}-name", [
+                ("top", f["top"].get(), "%"), ("left", f["left"].get(), "%"),
+                ("font-size", f["size"].get(), "px"),
+            ])
+            f = self._d8_sponsors[i]
+            html = patch_style(html, f"place-{n}-sponsor", [
+                ("top", f["top"].get(), "%"), ("left", f["left"].get(), "%"),
+                ("font-size", f["size"].get(), "px"),
+            ])
+
+        self._top8_html_text.delete("1.0", "end")
+        self._top8_html_text.insert("end", html)
+        self._highlight_html(self._top8_html_text)
+        self._log("[Default config applied — click Save to write to disk]\n")
 
     # ------------------------------------------------------------------ #
     #  Syntax highlighting for the Top 8 editors                          #
