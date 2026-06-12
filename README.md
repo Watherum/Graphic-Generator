@@ -1,29 +1,31 @@
-﻿# Graphic Generation
-This project is based off the work of my good friend CR_Jetstream!
+# Graphic Generator
 
-This project is now mainly focused on generating thumbnails and top 8 graphics for Rivals 2.
-Ultimate Support is still maintained but not the main focus. Some Melee support exists as well.
+Batch image generator for Rivals 2 esports — creates YouTube thumbnails, Top 8 bracket graphics, and results posts for weekly events. Originally based on work by CR_Jetstream; now primarily focused on Rivals 2. Ultimate and Melee generators are also included.
+
+## Requirements
+
+- **Python 3.12** — install from [python.org](https://www.python.org/downloads/) if not already present
+- Run `requirments_install.cmd` once to install Python dependencies
 
 ## Updating
 
-Run `update.cmd` from the repo root to pull the latest code from GitHub.
-
-It will automatically stash any local changes (generated outputs, VOD name files, etc.), pull the latest source, then restore your local changes. Requires [Git for Windows](https://git-scm.com/download/win) to be installed.
-
-## Notes
-Currently these scripts only run with Python 3.9. An exe is included.
+Run `update.cmd` from the repo root to pull the latest code from GitHub. It will stash any local changes (generated outputs, VOD name files, etc.), pull the latest source, then restore your local changes. Requires [Git for Windows](https://git-scm.com/download/win).
 
 ---
 
 ## GUI (Recommended)
 
-Launch the GUI from the generator folder:
+Double-click the VBS launcher for the game you want:
 
 ```
-Rivals_2_Generator\Launch_Rivals_GUI.cmd
+Rivals_2_Generator\Launch_Rivals_GUI.vbs
+Ultimate_Generator\Launch_Ultimate_GUI.vbs
+Melee_Generator\Launch_Melee_GUI.vbs
 ```
 
-The GUI has five tabs:
+The Rivals 2 GUI has seven tabs:
+
+---
 
 ### 1. Fetch From Start.gg
 
@@ -32,99 +34,170 @@ Pull match data and top 8 standings directly from start.gg.
 **Preset Tournaments** (Immortal Fight Night, Straight Into The Abyss)
 - Enter the event number and top 8 link
 - Click **Fetch VOD Names** or **Fetch Top 8**
-- Event numbers are saved automatically between sessions
+- Event numbers and links are saved automatically between sessions
 
 **Saved Custom Tournaments**
 - Custom tournaments you've previously added appear here as their own sections
 - Each shows an Event # field, Top 8 Link field, and **Fetch VOD Names** / **Fetch Top 8** / **Delete** buttons
 - Event numbers and top 8 links are saved automatically between sessions
-- Top 8 output files are created automatically if they don't exist yet
 
 **Add New Custom Tournament**
-- Enter a slug (use `{n}` as a placeholder for the event number, e.g. `tournament/{event}-{n}/event/rivals-2-singles`)
-- Enter a series name (e.g. `Immortal Fight Night`)
+- Enter a slug template (use `{n}` as a placeholder for the event number, e.g. `tournament/my-event-{n}/event/rivals-2-singles`)
+- Enter a series name (e.g. `My Weekly`)
 - Enter a starting event number
 - Click **Save & Fetch VOD Names** — the tournament is saved and will appear in Saved Custom Tournaments on future boots
+
+---
 
 ### 2. Generate Thumbnails
 
 **Event selector**
-- Choose a series from the dropdown (includes both preset and saved custom tournaments)
+- Choose a series from the dropdown (includes preset and saved custom tournaments)
 - Enter the event number/suffix — the full event name is built automatically
-- Custom events sync their number from the Saved Custom Tournaments section
 
 **Thumbnail Config** *(collapsible)*
 
-Configure how thumbnails are rendered for the selected series. Settings are saved per-series to `rivals_event_configs.json` and applied automatically at generation time on top of any hardcoded defaults.
+Configure rendering for the selected series. Settings are saved per-series to `rivals_event_configs.json` and applied at generation time on top of any hardcoded defaults.
 
 | Field | Description |
 |---|---|
-| Background / Foreground | Browse to select an image — it is copied to `Resources/Overlays/` automatically |
+| Background / Foreground | Browse to select an image — copied to `Resources/Overlays/` automatically |
 | Font | Choose from fonts in `Resources/Fonts/` |
 | Character Glow | Toggle glow effect on character renders |
 | One Character Per Player | Limit each player slot to a single character |
 | Char Scale | Resize multipliers for 1-char, 2-char, and 3-char layouts |
-| Character Positions | x/y center-shift values (normalized −1 to 1) for each layout (1-char, 2-char, 3-char) |
-| Font Sizes | Player 1, Player 2, Event, Round, and text rotation Angle° |
-| Font Color | Hex entry + color picker — applies to all text elements |
+| Character Positions | x/y center-shift values (normalized −1 to 1) per layout |
+| Font Sizes | Player 1, Player 2, Event, Round, and rotation Angle° |
+| Font Color | Hex entry + color picker |
 | Save Config / Clear Config | Write or remove the override for the current series |
-
-Configs for unknown/custom events are merged on top of the default property set, so only the fields you set are overridden.
 
 **VOD Names** *(collapsible)*
 
 View and edit match data files without leaving the GUI.
 
-- Dropdown shows only files matching the currently selected series, sorted by event number (highest first)
+- Dropdown shows only files matching the selected series, sorted by event number (highest first)
 - Click ↺ to rescan the folder
-- Edit lines directly in the text area
-- Click **Save** to write changes back to disk
+- Edit lines directly in the text area and click **Save**
 
-Click **Generate Thumbnails** to run the thumbnail pipeline for the current event name.
+Click **Generate Thumbnails** to run the pipeline. Output goes to `Youtube_Thumbnails/{Event Name}/`. Missing player/character lookups are logged to `Vod_Names/missing.log`.
 
-### 3. Character Renders
+---
 
-Download character render images from dragdown.wiki or copy them into the Full Renders folder.
+### 3. Generate Top 8s
 
-### 4. Player Database
+View and edit the Top 8 data file for the selected event, then generate the HTML bracket graphic.
+
+- Select a series and event number — the matching `Top_8_Texts/` file is loaded automatically
+- Edit placements, sponsors, and characters directly in the text editor (syntax highlighted)
+- Click **Save** to write changes, then **Generate Top 8** to produce the graphic
+- A local preview opens in your browser automatically
+
+Top 8 data files live in `Top_8_Texts/` and use this format:
+
+```
+Event name:	Straight Into The Abyss 1
+Event link:	https://start.gg/SITA1
+Event entrants:	32 Competitors
+Event date:	1/1/2025
+
+1,Viviana,,Galvan
+2,SapphireGD,AoC,Zetterburn
+3,Turnap,BLZE,Ranno
+...
+```
+
+---
+
+### 4. Generate Posts
+
+Fetch and edit results posts for Twitter/X or Discord from start.gg results.
+
+- Select a series and event number
+- Toggle **Next Event** to include the next event's date and link in the post
+- Choose **Twitter** or **Discord** platform and click **Fetch Post**
+- The generated post text appears in the editable text area
+- Click **Save** to write changes back to `Results_Posts/{Event Name} {Platform} Post.txt`
+
+---
+
+### 5. Character Renders
+
+Download and organize character render images.
+
+- **Download & Copy** — downloads renders from dragdown.wiki then copies them to the Full Renders folder
+- **Download Renders** — download only
+- **Copy to Full Renders** — copy already-downloaded renders to `Resources/Character_Renders/Rivals_2_Full_Renders/`
+
+---
+
+### 6. Player Database
 
 Add, edit, and search player entries and their character mains/alts.
 
-- Players are listed **alphabetically**
-- Use the search box to filter
+- Players listed alphabetically; use the search box to filter
 - Click a player to load their data into the editor
-- Add character rows with skin previews (requires Pillow)
+- Add character rows with skin number and live skin previews (requires Pillow)
 - Click **Save Player Database** to persist changes
 
-### 5. Character Database
+---
 
-Manage the list of recognised character names used during thumbnail generation.
+### 7. Character Database
+
+Manage the list of recognised character names used during thumbnail generation. Add entries inline — changes take effect on the next thumbnail run.
 
 ---
 
 ## CLI Usage
 
 ```bash
-# Generate thumbnails
-python "Rivals_2_Generator\Python_Scripts\generate_rivals_thumbnail.py" -e "Immortal Fight Night 278" -o missing.log
+# Generate thumbnails (run from inside Rivals_2_Generator/)
+python "Python_Scripts\generate_rivals_thumbnail.py" -e "Straight Into The Abyss 41"
+
+# Log missing player/character entries to a file
+python "Python_Scripts\generate_rivals_thumbnail.py" -e "Straight Into The Abyss 41" -o "Vod_Names\missing.log"
 
 # Fetch match data from start.gg
-python "Rivals_2_Generator\Python_Scripts\fetch_sets.py" tournament/ultimate-immortal-fight-night-278/event/rivals-2-singles --name "Immortal Fight Night 278" --out "Vod_Names\Immortal Fight Night 278 Names.txt"
+python "Python_Scripts\fetch_sets.py" tournament/straight-into-the-abyss-41/event/rivals-2-singles --name "Straight Into The Abyss 41" --out "Vod_Names\Straight Into The Abyss 41 Names.txt"
 
 # Fetch top 8 bracket data
-python "Rivals_2_Generator\Python_Scripts\fetch_startgg_top8.py" tournament/ultimate-immortal-fight-night-278/event/rivals-2-singles --name "Immortal Fight Night 278" --link "https://start.gg/UIFN278" --out "Top_8_Texts\Immortal Fight Night Top 8 HTML.txt"
+python "Python_Scripts\fetch_startgg_top8.py" tournament/straight-into-the-abyss-41/event/rivals-2-singles --name "Straight Into The Abyss 41" --out "Top_8_Texts\Straight Into The Abyss Top 8 HTML.txt"
 ```
+
+CLI flags for `generate_rivals_thumbnail.py`:
+- `-e, --event` — Event name string (required; must match a series in `populate_rivals_globals.py`)
+- `-o, --output_file` — File to log missing player/character entries (omit to print to console)
 
 ---
 
-## Adding a New Tournament Series (CLI / Manual)
+## Adding a New Tournament Series
 
-1. Add a `setGlobalsMyEvent(weekly_event)` function in `populate_rivals_globals.py`
-2. Add a dispatcher branch in `setGlobals()` in `generate_rivals_thumbnail.py`
+### Via GUI (no Python required)
+
+1. Add the tournament in the **Fetch From Start.gg** tab → Add New Custom Tournament
+2. Configure overlays, fonts, and positions in the **Generate Thumbnails** tab → Thumbnail Config
+3. Settings are saved to `rivals_event_configs.json` automatically
+
+### Via Code
+
+1. Add a config function in `Python_Scripts/populate_rivals_globals.py`:
+
+```python
+def setGlobalsMyEvent(weekly_event):
+    props = {}
+    props["event_name"] = weekly_event
+    props["background_file"] = "Resources/Overlays/MyEvent Background.png"
+    # ... populate remaining properties
+    return props
+```
+
+2. Add a dispatcher branch in the `setGlobals()` function in the same file:
+
+```python
+if weekly_event.startswith("My Event"):
+    return setGlobalsMyEvent(weekly_event)
+```
+
 3. Place overlay images in `Resources/Overlays/`
-4. Create match data in `Vod_Names/{Event Name} Names.txt`
-
-Alternatively, use the GUI **Thumbnail Config** tab to configure overlays, fonts, and character positions for any series without touching Python — settings are saved to `rivals_event_configs.json` and applied automatically.
 
 ---
 
@@ -133,20 +206,41 @@ Alternatively, use the GUI **Thumbnail Config** tab to configure overlays, fonts
 | Task | How |
 |---|---|
 | Add new character skins | Place PNGs in `Resources/Character_Renders/Rivals_2_Full_Renders/` |
-| Add new characters | Add name to `Resources/Character_database.csv` |
-| Add/update players | Use GUI → Player Database tab |
+| Add new characters | GUI → Character Database tab, or edit `Resources/Character_database.csv` directly |
+| Add/update players | GUI → Player Database tab |
 | Add overlay images | Place in `Resources/Overlays/` or use Browse in Thumbnail Config |
-
-## Generating Top 8 Graphics
-
-Requires a foreground and background image in `Resources/Top8_Graphics/`.
-
-Use **Fetch Top 8** in the GUI (preset or saved custom tournament) to pull standings from start.gg into `Top_8_Texts/`. The HTML-based top 8 graphic is updated automatically.
+| Sync renders from dragdown.wiki | GUI → Character Renders tab → Download & Copy |
 
 ---
 
-# Original Readme
-A project for quickly creating YouTube Thumbnails and Top 8 Graphics for Nintendo fighting game Super Smash Brothers Ultimate.
-The purpose of this project is to provide an efficient way to create these images. This is especially useful for weekly events or big events with lots of videos.
+## File Layout
 
-This project has been a side project and has no current commitment to long term support.
+```
+Rivals_2_Generator/
+├── Launch_Rivals_GUI.vbs          # GUI entry point
+├── rivals_gui_settings.json       # Persisted GUI state (event numbers, etc.)
+├── rivals_custom_events.json      # User-added custom tournament series
+├── rivals_event_configs.json      # Per-series thumbnail config overrides
+│
+├── Python_Scripts/
+│   ├── rivals_gui.py              # Tkinter GUI
+│   ├── generate_rivals_thumbnail.py  # Thumbnail pipeline
+│   ├── populate_rivals_globals.py    # Per-series config & dispatcher
+│   ├── fetch_sets.py              # start.gg match data fetcher
+│   ├── fetch_startgg_top8.py      # start.gg top 8 fetcher
+│   ├── fetch_results_tweet.py     # Results post generator
+│   └── helper.py                  # PIL utilities
+│
+├── Resources/
+│   ├── Character_database.csv     # Character name list
+│   ├── Player_database.csv        # Player → character mains + alts
+│   ├── Character_Renders/         # Character PNGs
+│   ├── Overlays/                  # Background/foreground templates
+│   └── Fonts/                     # TTF/OTF fonts
+│
+├── Vod_Names/                     # Input: match data .txt files
+├── Top_8_Texts/                   # Input/output: top 8 data files
+├── Youtube_Thumbnails/            # Output: generated thumbnails
+├── Top_8_Results/                 # Output: generated bracket graphics
+└── Results_Posts/                 # Output: generated results posts
+```

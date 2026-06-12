@@ -1,4 +1,4 @@
-﻿Set oShell = CreateObject("WScript.Shell")
+Set oShell = CreateObject("WScript.Shell")
 Set oFSO   = CreateObject("Scripting.FileSystemObject")
 sDir = oFSO.GetParentFolderName(WScript.ScriptFullName)
 oShell.CurrentDirectory = sDir
