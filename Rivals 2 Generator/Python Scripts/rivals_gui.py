@@ -341,6 +341,7 @@ class RivalsGUI:
             tab = notebook.tab(notebook.select(), "text")
             if tab == "Player Database":
                 self._player_listbox.focus_set()
+            self.console.config(height=40 if tab == "Character Renders" else 10)
 
         notebook.bind("<<NotebookTabChanged>>", _on_tab_changed)
 

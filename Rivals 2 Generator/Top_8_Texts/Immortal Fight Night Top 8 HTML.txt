@@ -2,18 +2,16 @@
 # All information is tab deliminated
 
 #Graphic Information
-Event name:	Immortal Fight Night 279
-Event link: https://start.gg/UIFN279
-Event entrants:	8 Competitors
-Event date:	6/8/2026
+Event name:	Immortal Fight Night 278
+Event link: https://start.gg/UIFN278
+Event entrants:	6 Competitors
+Event date:	6/1/2026
 
 # Placements
 # place, name, sponsor, characters
-1,ZeeBee,NE,Kragg
-2,Average Alex,C2F,Slade
-3,Bowler,,Clairen
-4,ybm,RATS,Wrastor
-5,Watherum,C2F,Ranno
-5,BGunn,Shmoney,Olympia
-7,Sourkroutt,,Clairen
-7,Sh-Awe,,Galvan
+1,Average Alex,C2F,Slade
+2,ybm,RATS,Wrastor
+3,Grunk,C2F,Zetterburn
+4,Watherum,C2F,Ranno
+5,Sourkroutt,,Clairen
+5,Sh-Awe,,Galvan

@@ -33,8 +33,9 @@ def create_rotated_text(angle, text, font):
     :return:
     """
     # get the size of the text
-    x_text, _ = font.getsize(text)
-    _, y_text = font.getsize("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz[]@_")
+    x_text = font.getbbox(text)[2] - font.getbbox(text)[0]
+    _bb = font.getbbox("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz[]@_")
+    y_text = _bb[3] - _bb[1]
     # want the tallest possible word
 
     # build a transparency mask large enough to hold the text
@@ -77,8 +78,9 @@ def create_rotated_text_back(angle, text, font, color):
     :return:
     """
     # get the size of the text
-    x_text, _ = font.getsize(text)
-    _, y_text = font.getsize("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz[]@_")
+    x_text = font.getbbox(text)[2] - font.getbbox(text)[0]
+    _bb = font.getbbox("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz[]@_")
+    y_text = _bb[3] - _bb[1]
     # want the tallest possible word
 
     # Create a new image with the size of the text

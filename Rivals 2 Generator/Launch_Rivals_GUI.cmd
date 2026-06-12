@@ -1,3 +1,3 @@
 ﻿@echo off
 cd /d "%~dp0"
-py -3.9 "Python Scripts\rivals_gui.py"
+py -3.12 "Python Scripts\rivals_gui.py"
