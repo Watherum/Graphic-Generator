@@ -1189,7 +1189,7 @@ class RivalsGUI:
             return
         self._run([
             PYTHON, str(ROOT / "Python_Scripts" / "generate_rivals_thumbnail.py"),
-            "-e", event_name, "-o", "missing.log",
+            "-e", event_name, "-o", str(ROOT / "Vod_Names" / "missing.log"),
         ], on_done=self._refresh_open_folder_btn)
 
     def _refresh_open_folder_btn(self):
