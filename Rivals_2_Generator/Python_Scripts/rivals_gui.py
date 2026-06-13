@@ -692,7 +692,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Rivals_2_Generator (Qt)")
+        self.setWindowTitle("Rivals 2 Generator Made by Watherum")
         for folder in _OUTPUT_FOLDERS:
             (ROOT / folder).mkdir(exist_ok=True)
 
@@ -728,6 +728,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
         splitter.setSizes([720, 200])
+        self._splitter = splitter
 
         self.log_signal.connect(self._append_console)
 
@@ -747,7 +748,17 @@ class RivalsWindow(QtWidgets.QMainWindow):
         for combo in self.findChildren(QtWidgets.QComboBox):
             combo.view().setItemDelegate(self._combo_delegate)
 
+        # The Character Renders tab is sparse but produces lots of download
+        # output, so grow the console to fill the empty space while it's active.
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
         self.resize(1280, 900)
+
+    def _on_tab_changed(self, idx: int):
+        if self.tabs.tabText(idx) == "Character Renders":
+            self._splitter.setSizes([180, 720])
+        else:
+            self._splitter.setSizes([720, 200])
 
     # ------------------------------------------------------------------ #
     #  Settings persistence                                              #
@@ -2231,16 +2242,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
         outer.setContentsMargins(12, 12, 12, 12)
         box = QtWidgets.QGroupBox("Manage Renders")
         v = QtWidgets.QVBoxLayout(box)
-        v.addWidget(_muted("Download render images from dragdown.wiki or copy them to the Full Renders folder."))
-        for label, cmd in [
-            ("Download & Copy", self._download_and_copy),
-            ("Download Renders", self._download_renders),
-            ("Copy to Full Renders", self._copy_renders),
-        ]:
-            b = QtWidgets.QPushButton(label)
-            b.clicked.connect(cmd)
-            b.setMaximumWidth(220)
-            v.addWidget(b)
+        v.addWidget(_muted("Download render images from dragdown.wiki and copy them into the Full Renders folder."))
+        b = QtWidgets.QPushButton("Download & Copy")
+        b.clicked.connect(self._download_and_copy)
+        b.setMaximumWidth(220)
+        v.addWidget(b)
         outer.addWidget(box)
         outer.addStretch(1)
         self.tabs.addTab(tab, "Character Renders")

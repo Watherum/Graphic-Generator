@@ -144,7 +144,7 @@ def format_set(set_node: dict, tournament_name: str, game_name: str) -> Optional
         .replace("Semi-Final", "Semi")
     )
 
-    prefix = " ".join(p for p in [tournament_name, round_text] if p)
+    prefix = " - ".join(p for p in [tournament_name, round_text] if p)
     line = f"{prefix} - {matchup}"
     if game_name:
         line += f" - {game_name}"
@@ -200,7 +200,7 @@ def main():
     nodes.sort(key=sort_key)
 
     game_name_out = (game_name
-        .replace("Rivals of Aether II", "Rivals 2")
+        .replace("Rivals of Aether II", "RoA II")
         .replace("Super Smash Bros. Ultimate", "SSBU")
         .replace("Super Smash Bros. Melee", "SSBM")
     )

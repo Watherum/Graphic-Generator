@@ -1,16 +1,16 @@
 # Sample VOD names file for Rivals 2 - Straight Into The Abyss format
-# Format: {Event Name} {Round} - {Player1} ({Char1,Char2}) Vs {Player2} ({Char1}) - Rivals 2
+# Format: {Event Name} - {Round} - {Player1} ({Char1,Char2}) Vs {Player2} ({Char1}) - RoA II
 
-Straight Into The Abyss 1 Grand Finals - Viviana (Galvan) Vs SapphireGD (Zetterburn) - Rivals 2
-Straight Into The Abyss 1 Lsrs Final - SapphireGD (Zetterburn) Vs Turnap (Ranno) - Rivals 2
-Straight Into The Abyss 1 Lsrs Semi - Turnap (Ranno) Vs Bowler (Clairen) - Rivals 2
-Straight Into The Abyss 1 Lsrs Qrts - Bowler (Clairen) Vs NatySolo (Orcane) - Rivals 2
-Straight Into The Abyss 1 Lsrs Qrts - Turnap (Ranno) Vs Markrealth (Etalus) - Rivals 2
-Straight Into The Abyss 1 Wnrs Final - Viviana (Galvan) Vs Turnap (Ranno) - Rivals 2
-Straight Into The Abyss 1 Wnrs Semi - Viviana (La Reina, Galvan) Vs Bowler (Clairen) - Rivals 2
-Straight Into The Abyss 1 Wnrs Semi - Turnap (Ranno) Vs SapphireGD (Zetterburn) - Rivals 2
-Straight Into The Abyss 1 Wnrs Qrts - Bowler (Clairen) Vs Drewsephix (Orcane) - Rivals 2
-Straight Into The Abyss 1 Wnrs Qrts - SapphireGD (Zetterburn) Vs Suture (Ranno) - Rivals 2
-Straight Into The Abyss 1 Wnrs Rd 2 - Viviana (La Reina) Vs Faxmachine (Forsburn) - Rivals 2
-Straight Into The Abyss 1 Wnrs Rd 2 - Markrealth (Etalus) Vs Dr. Grin (Wrastor) - Rivals 2
-Straight Into The Abyss 1 Wnrs Rd 1 - Mask (Forsburn) Vs Spypie (Fleet) - Rivals 2
+Straight Into The Abyss 1 - Grand Finals - Viviana (Galvan) Vs SapphireGD (Zetterburn) - RoA II
+Straight Into The Abyss 1 - Lsrs Final - SapphireGD (Zetterburn) Vs Turnap (Ranno) - RoA II
+Straight Into The Abyss 1 - Lsrs Semi - Turnap (Ranno) Vs Bowler (Clairen) - RoA II
+Straight Into The Abyss 1 - Lsrs Qrts - Bowler (Clairen) Vs NatySolo (Orcane) - RoA II
+Straight Into The Abyss 1 - Lsrs Qrts - Turnap (Ranno) Vs Markrealth (Etalus) - RoA II
+Straight Into The Abyss 1 - Wnrs Final - Viviana (Galvan) Vs Turnap (Ranno) - RoA II
+Straight Into The Abyss 1 - Wnrs Semi - Viviana (La Reina, Galvan) Vs Bowler (Clairen) - RoA II
+Straight Into The Abyss 1 - Wnrs Semi - Turnap (Ranno) Vs SapphireGD (Zetterburn) - RoA II
+Straight Into The Abyss 1 - Wnrs Qrts - Bowler (Clairen) Vs Drewsephix (Orcane) - RoA II
+Straight Into The Abyss 1 - Wnrs Qrts - SapphireGD (Zetterburn) Vs Suture (Ranno) - RoA II
+Straight Into The Abyss 1 - Wnrs Rd 2 - Viviana (La Reina) Vs Faxmachine (Forsburn) - RoA II
+Straight Into The Abyss 1 - Wnrs Rd 2 - Markrealth (Etalus) Vs Dr. Grin (Wrastor) - RoA II
+Straight Into The Abyss 1 - Wnrs Rd 1 - Mask (Forsburn) Vs Spypie (Fleet) - RoA II

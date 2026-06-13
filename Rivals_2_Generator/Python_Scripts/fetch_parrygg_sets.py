@@ -192,7 +192,7 @@ def format_match(match_ctx: dict, tournament_name: str, game_name: str) -> Optio
         players.append(f"{player_name} ({char_str})")
 
     matchup = f"{players[0]} Vs {players[1]}"
-    prefix = " ".join(p for p in [tournament_name, round_label] if p)
+    prefix = " - ".join(p for p in [tournament_name, round_label] if p)
     line = f"{prefix} - {matchup}"
     if game_name:
         line += f" - {game_name}"
@@ -255,7 +255,7 @@ def main():
     event_id = event.get("id") or ""
     game_name = (event.get("game") or {}).get("name", "")
     game_name_out = (game_name
-        .replace("Rivals of Aether II", "Rivals 2")
+        .replace("Rivals of Aether II", "RoA II")
         .replace("Super Smash Bros. Ultimate", "SSBU")
         .replace("Super Smash Bros. Melee", "SSBM")
     )

@@ -106,7 +106,7 @@ def readMatchLines(filename, event_name=None):
         if line.startswith('#'):
             # Comment case
             continue
-        elif ' - ' in line and '(' in line and ')' in line and '- Rivals 2' in line:
+        elif ' - ' in line and '(' in line and ')' in line and ('- RoA II' in line or '- Rivals 2' in line):
             if 'Vs' in line or 'vs' in line:  # 'vs' is flexible
                 # Add line if it starts with event name (if event name not given, add by default)
                 if event_name is None:
@@ -153,7 +153,13 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
         # grab whole title
         a_title = a_line.strip()
         # trim off the event
-        a_line = a_line[r_start:]
+        a_line = a_line[r_start:].lstrip()
+        # New format separates the event from the round with ' - '
+        # ("{event} - {round} - ..."); old format used a space
+        # ("{event} {round} - ..."). Drop a leading separator so the round
+        # parses the same way for both.
+        if a_line.startswith('- '):
+            a_line = a_line[2:]
         # split based off '-' to grab round information
         a_line = a_line.split(' - ', 1)
         a_round = a_line[0].strip()
