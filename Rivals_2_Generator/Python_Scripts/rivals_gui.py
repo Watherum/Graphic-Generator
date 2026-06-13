@@ -1,48 +1,44 @@
-﻿#!/usr/bin/env python3
-"""GUI launcher for the Rivals_2_Generator toolset."""
-import tkinter as tk
-from tkinter import ttk
+#!/usr/bin/env python3
+"""PySide6 GUI for the Rivals_2_Generator toolset.
+
+Launched via ``Launch_Rivals_GUI.vbs``. This replaced the original Tkinter GUI
+(removed once the Qt version reached parity and proved more performant).
+
+Fetch/generate work runs the sibling scripts via ``QProcess``; the player/
+character CSV databases and the settings / custom-events / event-configs JSON
+files are read and written directly.
+"""
+from __future__ import annotations
+
+import functools
+import http.server
+import json
 import os
-import subprocess
-import threading
-import sys
 import re
+import shutil
+import socket
+import socketserver
+import sys
+import threading
+import webbrowser
+import datetime as _dt
 from pathlib import Path
 
-try:
-    from PIL import Image, ImageTk
-    _PIL_AVAILABLE = True
-except ImportError:
-    _PIL_AVAILABLE = False
+from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6.QtCore import Qt, QProcess, Signal
 
-try:
-    import sv_ttk
-    _SV_TTK_AVAILABLE = True
-except ImportError:
-    _SV_TTK_AVAILABLE = False
-
-try:
-    from tkcalendar import DateEntry as _DateEntry
-    _TKCALENDAR_AVAILABLE = True
-except ImportError:
-    _TKCALENDAR_AVAILABLE = False
-
-import json
-
-try:
-    import populate_rivals_globals as _pg
-except ImportError:
-    _pg = None
-
+# --------------------------------------------------------------------------- #
+#  Paths & constants                                                          #
+# --------------------------------------------------------------------------- #
 ROOT = Path(__file__).parent.parent
 PYTHON = sys.executable
 THUMBNAIL_SCRIPT = ROOT / "Python_Scripts" / "generate_rivals_thumbnail.py"
 RENDERS_DIR = ROOT / "Resources" / "Character_Renders" / "Rivals_2_Full_Renders"
 PLAYER_DB_PATH = ROOT / "Resources" / "Player_database.csv"
-CHAR_DB_PATH   = ROOT / "Resources" / "Character_database.csv"
-SETTINGS_PATH        = ROOT / "rivals_gui_settings.json"
-CUSTOM_EVENTS_PATH   = ROOT / "rivals_custom_events.json"
-EVENT_CONFIGS_PATH   = ROOT / "rivals_event_configs.json"
+CHAR_DB_PATH = ROOT / "Resources" / "Character_database.csv"
+SETTINGS_PATH = ROOT / "rivals_gui_settings.json"
+CUSTOM_EVENTS_PATH = ROOT / "rivals_custom_events.json"
+EVENT_CONFIGS_PATH = ROOT / "rivals_event_configs.json"
 
 CHARACTERS = [
     "Absa", "Armando", "Clairen", "Etalus", "Fleet", "Forsburn",
@@ -58,97 +54,59 @@ CHAR_ABBREVS = {
     "Zetterburn": "Zet",
 }
 
-# sv_ttk dark palette (used for classic tk widgets that sv_ttk doesn't reach)
-_BG    = "#1c1c1c"
-_BG2   = "#2b2b2b"
-_BG3   = "#3b3b3b"
-_FG    = "#ffffff"
+# Dark palette
+_BG = "#1c1c1c"
+_BG2 = "#2b2b2b"
+_BG3 = "#3b3b3b"
+_FG = "#ffffff"
 _MUTED = "#999999"
-_SEL   = "#0078d4"
-_GREEN = "#1e7a1e"
+_SEL = "#0078d4"
+_HILITE = "#2d8cff"  # brighter blue for hover/selection highlights
 
 # Syntax highlighting palette (VS Code "Dark+" inspired)
-_SYN_COMMENT = "#6a9955"   # green   – comment lines / <!-- -->
-_SYN_KEY     = "#9cdcfe"   # l. blue – field keys / HTML attribute names
-_SYN_STRING  = "#ce9178"   # orange  – quoted strings
-_SYN_TAG     = "#569cd6"   # blue    – HTML tag names
-_SYN_NUMBER  = "#b5cea8"   # l. green – placement row numbers
+_SYN_COMMENT = "#6a9955"
+_SYN_KEY = "#9cdcfe"
+_SYN_STRING = "#ce9178"
+_SYN_TAG = "#569cd6"
+_SYN_NUMBER = "#b5cea8"
+
+# Events that support start.gg fetching
+FETCH_EVENTS = [
+    {
+        "label": "Immortal Fight Night",
+        "slug_template": "tournament/ultimate-immortal-fight-night-{n}/event/rivals-2-singles",
+        "name_template": "Immortal Fight Night {n}",
+        "default_num": "274",
+        "default_link": "https://start.gg/UIFN{n}",
+        "top8_file": "Immortal Fight Night Top 8 HTML.txt",
+        "tweet_link": "https://start.gg/UIFN",
+    },
+    {
+        "label": "Straight Into The Abyss",
+        "slug_template": "tournament/straight-into-the-abyss-{n}/event/rivals-2-singles",
+        "name_template": "Straight Into The Abyss {n}",
+        "default_num": "47",
+        "default_link": "https://start.gg/SITA{n}",
+        "top8_file": "Straight Into The Abyss Top 8 HTML.txt",
+        "tweet_link": "https://start.gg/SITA",
+    },
+]
+
+_OUTPUT_FOLDERS = ["Vod_Names", "Youtube_Thumbnails", "Top_8_Texts", "Results_Posts"]
+
+try:
+    import populate_rivals_globals as _pg
+except ImportError:
+    _pg = None
 
 
-def _add_placeholder(entry: ttk.Entry, text: str, muted: str = _MUTED, normal: str = _FG) -> None:
-    """Show grey hint text in an Entry when it is empty and unfocused."""
-    def _show():
-        if not entry.get():
-            entry.config(foreground=muted)
-            entry.insert(0, text)
-
-    def _hide(_=None):
-        if entry.get() == text:
-            entry.delete(0, "end")
-            entry.config(foreground=normal)
-
-    def _on_focus_out(_=None):
-        _show()
-
-    entry.bind("<FocusIn>", _hide)
-    entry.bind("<FocusOut>", _on_focus_out)
-    _show()
-
-
-def _apply_theme(root: tk.Tk) -> None:
-    if _SV_TTK_AVAILABLE:
-        sv_ttk.set_theme("dark")
-    else:
-        style = ttk.Style(root)
-        style.theme_use("clam")
-        style.configure(".", background=_BG2, foreground=_FG)
-
-    # sv_ttk only themes ttk widgets; patch classic tk widgets to match
-    for key, val in {
-        "*Background":              _BG2,
-        "*Foreground":              _FG,
-        "*activeBackground":        _BG3,
-        "*activeForeground":        _FG,
-        "*selectBackground":        _SEL,
-        "*selectForeground":        _FG,
-        "*disabledForeground":      _MUTED,
-        "*highlightBackground":     _BG2,
-        "*highlightColor":          _SEL,
-        "*highlightThickness":      "0",
-        "*Font":                    ("Segoe UI", 9),
-        "*Button.Relief":           "flat",
-        "*Button.BorderWidth":      "0",
-        "*Button.Cursor":           "hand2",
-        "*Button.PadX":             "10",
-        "*Button.PadY":             "5",
-        "*Listbox.Background":      _BG3,
-        "*Listbox.Relief":          "flat",
-        "*Listbox.BorderWidth":     "0",
-        "*Entry.Background":        _BG3,
-        "*Entry.Foreground":        _FG,
-        "*Entry.insertBackground":  _FG,
-        "*Entry.Relief":            "flat",
-        "*Entry.BorderWidth":       "1",
-    }.items():
-        root.option_add(key, val, priority=80)
-
-    root.configure(bg=_BG, highlightthickness=0, bd=0)
-
-    style = ttk.Style()
-    style.configure("Muted.TLabel", foreground=_MUTED)
-    style.configure("TLabelframe", borderwidth=0, relief="flat")
-    style.configure("TLabelframe.Label", foreground=_MUTED)
-    style.configure("TNotebook", borderwidth=0)
-    style.configure("TNotebook.Tab", focuscolor="")
-
-
+# --------------------------------------------------------------------------- #
+#  Pure helpers (database parsing, skin/render lookups, dispatcher reflection) #
+# --------------------------------------------------------------------------- #
 def get_skins_for_char(char_name: str) -> list[str]:
     if not RENDERS_DIR.exists():
         return []
     if char_name == "Random":
-        # Random has no CSP renders; it uses placeholder files named
-        # T_Ran_<Color>.png (no _CSP suffix). These share Ranno's "Ran" prefix,
-        # so exclude the _CSP files to keep the two rosters from mixing.
         return sorted(
             f.stem for f in RENDERS_DIR.glob("T_Ran_*.png")
             if not f.stem.endswith("_CSP")
@@ -160,7 +118,7 @@ def get_skins_for_char(char_name: str) -> list[str]:
 
 
 def skin_label(stem: str) -> str:
-    """T_Abs_Default_Blue_CSP → Default Blue"""
+    """T_Abs_Default_Blue_CSP -> Default Blue"""
     parts = stem.split("_", 2)
     if len(parts) < 3:
         return stem
@@ -171,8 +129,6 @@ def skin_label(stem: str) -> str:
 
 
 def _ordinal_date(date) -> str:
-    """Format a datetime.date as 'June 17th', 'July 1st', etc."""
-    import datetime as _dt
     if not isinstance(date, _dt.date):
         return ""
     day = date.day
@@ -228,7 +184,6 @@ def save_player_db(header_comments: list[str], players: dict[str, list[tuple[str
 
 
 def load_char_db() -> tuple[list[str], list[str]]:
-    """Returns (header_lines, character_names)."""
     headers: list[str] = []
     chars: list[str] = []
     try:
@@ -258,925 +213,1159 @@ def load_thumbnail_events() -> list[tuple[str, str]]:
     except Exception:
         return []
 
-# Events that support start.gg fetching
-FETCH_EVENTS = [
-    {
-        "label": "Immortal Fight Night",
-        "slug_template": "tournament/ultimate-immortal-fight-night-{n}/event/rivals-2-singles",
-        "name_template": "Immortal Fight Night {n}",
-        "default_num": "274",
-        "default_link": "https://start.gg/UIFN{n}",
-        "top8_file": "Immortal Fight Night Top 8 HTML.txt",
-        "tweet_link": "https://start.gg/UIFN",
-    },
-    {
-        "label": "Straight Into The Abyss",
-        "slug_template": "tournament/straight-into-the-abyss-{n}/event/rivals-2-singles",
-        "name_template": "Straight Into The Abyss {n}",
-        "default_num": "47",
-        "default_link": "https://start.gg/SITA{n}",
-        "top8_file": "Straight Into The Abyss Top 8 HTML.txt",
-        "tweet_link": "https://start.gg/SITA",
-    },
-]
+
+def _base_event_props(series: str) -> dict:
+    if _pg is None:
+        return {}
+    try:
+        if series.startswith('Straight Into The Abyss'):
+            return _pg.setGlobalsStraightIntoTheAbyss(series)
+        elif series.startswith('Immortal Fight Night'):
+            return _pg.setGlobalsIFN(series)
+        elif series.startswith('Super Fusion'):
+            return _pg.setGlobalsSuperFusion(series)
+        elif series.startswith('Twist of Fate'):
+            return _pg.setGlobalsTwistOfFate(series)
+        elif series.startswith('Clip It'):
+            return _pg.setGlobalsClipIt(series)
+        elif series.startswith('CR Clash'):
+            return _pg.setGlobalsCRClash(series)
+        elif series.startswith('CR Arcadian'):
+            return _pg.setGlobalsCRArcadian(series)
+        elif series.startswith('Quarantainment'):
+            return _pg.setGlobalsQuarantainment(series)
+        else:
+            return _pg.set_default_properties(series)
+    except Exception:
+        return {}
 
 
+# --------------------------------------------------------------------------- #
+#  Dark stylesheet                                                             #
+# --------------------------------------------------------------------------- #
+def _make_check_icon() -> str:
+    """Render a white checkmark PNG to a temp file for the checked-checkbox
+    indicator and return a QSS-safe (forward-slash) path. Generated at import
+    time — QImage painting needs no QApplication, so this is safe here."""
+    import tempfile
+    path = Path(tempfile.gettempdir()) / "rivals_qt_check.png"
+    img = QtGui.QImage(16, 16, QtGui.QImage.Format.Format_ARGB32)
+    img.fill(Qt.GlobalColor.transparent)
+    p = QtGui.QPainter(img)
+    p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+    pen = QtGui.QPen(QtGui.QColor("#ffffff"), 2.2)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    p.drawPolyline([QtCore.QPointF(3.5, 8.5), QtCore.QPointF(6.5, 11.5),
+                    QtCore.QPointF(12.5, 4.5)])
+    p.end()
+    try:
+        img.save(str(path), "PNG")
+    except Exception:
+        return ""
+    return path.as_posix()
 
-_OUTPUT_FOLDERS = [
-    "Vod_Names",
-    "Youtube_Thumbnails",
-    "Top_8_Texts",
-    "Results_Posts",
-]
+
+_CHECK_URL = _make_check_icon()
+
+STYLESHEET = f"""
+* {{ outline: 0; }}
+QWidget {{
+    background-color: {_BG2};
+    color: {_FG};
+    font-family: "Segoe UI";
+    font-size: 10pt;
+}}
+QMainWindow, QScrollArea, QScrollArea > QWidget > QWidget {{ background-color: {_BG}; }}
+QScrollArea {{ border: 0; }}
+QLabel {{ background: transparent; }}
+QLabel#muted {{ color: {_MUTED}; }}
+QLabel#warning {{ color: #E08000; }}
+QLabel#heading {{ font-weight: 600; font-size: 11pt; }}
+
+QGroupBox {{
+    border: 1px solid {_BG3};
+    border-radius: 6px;
+    margin-top: 10px;
+    padding: 8px 8px 8px 8px;
+    background-color: {_BG2};
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: {_MUTED};
+}}
+
+QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDateEdit {{
+    background-color: {_BG3};
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 3px 5px;
+    selection-background-color: {_SEL};
+}}
+QLineEdit:focus, QPlainTextEdit:focus, QDateEdit:focus {{ border: 1px solid {_SEL}; }}
+QPlainTextEdit, QTextEdit {{ font-family: "Consolas"; font-size: 10pt; }}
+
+QComboBox {{
+    background-color: {_BG3};
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 3px 5px;
+}}
+QComboBox:focus {{ border: 1px solid {_SEL}; }}
+QComboBox QAbstractItemView {{
+    background-color: {_BG3};
+    border: 1px solid #4a4a4a;
+    outline: 0;
+    selection-background-color: {_HILITE};
+    selection-color: #ffffff;
+}}
+
+QPushButton {{
+    background-color: {_BG3};
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 5px 12px;
+}}
+QPushButton:hover {{ background-color: #474747; }}
+QPushButton:pressed {{ background-color: #525252; }}
+QPushButton:disabled {{ color: {_MUTED}; background-color: #303030; }}
+QPushButton#accent {{
+    background-color: {_SEL};
+    border: 1px solid {_SEL};
+    font-weight: 600;
+}}
+QPushButton#accent:hover {{ background-color: #1a86dd; }}
+QPushButton#tool {{ padding: 4px 6px; }}
+
+QTabWidget::pane {{ border: 0; background-color: {_BG}; }}
+QTabBar::tab {{
+    background-color: {_BG2};
+    color: {_MUTED};
+    padding: 8px 16px;
+    border: 0;
+}}
+QTabBar::tab:selected {{ color: {_FG}; border-bottom: 2px solid {_SEL}; }}
+QTabBar::tab:hover {{ color: {_FG}; }}
+
+QListWidget, QTreeWidget, QTableView, QListView {{
+    background-color: {_BG3};
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    selection-background-color: {_SEL};
+    selection-color: {_FG};
+}}
+QHeaderView::section {{
+    background-color: {_BG2};
+    color: {_MUTED};
+    border: 0;
+    border-bottom: 1px solid #4a4a4a;
+    padding: 4px;
+}}
+QTableView {{ gridline-color: #353535; }}
+
+QCheckBox {{ background: transparent; spacing: 7px; }}
+QCheckBox::indicator {{
+    width: 16px;
+    height: 16px;
+    border: 1px solid #7a7a7a;
+    border-radius: 3px;
+    background-color: {_BG3};
+}}
+QCheckBox::indicator:hover {{ border-color: {_HILITE}; }}
+QCheckBox::indicator:checked {{
+    background-color: {_HILITE};
+    border-color: {_HILITE};
+    image: url({_CHECK_URL});
+}}
+QCheckBox::indicator:disabled {{ border-color: #4a4a4a; background-color: #303030; }}
+QScrollBar:vertical {{ background: {_BG}; width: 12px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: #4a4a4a; border-radius: 6px; min-height: 24px; }}
+QScrollBar::handle:vertical:hover {{ background: #5a5a5a; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar:horizontal {{ background: {_BG}; height: 12px; margin: 0; }}
+QScrollBar::handle:horizontal {{ background: #4a4a4a; border-radius: 6px; min-width: 24px; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+
+QSplitter::handle {{ background: {_BG2}; }}
+QToolButton {{ background: transparent; border: 0; padding: 2px; }}
+QToolButton:hover {{ color: {_SEL}; }}
+"""
 
 
-class RivalsGUI:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.root.title("Rivals_2_Generator")
-        self.root.resizable(True, True)
+# --------------------------------------------------------------------------- #
+#  Reusable widgets                                                            #
+# --------------------------------------------------------------------------- #
+class CollapsibleBox(QtWidgets.QWidget):
+    """A header button that shows/hides a content area below it."""
+
+    def __init__(self, title: str, collapsed: bool = False, parent=None):
+        super().__init__(parent)
+        self._toggle = QtWidgets.QToolButton(self)
+        self._toggle.setText(title)
+        self._toggle.setCheckable(True)
+        self._toggle.setChecked(not collapsed)
+        self._toggle.setStyleSheet("QToolButton { font-weight: 600; color: %s; }" % _MUTED)
+        self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._toggle.setArrowType(Qt.ArrowType.DownArrow if not collapsed else Qt.ArrowType.RightArrow)
+        self._toggle.clicked.connect(self._on_toggle)
+
+        self.content = QtWidgets.QWidget(self)
+        self.content_layout = QtWidgets.QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(4, 6, 0, 6)
+        self.content.setVisible(not collapsed)
+
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        lay.addWidget(self._toggle)
+        lay.addWidget(self.content)
+
+    def _on_toggle(self, checked: bool):
+        self.content.setVisible(checked)
+        self._toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+
+    def addWidget(self, w):
+        self.content_layout.addWidget(w)
+
+    def addLayout(self, lay):
+        self.content_layout.addLayout(lay)
+
+
+class ColorField(QtWidgets.QWidget):
+    """A hex line edit + colour swatch button that stay in sync."""
+
+    def __init__(self, default: str = "#FFFFFF", width: int = 90, parent=None):
+        super().__init__(parent)
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(3)
+        self.edit = QtWidgets.QLineEdit(default)
+        self.edit.setFixedWidth(width)
+        self.swatch = QtWidgets.QPushButton()
+        self.swatch.setFixedWidth(24)
+        self.swatch.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay.addWidget(self.edit)
+        lay.addWidget(self.swatch)
+        self.edit.textChanged.connect(self._sync)
+        self.swatch.clicked.connect(self._pick)
+        self._sync()
+
+    def _sync(self):
+        c = self.edit.text().strip()
+        if QtGui.QColor.isValidColorName(c) if hasattr(QtGui.QColor, "isValidColorName") else QtGui.QColor(c).isValid():
+            self.swatch.setStyleSheet(f"background-color: {c}; border: 1px solid #4a4a4a;")
+
+    def _pick(self):
+        cur = QtGui.QColor(self.edit.text().strip() or "#FFFFFF")
+        col = QtWidgets.QColorDialog.getColor(cur, self, "Pick color")
+        if col.isValid():
+            self.edit.setText(col.name())
+
+    def value(self) -> str:
+        return self.edit.text().strip()
+
+    def setValue(self, v: str):
+        self.edit.setText(v)
+
+
+def _hline(text: str = "", w: int = 70) -> QtWidgets.QLineEdit:
+    e = QtWidgets.QLineEdit(text)
+    e.setFixedWidth(w)
+    return e
+
+
+def _muted(text: str) -> QtWidgets.QLabel:
+    lbl = QtWidgets.QLabel(text)
+    lbl.setObjectName("muted")
+    lbl.setWordWrap(True)
+    return lbl
+
+
+# --------------------------------------------------------------------------- #
+#  VOD list model (virtualized — handles large match lists smoothly)          #
+# --------------------------------------------------------------------------- #
+class VodModel(QtCore.QAbstractTableModel):
+    HEADERS = ["", "Match line"]
+
+    def __init__(self):
+        super().__init__()
+        self._rows: list[dict] = []  # {"checked": bool, "text": str}
+
+    # -- Qt model API --
+    def rowCount(self, parent=QtCore.QModelIndex()):
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent=QtCore.QModelIndex()):
+        return 2
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row = self._rows[index.row()]
+        col = index.column()
+        if col == 1 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+            return row["text"]
+        if col == 0 and role == Qt.ItemDataRole.CheckStateRole:
+            return Qt.CheckState.Checked if row["checked"] else Qt.CheckState.Unchecked
+        if role == Qt.ItemDataRole.BackgroundRole and row["checked"]:
+            return QtGui.QColor("#1e3a5f")
+        return None
+
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
+        if not index.isValid():
+            return False
+        row = self._rows[index.row()]
+        if index.column() == 1 and role == Qt.ItemDataRole.EditRole:
+            row["text"] = value
+            self.dataChanged.emit(index, index)
+            return True
+        if index.column() == 0 and role == Qt.ItemDataRole.CheckStateRole:
+            row["checked"] = (Qt.CheckState(value) == Qt.CheckState.Checked)
+            left = self.index(index.row(), 0)
+            right = self.index(index.row(), 1)
+            self.dataChanged.emit(left, right)
+            return True
+        return False
+
+    def flags(self, index):
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        f = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if index.column() == 0:
+            f |= Qt.ItemFlag.ItemIsUserCheckable
+        else:
+            f |= Qt.ItemFlag.ItemIsEditable
+        return f
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            return self.HEADERS[section]
+        return None
+
+    # -- convenience --
+    def load(self, lines: list[str]):
+        self.beginResetModel()
+        self._rows = [{"checked": False, "text": ln} for ln in lines]
+        self.endResetModel()
+
+    def add_blank(self) -> int:
+        pos = len(self._rows)
+        self.beginInsertRows(QtCore.QModelIndex(), pos, pos)
+        self._rows.append({"checked": False, "text": ""})
+        self.endInsertRows()
+        return pos
+
+    def set_all(self, checked: bool):
+        if not self._rows:
+            return
+        for r in self._rows:
+            r["checked"] = checked
+        self.dataChanged.emit(self.index(0, 0),
+                              self.index(len(self._rows) - 1, 1))
+
+    def delete_marked(self) -> int:
+        keep = [r for r in self._rows if not r["checked"]]
+        removed = len(self._rows) - len(keep)
+        if removed:
+            self.beginResetModel()
+            self._rows = keep
+            self.endResetModel()
+        return removed
+
+    def delete_row(self, r: int):
+        if 0 <= r < len(self._rows):
+            self.beginRemoveRows(QtCore.QModelIndex(), r, r)
+            self._rows.pop(r)
+            self.endRemoveRows()
+
+    def any_checked(self) -> bool:
+        return any(r["checked"] for r in self._rows)
+
+    def text_at(self, r: int) -> str:
+        return self._rows[r]["text"] if 0 <= r < len(self._rows) else ""
+
+    def to_text(self) -> str:
+        return "\n".join(r["text"] for r in self._rows)
+
+
+# --------------------------------------------------------------------------- #
+#  Syntax highlighters (per-block, so large docs stay responsive)             #
+# --------------------------------------------------------------------------- #
+def _fmt(color: str) -> QtGui.QTextCharFormat:
+    f = QtGui.QTextCharFormat()
+    f.setForeground(QtGui.QColor(color))
+    return f
+
+
+class Top8DataHighlighter(QtGui.QSyntaxHighlighter):
+    KEY = _fmt(_SYN_KEY)
+    NUMBER = _fmt(_SYN_NUMBER)
+    COMMENT = _fmt(_SYN_COMMENT)
+
+    def highlightBlock(self, text: str):
+        if re.match(r"^[ \t]*#", text):
+            self.setFormat(0, len(text), self.COMMENT)
+            return
+        m = re.match(r"^[^#\n][^:\t\n]*:", text)
+        if m:
+            self.setFormat(m.start(), m.end() - m.start(), self.KEY)
+        m = re.match(r"^\d+", text)
+        if m:
+            self.setFormat(0, m.end(), self.NUMBER)
+
+
+class HtmlHighlighter(QtGui.QSyntaxHighlighter):
+    TAG = _fmt(_SYN_TAG)
+    ATTR = _fmt(_SYN_KEY)
+    STRING = _fmt(_SYN_STRING)
+    COMMENT = _fmt(_SYN_COMMENT)
+
+    # multiline comment state
+    IN_COMMENT = 1
+
+    def highlightBlock(self, text: str):
+        for m in re.finditer(r"</?[a-zA-Z][\w:-]*", text):
+            self.setFormat(m.start(), m.end() - m.start(), self.TAG)
+        for m in re.finditer(r"[a-zA-Z_:][\w:-]*(?==)", text):
+            self.setFormat(m.start(), m.end() - m.start(), self.ATTR)
+        for m in re.finditer(r"\"[^\"]*\"|'[^']*'", text):
+            self.setFormat(m.start(), m.end() - m.start(), self.STRING)
+
+        # Multiline <!-- --> comments
+        self.setCurrentBlockState(0)
+        start = 0
+        if self.previousBlockState() != self.IN_COMMENT:
+            m = re.search(r"<!--", text)
+            start = m.start() if m else -1
+        while start >= 0:
+            end = text.find("-->", start)
+            if end == -1:
+                self.setCurrentBlockState(self.IN_COMMENT)
+                length = len(text) - start
+            else:
+                length = end - start + 3
+            self.setFormat(start, length, self.COMMENT)
+            nxt = text.find("<!--", start + length)
+            start = nxt
+
+
+# --------------------------------------------------------------------------- #
+#  Combo-box popup delegate                                                    #
+# --------------------------------------------------------------------------- #
+class ComboItemDelegate(QtWidgets.QStyledItemDelegate):
+    """Paints dropdown rows ourselves so the hovered/selected item is clearly
+    highlighted. The app-wide stylesheet's universal ``QWidget`` background rule
+    defeats both ``selection-background-color`` and the palette Highlight on
+    combo popups under the Fusion style, so we draw the highlight directly."""
+
+    def paint(self, painter, option, index):
+        opt = QtWidgets.QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        state = opt.state
+        active = bool(state & QtWidgets.QStyle.StateFlag.State_Selected) or \
+            bool(state & QtWidgets.QStyle.StateFlag.State_MouseOver)
+        bg = QtGui.QColor(_HILITE) if active else QtGui.QColor(_BG3)
+        fg = QtGui.QColor("#ffffff") if active else QtGui.QColor(_FG)
+        painter.save()
+        painter.fillRect(opt.rect, bg)
+        painter.setPen(fg)
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        painter.drawText(opt.rect.adjusted(8, 0, -8, 0),
+                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                         "" if text is None else str(text))
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        s = super().sizeHint(option, index)
+        s.setHeight(max(s.height(), 26))
+        return s
+
+
+# --------------------------------------------------------------------------- #
+#  Main window                                                                 #
+# --------------------------------------------------------------------------- #
+class RivalsWindow(QtWidgets.QMainWindow):
+    log_signal = Signal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Rivals_2_Generator (Qt)")
         for folder in _OUTPUT_FOLDERS:
             (ROOT / folder).mkdir(exist_ok=True)
-        self.root.state("zoomed")
 
-        _apply_theme(self.root)
-        self._settings = self._load_settings()
+        self._procs: set[QProcess] = set()
+        self._http_server = None
+        self._http_server_port = None
+        self._preview_cache: dict[str, QtGui.QPixmap] = {}
 
-        notebook = ttk.Notebook(root)
+        self._load_settings()
 
-        # Pack footer and console from the bottom first so they're always visible,
-        # then let the notebook fill remaining space above them.
-        footer = ttk.Frame(root)
-        footer.pack(side="bottom", fill="x", padx=8, pady=(4, 8))
-        ttk.Button(footer, text="Clear Console", command=self._clear_console).pack(side="right")
+        # Central layout: tabs (top) + console (bottom) in a splitter
+        splitter = QtWidgets.QSplitter(Qt.Orientation.Vertical)
+        self.setCentralWidget(splitter)
 
-        console_frame = ttk.LabelFrame(root, text="Console Output")
-        console_frame.pack(side="bottom", fill="x", padx=0, pady=0)
+        self.tabs = QtWidgets.QTabWidget()
+        splitter.addWidget(self.tabs)
 
-        console_inner = ttk.Frame(console_frame)
-        console_inner.pack(fill="both", expand=True, padx=5, pady=5)
-        console_sb = ttk.Scrollbar(console_inner)
-        console_sb.pack(side="right", fill="y")
-        self.console = tk.Text(
-            console_inner, height=10, state="disabled",
-            bg=_BG, fg=_FG, insertbackground=_FG,
-            font=("Consolas", 9), wrap="word",
-            relief="flat", highlightthickness=0,
-            yscrollcommand=console_sb.set,
-        )
-        self.console.pack(side="left", fill="both", expand=True)
-        console_sb.config(command=self.console.yview)
+        console_box = QtWidgets.QWidget()
+        cbl = QtWidgets.QVBoxLayout(console_box)
+        cbl.setContentsMargins(6, 4, 6, 6)
+        hdr = QtWidgets.QHBoxLayout()
+        hdr.addWidget(_muted("Console Output"))
+        hdr.addStretch(1)
+        clear_btn = QtWidgets.QPushButton("Clear Console")
+        clear_btn.clicked.connect(self._clear_console)
+        hdr.addWidget(clear_btn)
+        cbl.addLayout(hdr)
+        self.console = QtWidgets.QPlainTextEdit()
+        self.console.setReadOnly(True)
+        self.console.setStyleSheet(f"background-color: {_BG};")
+        cbl.addWidget(self.console)
+        splitter.addWidget(console_box)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([720, 200])
 
-        notebook.pack(fill="both", expand=True, padx=0, pady=0)
+        self.log_signal.connect(self._append_console)
 
-        self._build_fetch_tab(notebook)
-        self._build_thumbnails_tab(notebook)
-        self._build_top8_tab(notebook)
-        self._build_posts_tab(notebook)
-        self._build_renders_tab(notebook)
-        self._build_player_db_tab(notebook)
-        self._build_char_db_tab(notebook)
+        # Build tabs
+        self._build_fetch_tab()
+        self._build_thumbnails_tab()
+        self._build_top8_tab()
+        self._build_posts_tab()
+        self._build_renders_tab()
+        self._build_player_db_tab()
+        self._build_char_db_tab()
 
-        def _on_tab_changed(_event=None):
-            tab = notebook.tab(notebook.select(), "text")
-            if tab == "Player Database":
-                self._player_listbox.focus_set()
-            self.console.config(height=40 if tab == "Character Renders" else 10)
+        # Give every dropdown a visibly highlighted hover/selection. A custom
+        # delegate is used because the stylesheet/palette can't reliably reach
+        # combo popups under Fusion (see ComboItemDelegate).
+        self._combo_delegate = ComboItemDelegate(self)
+        for combo in self.findChildren(QtWidgets.QComboBox):
+            combo.view().setItemDelegate(self._combo_delegate)
 
-        notebook.bind("<<NotebookTabChanged>>", _on_tab_changed)
+        self.resize(1280, 900)
 
     # ------------------------------------------------------------------ #
-    #  Settings persistence                                               #
+    #  Settings persistence                                              #
     # ------------------------------------------------------------------ #
-    def _load_settings(self) -> dict:
+    def _load_settings(self):
         try:
-            settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            self._settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         except Exception:
-            settings = {}
+            self._settings = {}
         try:
-            self._custom_events: list[dict] = json.loads(CUSTOM_EVENTS_PATH.read_text(encoding="utf-8"))
+            self._custom_events = json.loads(CUSTOM_EVENTS_PATH.read_text(encoding="utf-8"))
         except Exception:
             self._custom_events = []
         try:
-            self._event_configs: dict = json.loads(EVENT_CONFIGS_PATH.read_text(encoding="utf-8"))
+            self._event_configs = json.loads(EVENT_CONFIGS_PATH.read_text(encoding="utf-8"))
         except Exception:
             self._event_configs = {}
-        # StringVar references for saved custom rows (keyed by slug_template)
-        self._custom_event_widgets: dict[str, dict] = {}
-        return settings
 
     def _save_settings(self):
-        series = self._posts_series.get() if hasattr(self, "_posts_series") else ""
+        if getattr(self, "_loading", False):
+            return
+        series = self._posts_series.currentText() if hasattr(self, "_posts_series") else ""
         posts_cfg = dict(self._settings.get("posts_cfg", {}))
         if series and hasattr(self, "_posts_has_next"):
-            if _TKCALENDAR_AVAILABLE and hasattr(self, "_posts_date_picker") and self._posts_date_picker:
-                next_date_save = self._posts_date_picker.get_date().isoformat()
-            else:
-                next_date_save = self._posts_next_date.get() if hasattr(self, "_posts_next_date") else ""
             posts_cfg[series] = {
-                "next_date": next_date_save,
-                "next_link": self._posts_next_link.get(),
-                "vods": self._posts_vods.get(),
-                "has_next": self._posts_has_next.get(),
+                "next_date": self._posts_date.date().toString("yyyy-MM-dd"),
+                "next_link": self._posts_next_link.text(),
+                "vods": self._posts_vods.text(),
+                "has_next": self._posts_has_next.isChecked(),
             }
         data = {
             "last_event_nums": {
-                label: w["num"].get()
-                for label, w in self._fetch_widgets.items()
+                label: w["num"].text() for label, w in self._fetch_widgets.items()
             },
-            "last_thumb_series": self._thumb_series.get(),
+            "last_thumb_series": self._thumb_series.currentText() if hasattr(self, "_thumb_series") else "",
             "last_posts_series": series,
             "posts_cfg": posts_cfg,
         }
         self._settings = data
         SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-    def _setup_scrollable_canvas(self, canvas, inner, inner_win):
-        """Wire up a scrollable canvas with debounced scrollregion updates."""
-        _job = [None]
-        def _update_scroll():
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            _job[0] = None
-        def _on_inner_configure(e):
-            if _job[0]:
-                canvas.after_cancel(_job[0])
-            _job[0] = canvas.after(50, _update_scroll)
-        def _on_canvas_configure(e):
-            canvas.itemconfigure(inner_win, width=e.width)
-        inner.bind("<Configure>", _on_inner_configure)
-        canvas.bind("<Configure>", _on_canvas_configure)
+    def _save_custom_events(self):
+        CUSTOM_EVENTS_PATH.write_text(json.dumps(self._custom_events, indent=2), encoding="utf-8")
+
+    def _save_event_configs(self):
+        EVENT_CONFIGS_PATH.write_text(json.dumps(self._event_configs, indent=2), encoding="utf-8")
 
     # ------------------------------------------------------------------ #
-    #  Tab: Fetch from start.gg                                           #
+    #  Scroll-area tab helper                                            #
     # ------------------------------------------------------------------ #
-    def _build_fetch_tab(self, notebook: ttk.Notebook):
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Fetch From Start.gg")
+    def _scroll_tab(self, title: str) -> QtWidgets.QVBoxLayout:
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(inner)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(10)
+        scroll.setWidget(inner)
+        self.tabs.addTab(scroll, title)
+        return lay
 
-        # Scrollable container
-        _canvas = tk.Canvas(tab, bg=_BG, highlightthickness=0)
-        _vsb = ttk.Scrollbar(tab, orient="vertical", command=_canvas.yview)
-        _canvas.configure(yscrollcommand=_vsb.set)
-        _vsb.pack(side="right", fill="y")
-        _canvas.pack(side="left", fill="both", expand=True)
-
-        inner = ttk.Frame(_canvas)
-        _inner_win = _canvas.create_window((0, 0), window=inner, anchor="nw")
-        self._setup_scrollable_canvas(_canvas, inner, _inner_win)
-
-        def _on_mousewheel(event):
-            _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        _canvas.bind("<Enter>", lambda e: _canvas.bind_all("<MouseWheel>", _on_mousewheel))
-        _canvas.bind("<Leave>", lambda e: _canvas.unbind_all("<MouseWheel>"))
-
-        self._fetch_widgets = {}
+    # ================================================================== #
+    #  Tab: Fetch from start.gg                                          #
+    # ================================================================== #
+    def _build_fetch_tab(self):
+        lay = self._scroll_tab("Fetch From Start.gg")
+        self._fetch_widgets: dict[str, dict] = {}
 
         for cfg in FETCH_EVENTS:
-            lf = ttk.LabelFrame(inner, text=cfg["label"], padding=(8, 6))
-            lf.pack(fill="x", padx=10, pady=8)
-
-            row1 = ttk.Frame(lf)
-            row1.pack(fill="x", pady=(0, 4))
-
-            ttk.Label(row1, text="Event #:").pack(side="left")
+            box = QtWidgets.QGroupBox(cfg["label"])
+            v = QtWidgets.QVBoxLayout(box)
             saved_num = self._settings.get("last_event_nums", {}).get(cfg["label"], cfg["default_num"])
-            num_var = tk.StringVar(value=saved_num)
-            ttk.Entry(row1, textvariable=num_var, width=6).pack(side="left", padx=(4, 16))
 
-            ttk.Label(row1, text="Top 8 Link:").pack(side="left")
-            link_var = tk.StringVar(value=cfg["default_link"].replace("{n}", saved_num))
-            ttk.Entry(row1, textvariable=link_var, width=32).pack(side="left", padx=4)
+            row1 = QtWidgets.QHBoxLayout()
+            row1.addWidget(QtWidgets.QLabel("Event #:"))
+            num = _hline(saved_num, 60)
+            row1.addWidget(num)
+            row1.addSpacing(12)
+            row1.addWidget(QtWidgets.QLabel("Top 8 Link:"))
+            link = QtWidgets.QLineEdit(cfg["default_link"].replace("{n}", saved_num))
+            link.setMinimumWidth(280)
+            row1.addWidget(link)
+            row1.addStretch(1)
+            v.addLayout(row1)
 
-            # Auto-fill link when number changes, sync to Generate/Posts tabs, and persist
-            def _on_num_change(name, index, mode, nv=num_var, lv=link_var, t=cfg["default_link"], lbl=cfg["label"]):
-                n = nv.get().strip()
-                lv.set(t.replace("{n}", n))
-                if hasattr(self, "_thumb_series") and self._thumb_series.get() == lbl:
-                    self._thumb_num.set(n)
-                if hasattr(self, "_posts_series") and self._posts_series.get() == lbl:
-                    self._posts_num.set(n)
+            def _on_num(text, lk=link, tmpl=cfg["default_link"], label=cfg["label"]):
+                lk.setText(tmpl.replace("{n}", text.strip()))
+                if hasattr(self, "_thumb_series") and self._thumb_series.currentText() == label:
+                    self._thumb_num.setText(text.strip())
+                if hasattr(self, "_posts_series") and self._posts_series.currentText() == label:
+                    self._posts_num.setText(text.strip())
                 self._save_settings()
-            num_var.trace_add("write", _on_num_change)
+            num.textChanged.connect(_on_num)
 
-            row2 = ttk.Frame(lf)
-            row2.pack(fill="x")
+            row2 = QtWidgets.QHBoxLayout()
+            b1 = QtWidgets.QPushButton("Fetch VOD Names")
+            b1.clicked.connect(lambda _=False, c=cfg, n=num: self._fetch_sets(c, n.text().strip()))
+            row2.addWidget(b1)
+            b2 = QtWidgets.QPushButton("Fetch Top 8")
+            b2.clicked.connect(lambda _=False, c=cfg, n=num, lk=link: self._fetch_top8(c, n.text().strip(), lk.text().strip()))
+            row2.addWidget(b2)
+            row2.addStretch(1)
+            v.addLayout(row2)
+            lay.addWidget(box)
+            self._fetch_widgets[cfg["label"]] = {"num": num, "link": link}
 
-            ttk.Button(
-                row2, text="Fetch VOD Names",
-                command=lambda c=cfg, nv=num_var: self._fetch_sets(c, nv.get().strip()),
-            ).pack(side="left", padx=(0, 6))
-
-            ttk.Button(
-                row2, text="Fetch Top 8",
-                command=lambda c=cfg, nv=num_var, lv=link_var: self._fetch_top8(
-                    c, nv.get().strip(), lv.get().strip()
-                ),
-            ).pack(side="left")
-
-            self._fetch_widgets[cfg["label"]] = {"num": num_var, "link": link_var}
-
-        # Saved custom tournaments section
-        self._saved_custom_lf = ttk.LabelFrame(inner, text="Saved Custom Tournaments", padding=(8, 6))
-        self._saved_custom_lf.pack(fill="x", padx=10, pady=(0, 4))
-        self._saved_custom_frame = ttk.Frame(self._saved_custom_lf)
-        self._saved_custom_frame.pack(fill="x", expand=True)
+        # Saved custom tournaments
+        self._saved_custom_box = QtWidgets.QGroupBox("Saved Custom Tournaments")
+        self._saved_custom_layout = QtWidgets.QVBoxLayout(self._saved_custom_box)
+        lay.addWidget(self._saved_custom_box)
         self._build_saved_custom_rows()
 
-        # Add new custom tournament section
-        lf_custom = ttk.LabelFrame(inner, text="Add New Custom Tournament", padding=(8, 6))
-        lf_custom.pack(fill="x", padx=10, pady=(0, 8))
+        # Add new custom
+        addbox = QtWidgets.QGroupBox("Add New Custom Tournament")
+        form = QtWidgets.QGridLayout(addbox)
+        form.addWidget(QtWidgets.QLabel("Slug:"), 0, 0)
+        self._custom_slug = QtWidgets.QLineEdit()
+        self._custom_slug.setFixedWidth(360)
+        form.addWidget(self._custom_slug, 0, 1)
+        form.addWidget(_muted("e.g. tournament/{event}-{n}/event/rivals-2-singles"), 0, 2)
+        form.addWidget(QtWidgets.QLabel("Name:"), 1, 0)
+        self._custom_name = QtWidgets.QLineEdit()
+        self._custom_name.setFixedWidth(250)
+        form.addWidget(self._custom_name, 1, 1)
+        form.addWidget(_muted("e.g. Immortal Fight Night"), 1, 2)
+        form.addWidget(QtWidgets.QLabel("Event #:"), 2, 0)
+        self._custom_num = _hline("", 60)
+        form.addWidget(self._custom_num, 2, 1)
+        save_fetch = QtWidgets.QPushButton("Save & Fetch VOD Names")
+        save_fetch.clicked.connect(self._fetch_custom_sets)
+        form.addWidget(save_fetch, 3, 1)
+        form.setColumnStretch(3, 1)
+        lay.addWidget(addbox)
+        lay.addStretch(1)
 
-        row_slug = ttk.Frame(lf_custom)
-        row_slug.pack(fill="x", pady=(0, 4))
-        ttk.Label(row_slug, text="Slug:", width=10, anchor="w").pack(side="left")
-        self._custom_slug = tk.StringVar()
-        ttk.Entry(row_slug, textvariable=self._custom_slug, width=52).pack(side="left", padx=4)
-        ttk.Label(row_slug, text="e.g. tournament/{event}-{n}/event/rivals-2-singles",
-                  style="Muted.TLabel").pack(side="left", padx=(4, 0))
+    def _build_saved_custom_rows(self):
+        # Clear existing
+        while self._saved_custom_layout.count():
+            item = self._saved_custom_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        if not self._custom_events:
+            self._saved_custom_layout.addWidget(_muted("No saved custom tournaments"))
+            return
+        for entry in self._custom_events:
+            slug_tmpl = entry.get("slug_template", entry.get("slug", ""))
+            if not slug_tmpl:
+                continue
+            box = QtWidgets.QGroupBox(entry.get("label", slug_tmpl))
+            v = QtWidgets.QVBoxLayout(box)
+            row1 = QtWidgets.QHBoxLayout()
+            row1.addWidget(QtWidgets.QLabel("Event #:"))
+            num = _hline(entry.get("current_num", ""), 60)
+            row1.addWidget(num)
+            row1.addSpacing(12)
+            row1.addWidget(QtWidgets.QLabel("Top 8 Link:"))
+            link = QtWidgets.QLineEdit(entry.get("top8_link", ""))
+            link.setMinimumWidth(260)
+            row1.addWidget(link)
+            row1.addStretch(1)
+            v.addLayout(row1)
 
-        row_name = ttk.Frame(lf_custom)
-        row_name.pack(fill="x", pady=(0, 4))
-        ttk.Label(row_name, text="Name:", width=10, anchor="w").pack(side="left")
-        self._custom_name = tk.StringVar()
-        ttk.Entry(row_name, textvariable=self._custom_name, width=36).pack(side="left", padx=4)
-        ttk.Label(row_name, text="e.g. Immortal Fight Night",
-                  style="Muted.TLabel").pack(side="left", padx=(4, 0))
+            def _on_num(text, e=entry):
+                e["current_num"] = text
+                self._save_custom_events()
 
-        row_num = ttk.Frame(lf_custom)
-        row_num.pack(fill="x", pady=(0, 4))
-        ttk.Label(row_num, text="Event #:", width=10, anchor="w").pack(side="left")
-        self._custom_num = tk.StringVar()
-        ttk.Entry(row_num, textvariable=self._custom_num, width=6).pack(side="left", padx=4)
+            def _on_link(text, e=entry):
+                e["top8_link"] = text
+                self._save_custom_events()
 
-        ttk.Button(lf_custom, text="Save & Fetch VOD Names",
-                   command=self._fetch_custom_sets).pack(anchor="w")
+            num.textChanged.connect(_on_num)
+            link.textChanged.connect(_on_link)
+
+            row2 = QtWidgets.QHBoxLayout()
+            b1 = QtWidgets.QPushButton("Fetch VOD Names")
+            b1.clicked.connect(lambda _=False, e=entry, n=num: self._fetch_saved_custom(e, n.text().strip()))
+            row2.addWidget(b1)
+            b2 = QtWidgets.QPushButton("Fetch Top 8")
+            b2.clicked.connect(lambda _=False, e=entry, n=num, lk=link: self._fetch_saved_custom_top8(e, n.text().strip(), lk.text().strip()))
+            row2.addWidget(b2)
+            b3 = QtWidgets.QPushButton("Delete")
+            b3.clicked.connect(lambda _=False, s=slug_tmpl: self._delete_custom_event(s))
+            row2.addWidget(b3)
+            row2.addStretch(1)
+            v.addLayout(row2)
+            self._saved_custom_layout.addWidget(box)
 
     def _fetch_custom_sets(self):
-        slug_tmpl = self._custom_slug.get().strip()
-        name_tmpl = self._custom_name.get().strip()
-        num = self._custom_num.get().strip()
+        slug_tmpl = self._custom_slug.text().strip()
+        name_tmpl = self._custom_name.text().strip()
+        num = self._custom_num.text().strip()
         if not slug_tmpl:
             self._log("[Error: slug is required]\n")
             return
         label = (name_tmpl or slug_tmpl).replace(" {n}", "").replace("{n}", "").strip()
         slug = slug_tmpl.replace("{n}", num)
         name = (name_tmpl or slug_tmpl).replace("{n}", num)
-        out  = str(ROOT / "Vod_Names" / f"{name} Names.txt")
+        out = str(ROOT / "Vod_Names" / f"{name} Names.txt")
         entry = {
-            "label": label,
-            "slug_template": slug_tmpl,
+            "label": label, "slug_template": slug_tmpl,
             "name_template": name_tmpl or slug_tmpl,
             "top8_file": f"{label} Top 8 HTML.txt",
-            "current_num": num,
-            "top8_link": "",
+            "current_num": num, "top8_link": "",
         }
         idx = next((i for i, e in enumerate(self._custom_events) if e.get("slug_template") == slug_tmpl), None)
         if idx is not None:
             entry["top8_link"] = self._custom_events[idx].get("top8_link", "")
             self._custom_events[idx] = entry
-            self._custom_event_widgets.pop(slug_tmpl, None)
         else:
             self._custom_events.append(entry)
         self._save_custom_events()
         self._build_saved_custom_rows()
-        if hasattr(self, "_thumb_series_box"):
-            self._refresh_thumbnail_events()
-        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug,
-               "--name", name, "--out", out]
-        self._run(cmd)
+        self._refresh_thumbnail_events()
+        self._run([PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out])
 
     def _fetch_saved_custom(self, entry: dict, num: str):
         slug = entry["slug_template"].replace("{n}", num)
         name = entry["name_template"].replace("{n}", num)
-        out  = str(ROOT / "Vod_Names" / f"{name} Names.txt")
-        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug,
-               "--name", name, "--out", out]
-        self._run(cmd)
+        out = str(ROOT / "Vod_Names" / f"{name} Names.txt")
+        self._run([PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out])
 
     def _fetch_saved_custom_top8(self, entry: dict, num: str, link: str):
-        import shutil
         slug = entry["slug_template"].replace("{n}", num)
         name = entry["name_template"].replace("{n}", num)
         top8_file = entry.get("top8_file", f"{entry['label']} Top 8 HTML.txt")
         out_path = ROOT / "Top_8_Texts" / top8_file
         if not out_path.exists():
             out_path.touch()
-        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_startgg_top8.py"),
-               slug, "--name", name, "--out", str(out_path)]
+        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_startgg_top8.py"), slug, "--name", name, "--out", str(out_path)]
         if link:
             cmd += ["--link", link]
-        def _on_done():
+
+        def _done():
             try:
                 shutil.copy2(out_path, ROOT / "Top_8_Texts" / "Default Top 8 HTML.txt")
             except Exception:
                 pass
             self._select_top8_event(entry["label"], num)
-        self._run(cmd, on_done=_on_done)
-
-    def _schedule_custom_save(self):
-        if hasattr(self, "_custom_save_job") and self._custom_save_job:
-            self.root.after_cancel(self._custom_save_job)
-        self._custom_save_job = self.root.after(500, self._save_custom_events)
-
-    def _save_custom_events(self):
-        self._custom_save_job = None
-        CUSTOM_EVENTS_PATH.write_text(json.dumps(self._custom_events, indent=2), encoding="utf-8")
+        self._run(cmd, on_done=_done)
 
     def _delete_custom_event(self, slug_tmpl: str):
-        self._custom_events = [
-            e for e in self._custom_events
-            if e.get("slug_template", e.get("slug")) != slug_tmpl
-        ]
-        self._custom_event_widgets.pop(slug_tmpl, None)
+        self._custom_events = [e for e in self._custom_events
+                               if e.get("slug_template", e.get("slug")) != slug_tmpl]
         self._save_custom_events()
         self._build_saved_custom_rows()
-        if hasattr(self, "_thumb_series_box"):
-            self._refresh_thumbnail_events()
-
-    def _build_saved_custom_rows(self):
-        self._saved_custom_frame.destroy()
-        self._saved_custom_frame = ttk.Frame(self._saved_custom_lf)
-        self._saved_custom_frame.pack(fill="x", expand=True)
-        if not self._custom_events:
-            ttk.Label(self._saved_custom_frame, text="No saved custom tournaments",
-                      style="Muted.TLabel").pack(padx=4, pady=4)
-            return
-        for entry in self._custom_events:
-            slug_tmpl = entry.get("slug_template", entry.get("slug", ""))
-            if not slug_tmpl:
-                continue
-            # Create StringVars once; reuse on subsequent rebuilds to keep traces alive
-            if slug_tmpl not in self._custom_event_widgets:
-                num_var  = tk.StringVar(value=entry.get("current_num", ""))
-                link_var = tk.StringVar(value=entry.get("top8_link", ""))
-                def _on_num(*_, e=entry, nv=num_var):
-                    e["current_num"] = nv.get()
-                    self._schedule_custom_save()
-                def _on_link(*_, e=entry, lv=link_var):
-                    e["top8_link"] = lv.get()
-                    self._schedule_custom_save()
-                num_var.trace_add("write", _on_num)
-                link_var.trace_add("write", _on_link)
-                self._custom_event_widgets[slug_tmpl] = {"num": num_var, "link": link_var}
-            else:
-                num_var  = self._custom_event_widgets[slug_tmpl]["num"]
-                link_var = self._custom_event_widgets[slug_tmpl]["link"]
-
-            lf = ttk.LabelFrame(self._saved_custom_frame, text=entry["label"], padding=(8, 6))
-            lf.pack(fill="x", padx=0, pady=(0, 4))
-
-            row1 = ttk.Frame(lf)
-            row1.pack(fill="x", pady=(0, 4))
-            ttk.Label(row1, text="Event #:").pack(side="left")
-            ttk.Entry(row1, textvariable=num_var, width=6).pack(side="left", padx=(4, 16))
-            ttk.Label(row1, text="Top 8 Link:").pack(side="left")
-            ttk.Entry(row1, textvariable=link_var, width=32).pack(side="left", padx=4)
-
-            row2 = ttk.Frame(lf)
-            row2.pack(fill="x")
-            ttk.Button(row2, text="Fetch VOD Names",
-                       command=lambda e=entry, nv=num_var: self._fetch_saved_custom(e, nv.get().strip())
-                       ).pack(side="left", padx=(0, 6))
-            ttk.Button(row2, text="Fetch Top 8",
-                       command=lambda e=entry, nv=num_var, lv=link_var: self._fetch_saved_custom_top8(
-                           e, nv.get().strip(), lv.get().strip())
-                       ).pack(side="left", padx=(0, 6))
-            ttk.Button(row2, text="Delete",
-                       command=lambda s=slug_tmpl: self._delete_custom_event(s)
-                       ).pack(side="left")
+        self._refresh_thumbnail_events()
 
     def _fetch_sets(self, cfg: dict, n: str):
         name = cfg["name_template"].format(n=n)
         slug = cfg["slug_template"].format(n=n)
-        out  = str(ROOT / "Vod_Names" / f"{name} Names.txt")
-        self._run([
-            PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"),
-            slug, "--name", name, "--out", out,
-        ])
+        out = str(ROOT / "Vod_Names" / f"{name} Names.txt")
+        self._run([PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out])
 
     def _fetch_top8(self, cfg: dict, n: str, link: str):
-        import shutil
         name = cfg["name_template"].format(n=n)
         slug = cfg["slug_template"].format(n=n)
-        out  = ROOT / "Top_8_Texts" / cfg["top8_file"]
-        def _on_done():
+        out = ROOT / "Top_8_Texts" / cfg["top8_file"]
+
+        def _done():
             try:
                 shutil.copy2(out, ROOT / "Top_8_Texts" / "Default Top 8 HTML.txt")
             except Exception:
                 pass
             self._select_top8_event(cfg["label"], n)
-        self._run([
-            PYTHON, str(ROOT / "Python_Scripts" / "fetch_startgg_top8.py"),
-            slug, "--name", name, "--link", link, "--out", str(out),
-        ], on_done=_on_done)
+        self._run([PYTHON, str(ROOT / "Python_Scripts" / "fetch_startgg_top8.py"),
+                   slug, "--name", name, "--link", link, "--out", str(out)], on_done=_done)
 
-    def _select_top8_event(self, label: str, num: str):
-        """Point the Top 8 tab at the given event and reload its text editor.
-
-        Called after a start.gg Top 8 fetch completes so the freshly written
-        Top_8_Texts file is shown without the user having to switch tabs/reselect.
-        """
-        self._top8_series.set(label)
-        self._top8_num.set(str(num))
-        # Series/num traces also trigger a refresh, but call explicitly so the
-        # reload still happens when the values were already current (trace no-op).
+    def _select_top8_event(self, label: str, num: str = ""):
+        # `num` is accepted for caller compatibility but no longer used — the
+        # Top 8 tab selects by series only (one text file per series).
+        if label in [self._top8_series.itemText(i) for i in range(self._top8_series.count())]:
+            self._top8_series.setCurrentText(label)
         self._refresh_top8_files()
 
-    # ------------------------------------------------------------------ #
-    #  Tab: Generate Thumbnails                                           #
-    # ------------------------------------------------------------------ #
-    def _build_thumbnails_tab(self, notebook: ttk.Notebook):
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Generate Thumbnails")
+    # ================================================================== #
+    #  Tab: Generate Thumbnails                                          #
+    # ================================================================== #
+    def _build_thumbnails_tab(self):
+        lay = self._scroll_tab("Generate Thumbnails")
 
-        # Scrollable container
-        _canvas = tk.Canvas(tab, bg=_BG, highlightthickness=0)
-        _vsb = ttk.Scrollbar(tab, orient="vertical", command=_canvas.yview)
-        _canvas.configure(yscrollcommand=_vsb.set)
-        _vsb.pack(side="right", fill="y")
-        _canvas.pack(side="left", fill="both", expand=True)
+        box = QtWidgets.QGroupBox("Event")
+        v = QtWidgets.QVBoxLayout(box)
+        row1 = QtWidgets.QHBoxLayout()
+        row1.addWidget(QtWidgets.QLabel("Series:"))
+        self._thumb_series = QtWidgets.QComboBox()
+        self._thumb_series.setMinimumWidth(220)
+        row1.addWidget(self._thumb_series)
+        refresh = QtWidgets.QPushButton("↺")
+        refresh.setObjectName("tool")
+        refresh.clicked.connect(self._refresh_thumbnail_events)
+        row1.addWidget(refresh)
+        row1.addSpacing(12)
+        row1.addWidget(QtWidgets.QLabel("# / Suffix:"))
+        self._thumb_num = _hline("274", 80)
+        row1.addWidget(self._thumb_num)
+        row1.addStretch(1)
+        v.addLayout(row1)
 
-        inner = ttk.Frame(_canvas)
-        _inner_win = _canvas.create_window((0, 0), window=inner, anchor="nw")
-        self._setup_scrollable_canvas(_canvas, inner, _inner_win)
+        row2 = QtWidgets.QHBoxLayout()
+        row2.addWidget(QtWidgets.QLabel("Event name:"))
+        self._thumb_event_name = QtWidgets.QLineEdit()
+        self._thumb_event_name.setMinimumWidth(320)
+        row2.addWidget(self._thumb_event_name)
+        row2.addStretch(1)
+        v.addLayout(row2)
+        lay.addWidget(box)
 
-        def _on_mousewheel(event):
-            _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        _canvas.bind("<Enter>", lambda e: _canvas.bind_all("<MouseWheel>", _on_mousewheel))
-        _canvas.bind("<Leave>", lambda e: _canvas.unbind_all("<MouseWheel>"))
+        self._thumb_event_map: dict[str, str] = {}
+        self._thumb_series.currentTextChanged.connect(self._on_thumb_series_change)
+        self._thumb_num.textChanged.connect(self._update_thumb_name)
 
-        lf = ttk.LabelFrame(inner, text="Event", padding=(8, 8))
-        lf.pack(fill="x", padx=10, pady=10)
+        # Config section
+        self._build_thumbnail_config(lay)
 
-        row1 = ttk.Frame(lf)
-        row1.pack(fill="x", pady=(0, 6))
-
-        ttk.Label(row1, text="Series:").pack(side="left")
-        self._thumb_series = tk.StringVar()
-        self._thumb_series_box = ttk.Combobox(
-            row1, textvariable=self._thumb_series,
-            state="readonly", width=26,
-        )
-        self._thumb_series_box.pack(side="left", padx=(4, 4))
-        ttk.Button(row1, text="↺",
-                   command=self._refresh_thumbnail_events).pack(side="left", padx=(0, 12))
-
-        ttk.Label(row1, text="# / Suffix:").pack(side="left")
-        self._thumb_num = tk.StringVar(value="274")
-        ttk.Entry(row1, textvariable=self._thumb_num, width=8).pack(side="left", padx=4)
-
-        row2 = ttk.Frame(lf)
-        row2.pack(fill="x", pady=(0, 6))
-
-        ttk.Label(row2, text="Event name:").pack(side="left")
-        self._thumb_event_name = tk.StringVar()
-        ttk.Entry(row2, textvariable=self._thumb_event_name, width=40).pack(side="left", padx=4)
-
-        def _update_name(*_):
-            template = self._thumb_event_map.get(self._thumb_series.get(), "{n}")
-            self._thumb_event_name.set(template.format(n=self._thumb_num.get().strip()))
-
-        def _on_series_change(*_):
-            series = self._thumb_series.get()
-            widgets = self._fetch_widgets.get(series)
-            if widgets:
-                self._thumb_num.set(widgets["num"].get())
-            else:
-                custom = next((e for e in self._custom_events if e.get("label") == series), None)
-                if custom:
-                    slug_tmpl = custom.get("slug_template", custom.get("slug", ""))
-                    cw = self._custom_event_widgets.get(slug_tmpl)
-                    num = cw["num"].get() if cw else custom.get("current_num", "")
-                    self._thumb_num.set(num)
-                else:
-                    saved = self._settings.get("last_event_nums", {}).get(series)
-                    if saved:
-                        self._thumb_num.set(saved)
-            self._save_settings()
-
-        def _on_num_change_thumb(*_):
-            self._save_settings()
-
-        self._thumb_series.trace_add("write", _on_series_change)
-        self._thumb_series.trace_add("write", _update_name)
-        self._thumb_num.trace_add("write", _update_name)
-        self._thumb_num.trace_add("write", _on_num_change_thumb)
-        self._thumb_update_name = _update_name
-
-        self._refresh_thumbnail_events()
-
-        # Thumbnail Config section
-        lf_cfg = self._make_collapsible_section(inner, "Thumbnail Config", collapsed=True)
-
-        self._cfg_series_label = ttk.Label(lf_cfg, text="", style="Muted.TLabel")
-        self._cfg_series_label.pack(anchor="w", pady=(0, 6))
-
-        row_bg = ttk.Frame(lf_cfg)
-        row_bg.pack(fill="x", pady=(0, 4))
-        ttk.Label(row_bg, text="Background:", width=12, anchor="w").pack(side="left")
-        self._cfg_background = tk.StringVar()
-        ttk.Entry(row_bg, textvariable=self._cfg_background, width=40).pack(side="left", padx=4)
-        ttk.Button(row_bg, text="Browse…", command=lambda: self._browse_overlay(self._cfg_background)).pack(side="left")
-
-        row_fg = ttk.Frame(lf_cfg)
-        row_fg.pack(fill="x", pady=(0, 4))
-        ttk.Label(row_fg, text="Foreground:", width=12, anchor="w").pack(side="left")
-        self._cfg_foreground = tk.StringVar()
-        ttk.Entry(row_fg, textvariable=self._cfg_foreground, width=40).pack(side="left", padx=4)
-        ttk.Button(row_fg, text="Browse…", command=lambda: self._browse_overlay(self._cfg_foreground)).pack(side="left")
-
-        row_font = ttk.Frame(lf_cfg)
-        row_font.pack(fill="x", pady=(0, 4))
-        ttk.Label(row_font, text="Font:", width=12, anchor="w").pack(side="left")
-        _font_files = sorted(
-            f.name for f in (ROOT / "Resources" / "Fonts").glob("*")
-            if f.suffix.lower() in (".ttf", ".otf")
-        )
-        self._cfg_font = tk.StringVar()
-        ttk.Combobox(row_font, textvariable=self._cfg_font, values=_font_files,
-                     state="readonly", width=30).pack(side="left", padx=4)
-
-        row_flags = ttk.Frame(lf_cfg)
-        row_flags.pack(fill="x", pady=(0, 4))
-        self._cfg_glow = tk.BooleanVar()
-        ttk.Checkbutton(row_flags, text="Character Glow",
-                        variable=self._cfg_glow).pack(side="left", padx=(0, 20))
-        self._cfg_one_char = tk.BooleanVar()
-        ttk.Checkbutton(row_flags, text="One Character Per Player",
-                        variable=self._cfg_one_char).pack(side="left")
-
-        row_resize = ttk.Frame(lf_cfg)
-        row_resize.pack(fill="x", pady=(0, 4))
-        ttk.Label(row_resize, text="Char Scale:", width=12, anchor="w").pack(side="left")
-        for _lbl, _attr in [("1-char", "_cfg_resize_1"), ("2-char", "_cfg_resize_2"), ("3-char", "_cfg_resize_3")]:
-            ttk.Label(row_resize, text=_lbl).pack(side="left", padx=(8, 2))
-            _var = tk.StringVar()
-            setattr(self, _attr, _var)
-            ttk.Entry(row_resize, textvariable=_var, width=6).pack(side="left")
-
-        ttk.Label(lf_cfg, text="Character Positions  (x, y — normalized −1 to 1):",
-                  style="Muted.TLabel").pack(anchor="w", pady=(4, 2))
-
-        def _pos_row(label, *xy_attrs):
-            row = ttk.Frame(lf_cfg)
-            row.pack(fill="x", pady=1)
-            ttk.Label(row, text=label, width=12, anchor="w").pack(side="left")
-            for i in range(0, len(xy_attrs), 2):
-                if i > 0:
-                    ttk.Label(row, text="").pack(side="left", padx=6)
-                xv = tk.StringVar(); setattr(self, xy_attrs[i],   xv)
-                yv = tk.StringVar(); setattr(self, xy_attrs[i+1], yv)
-                ttk.Label(row, text="x").pack(side="left", padx=(0, 2))
-                ttk.Entry(row, textvariable=xv, width=6).pack(side="left", padx=(0, 6))
-                ttk.Label(row, text="y").pack(side="left", padx=(0, 2))
-                ttk.Entry(row, textvariable=yv, width=6).pack(side="left")
-
-        _pos_row("1-char:",
-                 "_cfg_shift_1_x",   "_cfg_shift_1_y")
-        _pos_row("2-char:",
-                 "_cfg_shift_2_1_x", "_cfg_shift_2_1_y",
-                 "_cfg_shift_2_2_x", "_cfg_shift_2_2_y")
-        _pos_row("3-char:",
-                 "_cfg_shift_3_1_x", "_cfg_shift_3_1_y",
-                 "_cfg_shift_3_2_x", "_cfg_shift_3_2_y",
-                 "_cfg_shift_3_3_x", "_cfg_shift_3_3_y")
-
-        row_sizes = ttk.Frame(lf_cfg)
-        row_sizes.pack(fill="x", pady=(0, 4))
-        ttk.Label(row_sizes, text="Font Sizes:", width=12, anchor="w").pack(side="left")
-        for _lbl, _attr in [("P1", "_cfg_font_p1"), ("P2", "_cfg_font_p2"),
-                             ("Event", "_cfg_font_event"), ("Round", "_cfg_font_round")]:
-            ttk.Label(row_sizes, text=_lbl).pack(side="left", padx=(8, 2))
-            _var = tk.StringVar()
-            setattr(self, _attr, _var)
-            ttk.Entry(row_sizes, textvariable=_var, width=5).pack(side="left")
-        ttk.Label(row_sizes, text="Angle°").pack(side="left", padx=(16, 2))
-        self._cfg_text_angle = tk.StringVar()
-        ttk.Entry(row_sizes, textvariable=self._cfg_text_angle, width=4).pack(side="left")
-
-        # Font colors — one picker per text element
-        ttk.Label(lf_cfg, text="Font Colors  (P1, P2, Event, Round):",
-                  style="Muted.TLabel").pack(anchor="w", pady=(4, 2))
-
-        def _make_color_picker(parent, label, var_attr, btn_attr):
-            ttk.Label(parent, text=label, width=7, anchor="w").pack(side="left")
-            var = tk.StringVar(value="#FFFFFF")
-            setattr(self, var_attr, var)
-            ttk.Entry(parent, textvariable=var, width=9).pack(side="left", padx=(0, 2))
-            btn = tk.Button(parent, text="  ", width=2, relief="flat",
-                            bg="#FFFFFF", activebackground="#FFFFFF", cursor="hand2")
-            setattr(self, btn_attr, btn)
-            btn.config(command=lambda v=var, b=btn: self._pick_color(v, b))
-            btn.pack(side="left", padx=(0, 16))
-            def _sync(*_, v=var, b=btn):
-                c = v.get().strip()
-                try: b.config(bg=c, activebackground=c)
-                except Exception: pass
-            var.trace_add("write", _sync)
-
-        row_colors1 = ttk.Frame(lf_cfg)
-        row_colors1.pack(fill="x", pady=1)
-        _make_color_picker(row_colors1, "P1:",    "_cfg_font_color1", "_cfg_color_btn1")
-        _make_color_picker(row_colors1, "P2:",    "_cfg_font_color2", "_cfg_color_btn2")
-
-        row_colors2 = ttk.Frame(lf_cfg)
-        row_colors2.pack(fill="x", pady=1)
-        _make_color_picker(row_colors2, "Event:", "_cfg_font_color3", "_cfg_color_btn3")
-        _make_color_picker(row_colors2, "Round:", "_cfg_font_color4", "_cfg_color_btn4")
-
-        # Text label positions
-        ttk.Label(lf_cfg, text="Text Label Positions  (x, y — normalized 0 to 1):",
-                  style="Muted.TLabel").pack(anchor="w", pady=(4, 2))
-        _pos_row("Player 1:", "_cfg_text_p1_x", "_cfg_text_p1_y")
-        _pos_row("Player 2:", "_cfg_text_p2_x", "_cfg_text_p2_y")
-        _pos_row("Event:",    "_cfg_text_ev_x", "_cfg_text_ev_y")
-        _pos_row("Round:",    "_cfg_text_rd_x", "_cfg_text_rd_y")
-
-        # Character window and offsets
-        row_charwin = ttk.Frame(lf_cfg)
-        row_charwin.pack(fill="x", pady=(4, 2))
-        ttk.Label(row_charwin, text="Char Window:", width=12, anchor="w").pack(side="left")
-        ttk.Label(row_charwin, text="w").pack(side="left", padx=(0, 2))
-        self._cfg_char_win_w = tk.StringVar()
-        ttk.Entry(row_charwin, textvariable=self._cfg_char_win_w, width=6).pack(side="left", padx=(0, 8))
-        ttk.Label(row_charwin, text="h").pack(side="left", padx=(0, 2))
-        self._cfg_char_win_h = tk.StringVar()
-        ttk.Entry(row_charwin, textvariable=self._cfg_char_win_h, width=6).pack(side="left")
-
-        ttk.Label(lf_cfg, text="Character Offsets  (x, y — normalized):",
-                  style="Muted.TLabel").pack(anchor="w", pady=(4, 2))
-        _pos_row("P1 Offset:", "_cfg_offset1_x", "_cfg_offset1_y")
-        _pos_row("P2 Offset:", "_cfg_offset2_x", "_cfg_offset2_y")
-
-        # Event/Round text options
-        row_er = ttk.Frame(lf_cfg)
-        row_er.pack(fill="x", pady=(4, 2))
-        self._cfg_single_text = tk.BooleanVar()
-        ttk.Checkbutton(row_er, text="Single Text Block",
-                        variable=self._cfg_single_text).pack(side="left", padx=(0, 20))
-        ttk.Label(row_er, text="Separator:").pack(side="left")
-        self._cfg_text_split = tk.StringVar()
-        ttk.Entry(row_er, textvariable=self._cfg_text_split, width=10).pack(side="left", padx=4)
-        ttk.Label(lf_cfg,
-                  text="Single Text Block: renders the event name and round as one combined label.\n"
-                       "Separator: the string placed between them, e.g. \" — \" → \"Immortal Fight Night 274 — Grand Finals\".",
-                  style="Muted.TLabel", wraplength=560, justify="left").pack(anchor="w", pady=(2, 4))
-
-        row_cfg_btns = ttk.Frame(lf_cfg)
-        row_cfg_btns.pack(fill="x", pady=(4, 0))
-        ttk.Button(row_cfg_btns, text="Save Config",
-                   command=self._save_thumbnail_config).pack(side="left", padx=(0, 6))
-        ttk.Button(row_cfg_btns, text="Clear Config",
-                   command=self._clear_thumbnail_config).pack(side="left")
-
-        self._thumb_series.trace_add("write", lambda *_: self._load_config_into_form(self._thumb_series.get()))
-        self._load_config_into_form(self._thumb_series.get())
-
-        row_gen = ttk.Frame(inner)
-        row_gen.pack(padx=10, pady=8, anchor="w", fill="x")
-        ttk.Button(row_gen, text="Generate Thumbnails", command=self._generate_thumbnails,
-                   style="Accent.TButton").pack(side="left")
-        self._open_thumb_folder_btn = ttk.Button(
-            row_gen, text="Open Output Folder",
-            command=self._open_thumbnail_folder, state="disabled")
-        self._open_thumb_folder_btn.pack(side="left", padx=(6, 0))
-        self._thumb_event_name.trace_add("write", lambda *_: self._refresh_open_folder_btn())
-        self._refresh_open_folder_btn()
+        # Generate buttons
+        row_gen = QtWidgets.QHBoxLayout()
+        gen = QtWidgets.QPushButton("Generate Thumbnails")
+        gen.setObjectName("accent")
+        gen.clicked.connect(self._generate_thumbnails)
+        row_gen.addWidget(gen)
+        self._open_thumb_btn = QtWidgets.QPushButton("Open Output Folder")
+        self._open_thumb_btn.clicked.connect(self._open_thumbnail_folder)
+        row_gen.addWidget(self._open_thumb_btn)
+        row_gen.addStretch(1)
+        lay.addLayout(row_gen)
+        self._thumb_event_name.textChanged.connect(self._refresh_open_folder_btn)
 
         # VOD Names editor
-        lf_vod = self._make_collapsible_section(inner, "VOD Names")
+        self._build_vod_editor(lay)
+        lay.addStretch(1)
 
-        row_vod = ttk.Frame(lf_vod)
-        row_vod.pack(fill="x", pady=(0, 6))
-        ttk.Label(row_vod, text="File:").pack(side="left")
-        self._vod_file_var = tk.StringVar()
-        self._vod_file_box = ttk.Combobox(row_vod, textvariable=self._vod_file_var,
-                                           state="readonly", width=44)
-        self._vod_file_box.pack(side="left", padx=4)
-        ttk.Button(row_vod, text="↺", command=self._refresh_vod_files).pack(side="left")
+        self._refresh_thumbnail_events()
+        self._refresh_open_folder_btn()
 
-        vod_list_frame = ttk.Frame(lf_vod)
-        vod_list_frame.pack(fill="both", expand=True)
-        vod_vsb = ttk.Scrollbar(vod_list_frame)
-        vod_vsb.pack(side="right", fill="y")
-        self._vod_canvas = tk.Canvas(vod_list_frame, bg=_BG, highlightthickness=0, height=330)
-        self._vod_canvas.pack(fill="both", expand=True)
-        self._vod_canvas.configure(yscrollcommand=vod_vsb.set)
-        vod_vsb.config(command=self._vod_canvas.yview)
+    def _build_thumbnail_config(self, parent_layout):
+        cbox = CollapsibleBox("Thumbnail Config", collapsed=True)
+        parent_layout.addWidget(cbox)
 
-        self._vod_row_frame = tk.Frame(self._vod_canvas, bg=_BG)
-        _vod_win = self._vod_canvas.create_window((0, 0), window=self._vod_row_frame, anchor="nw")
-        self._setup_scrollable_canvas(self._vod_canvas, self._vod_row_frame, _vod_win)
-        self._vod_canvas.bind("<MouseWheel>",
-            lambda e: self._vod_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        self._cfg_series_label = _muted("No series selected")
+        cbox.addWidget(self._cfg_series_label)
 
-        self._vod_rows = []
+        self._cfg_line: dict[str, QtWidgets.QLineEdit] = {}
+        self._cfg_pos: dict[str, tuple[QtWidgets.QLineEdit, QtWidgets.QLineEdit]] = {}
+        self._cfg_color: dict[str, ColorField] = {}
 
-        vod_grip = tk.Frame(lf_vod, height=7, bg=_BG3, cursor="sb_v_double_arrow")
-        vod_grip.pack(fill="x", pady=(2, 0))
-        tk.Frame(vod_grip, height=2, bg=_FG).place(relx=0.5, rely=0.5, relwidth=0.08, anchor="center")
-        _vg = {"y": 0, "h": 0}
-        def _vg_start(e): _vg["y"] = e.y_root; _vg["h"] = self._vod_canvas.winfo_height()
-        def _vg_drag(e): self._vod_canvas.config(height=max(80, _vg["h"] + e.y_root - _vg["y"]))
-        vod_grip.bind("<Button-1>", _vg_start)
-        vod_grip.bind("<B1-Motion>", _vg_drag)
+        def grid():
+            g = QtWidgets.QGridLayout()
+            g.setHorizontalSpacing(6)
+            g.setVerticalSpacing(3)
+            return g
 
-        vod_btn_row = ttk.Frame(lf_vod)
-        vod_btn_row.pack(fill="x", pady=(6, 0))
-        ttk.Button(vod_btn_row, text="Save", command=self._save_vod_file).pack(side="left")
-        ttk.Button(vod_btn_row, text="Add Row", command=self._vod_add_new_row).pack(side="left", padx=(6, 0))
-        self._vod_delete_btn = ttk.Button(vod_btn_row, text="Delete Marked",
-                                           command=self._vod_delete_marked, state="disabled")
-        self._vod_delete_btn.pack(side="left", padx=(6, 0))
-        ttk.Button(vod_btn_row, text="Check All",
-                   command=lambda: self._vod_set_all(True)).pack(side="left", padx=(6, 0))
-        ttk.Button(vod_btn_row, text="Uncheck All",
-                   command=lambda: self._vod_set_all(False)).pack(side="left", padx=(6, 0))
+        # Background / Foreground / Font
+        g = grid()
+        g.addWidget(QtWidgets.QLabel("Background:"), 0, 0)
+        self._cfg_background = QtWidgets.QLineEdit()
+        g.addWidget(self._cfg_background, 0, 1)
+        bg_btn = QtWidgets.QPushButton("Browse…")
+        bg_btn.clicked.connect(lambda: self._browse_overlay(self._cfg_background))
+        g.addWidget(bg_btn, 0, 2)
+        g.addWidget(QtWidgets.QLabel("Foreground:"), 1, 0)
+        self._cfg_foreground = QtWidgets.QLineEdit()
+        g.addWidget(self._cfg_foreground, 1, 1)
+        fg_btn = QtWidgets.QPushButton("Browse…")
+        fg_btn.clicked.connect(lambda: self._browse_overlay(self._cfg_foreground))
+        g.addWidget(fg_btn, 1, 2)
+        g.addWidget(QtWidgets.QLabel("Font:"), 2, 0)
+        self._cfg_font = QtWidgets.QComboBox()
+        font_files = sorted(f.name for f in (ROOT / "Resources" / "Fonts").glob("*")
+                            if f.suffix.lower() in (".ttf", ".otf"))
+        self._cfg_font.addItems([""] + font_files)
+        g.addWidget(self._cfg_font, 2, 1)
+        cbox.addLayout(g)
 
-        self._vod_file_var.trace_add("write", lambda *_: self._load_vod_file())
-        self._thumb_series.trace_add("write", lambda *_: self._refresh_vod_files())
-        self._refresh_vod_files()
+        # Flags
+        rowf = QtWidgets.QHBoxLayout()
+        self._cfg_glow = QtWidgets.QCheckBox("Character Glow")
+        self._cfg_one_char = QtWidgets.QCheckBox("One Character Per Player")
+        rowf.addWidget(self._cfg_glow)
+        rowf.addSpacing(20)
+        rowf.addWidget(self._cfg_one_char)
+        rowf.addStretch(1)
+        cbox.addLayout(rowf)
 
-    def _refresh_vod_files(self):
-        vod_dir = ROOT / "Vod_Names"
-        series = self._thumb_series.get()
-        files = []
-        if vod_dir.exists():
-            for f in vod_dir.glob("*.txt"):
-                if not series or f.name.startswith(series):
-                    files.append(f)
+        # Char scale
+        rs = QtWidgets.QHBoxLayout()
+        rs.addWidget(QtWidgets.QLabel("Char Scale:"))
+        for lbl, key in [("1-char", "resize_1"), ("2-char", "resize_2"), ("3-char", "resize_3")]:
+            rs.addSpacing(8)
+            rs.addWidget(QtWidgets.QLabel(lbl))
+            e = _hline("", 60)
+            self._cfg_line[key] = e
+            rs.addWidget(e)
+        rs.addStretch(1)
+        cbox.addLayout(rs)
 
-        def _sort_key(p):
-            nums = re.findall(r'\d+', p.stem)
-            return (-int(nums[-1]) if nums else 0, p.stem)
+        # Position rows helper
+        def pos_row(label, *keys):
+            r = QtWidgets.QHBoxLayout()
+            lab = QtWidgets.QLabel(label)
+            lab.setFixedWidth(90)
+            r.addWidget(lab)
+            for k in keys:
+                xe, ye = _hline("", 60), _hline("", 60)
+                self._cfg_pos[k] = (xe, ye)
+                r.addWidget(QtWidgets.QLabel("x"))
+                r.addWidget(xe)
+                r.addWidget(QtWidgets.QLabel("y"))
+                r.addWidget(ye)
+                r.addSpacing(8)
+            r.addStretch(1)
+            cbox.addLayout(r)
 
-        files.sort(key=_sort_key)
-        names = [f.name for f in files]
-        current = self._vod_file_var.get()
-        self._vod_file_box["values"] = names
-        if names:
-            self._vod_file_var.set(current if current in names else names[0])
-        else:
-            self._vod_file_var.set("")
-            self._vod_clear_rows()
+        cbox.addWidget(_muted("Character Positions  (x, y — normalized -1 to 1):"))
+        pos_row("1-char:", "center_shift_1")
+        pos_row("2-char:", "center_shift_2_1", "center_shift_2_2")
+        pos_row("3-char:", "center_shift_3_1", "center_shift_3_2", "center_shift_3_3")
 
-    def _vod_clear_rows(self):
-        if hasattr(self, "_vod_load_job") and self._vod_load_job:
-            self.root.after_cancel(self._vod_load_job)
-            self._vod_load_job = None
-        for w in self._vod_row_frame.winfo_children():
-            w.destroy()
-        self._vod_rows.clear()
-        self._vod_update_delete_btn()
+        # Font sizes + angle
+        rsz = QtWidgets.QHBoxLayout()
+        rsz.addWidget(QtWidgets.QLabel("Font Sizes:"))
+        for lbl, key in [("P1", "font_player1_size"), ("P2", "font_player2_size"),
+                         ("Event", "font_event_size"), ("Round", "font_round_size")]:
+            rsz.addSpacing(8)
+            rsz.addWidget(QtWidgets.QLabel(lbl))
+            e = _hline("", 50)
+            self._cfg_line[key] = e
+            rsz.addWidget(e)
+        rsz.addSpacing(16)
+        rsz.addWidget(QtWidgets.QLabel("Angle°"))
+        e = _hline("", 45)
+        self._cfg_line["text_angle"] = e
+        rsz.addWidget(e)
+        rsz.addStretch(1)
+        cbox.addLayout(rsz)
 
-    def _vod_add_row(self, line_text: str):
-        row = tk.Frame(self._vod_row_frame, bg=_BG)
-        row.pack(fill="x")
+        # Colors
+        cbox.addWidget(_muted("Font Colors  (P1, P2, Event, Round):"))
+        rc = QtWidgets.QHBoxLayout()
+        for lbl, key in [("P1:", "font_color1"), ("P2:", "font_color2"),
+                         ("Event:", "font_color3"), ("Round:", "font_color4")]:
+            rc.addWidget(QtWidgets.QLabel(lbl))
+            cf = ColorField("#FFFFFF")
+            self._cfg_color[key] = cf
+            rc.addWidget(cf)
+            rc.addSpacing(12)
+        rc.addStretch(1)
+        cbox.addLayout(rc)
 
-        check_var = tk.IntVar(value=0)
-        text_var = tk.StringVar(value=line_text)
+        # Text label positions
+        cbox.addWidget(_muted("Text Label Positions  (x, y — normalized 0 to 1):"))
+        pos_row("Player 1:", "text_player1")
+        pos_row("Player 2:", "text_player2")
+        pos_row("Event:", "text_event")
+        pos_row("Round:", "text_round")
 
-        cb = tk.Checkbutton(row, variable=check_var,
-                            bg=_BG, activebackground=_BG, selectcolor=_BG2,
-                            relief="flat", bd=0, cursor="hand2")
-        cb.pack(side="left", padx=(4, 0))
+        # Char window
+        rcw = QtWidgets.QHBoxLayout()
+        lab = QtWidgets.QLabel("Char Window:")
+        lab.setFixedWidth(90)
+        rcw.addWidget(lab)
+        rcw.addWidget(QtWidgets.QLabel("w"))
+        cw_w = _hline("", 60)
+        rcw.addWidget(cw_w)
+        rcw.addWidget(QtWidgets.QLabel("h"))
+        cw_h = _hline("", 60)
+        rcw.addWidget(cw_h)
+        rcw.addStretch(1)
+        self._cfg_pos["char_window"] = (cw_w, cw_h)
+        cbox.addLayout(rcw)
 
-        copy_btn = ttk.Button(row, text="⎘", width=2,
-                              command=lambda v=text_var: self._vod_copy_text(v.get()))
-        copy_btn.pack(side="left", padx=(2, 2))
+        cbox.addWidget(_muted("Character Offsets  (x, y — normalized):"))
+        pos_row("P1 Offset:", "char_offset1")
+        pos_row("P2 Offset:", "char_offset2")
 
-        del_btn = ttk.Button(row, text="✕", width=2,
-                             command=lambda v=text_var: self._vod_delete_row(v))
-        del_btn.pack(side="left", padx=(0, 4))
+        # Event/round text options
+        rer = QtWidgets.QHBoxLayout()
+        self._cfg_single_text = QtWidgets.QCheckBox("Single Text Block")
+        rer.addWidget(self._cfg_single_text)
+        rer.addSpacing(20)
+        rer.addWidget(QtWidgets.QLabel("Separator:"))
+        self._cfg_text_split = _hline("", 110)
+        rer.addWidget(self._cfg_text_split)
+        rer.addStretch(1)
+        cbox.addLayout(rer)
+        cbox.addWidget(_muted(
+            "Single Text Block: renders the event name and round as one combined label.\n"
+            "Separator: the string placed between them, e.g. \" — \"."))
 
-        entry = tk.Entry(row, textvariable=text_var, bg=_BG, fg=_FG,
-                         insertbackground=_FG, font=("Consolas", 9),
-                         relief="flat", highlightthickness=0, bd=0)
-        entry.pack(side="left", fill="x", expand=True, pady=1)
+        # Save / clear
+        rcb = QtWidgets.QHBoxLayout()
+        save = QtWidgets.QPushButton("Save Config")
+        save.clicked.connect(self._save_thumbnail_config)
+        rcb.addWidget(save)
+        clear = QtWidgets.QPushButton("Clear Config")
+        clear.clicked.connect(self._clear_thumbnail_config)
+        rcb.addWidget(clear)
+        rcb.addStretch(1)
+        cbox.addLayout(rcb)
 
-        colored = [row, cb, entry]
+    # --- thumbnail config load/save ---
+    _CFG_FLOAT = ["resize_1", "resize_2", "resize_3"]
+    _CFG_INT = ["font_player1_size", "font_player2_size", "font_event_size",
+                "font_round_size", "text_angle"]
+    _CFG_POS = ["center_shift_1", "center_shift_2_1", "center_shift_2_2",
+                "center_shift_3_1", "center_shift_3_2", "center_shift_3_3",
+                "text_player1", "text_player2", "text_event", "text_round",
+                "char_offset1", "char_offset2", "char_window"]
+    _CFG_COLOR = ["font_color1", "font_color2", "font_color3", "font_color4"]
 
-        def _on_check():
-            color = "#1e3a5f" if check_var.get() else _BG
-            for w in colored:
-                w.config(bg=color)
-            cb.config(activebackground=color)
-            self._vod_update_delete_btn()
+    def _load_config_into_form(self, series: str):
+        self._cfg_series_label.setText(f"Editing: {series}" if series else "No series selected")
+        saved = self._event_configs.get(series, {})
+        base = _base_event_props(series)
+        cfg = {**base, **saved}
 
-        cb.config(command=_on_check)
+        self._cfg_background.setText(cfg.get("background_file", ""))
+        self._cfg_foreground.setText(cfg.get("foreground_file", ""))
+        font_path = cfg.get("font_location", "")
+        self._cfg_font.setCurrentText(Path(font_path).name if font_path else "")
+        self._cfg_glow.setChecked(bool(cfg.get("char_glow_bool", False)))
+        self._cfg_one_char.setChecked(bool(cfg.get("one_char_flag", False)))
 
-        def _wheel(e):
-            self._vod_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-        row.bind("<MouseWheel>", _wheel)
-        cb.bind("<MouseWheel>", _wheel)
+        for key in self._CFG_FLOAT + self._CFG_INT:
+            self._cfg_line[key].setText(str(cfg[key]) if key in cfg else "")
 
-        self._vod_rows.append({"check_var": check_var, "text_var": text_var,
-                               "row_frame": row, "recolor": _on_check, "entry": entry})
-
-    def _vod_copy_text(self, text: str):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        self._log(f"[Copied to clipboard: {text}]\n")
-
-    def _vod_delete_row(self, text_var: tk.StringVar):
-        row = next((r for r in self._vod_rows if r["text_var"] is text_var), None)
-        if row:
-            deleted = text_var.get()
-            row["row_frame"].destroy()
-            self._vod_rows.remove(row)
-            self._vod_canvas.configure(scrollregion=self._vod_canvas.bbox("all"))
-            self._vod_update_delete_btn()
-            self._log(f"[Deleted row: {deleted}]\n")
-
-    def _vod_delete_marked(self):
-        to_delete = [r for r in self._vod_rows if r["check_var"].get()]
-        for r in to_delete:
-            r["row_frame"].destroy()
-        self._vod_rows = [r for r in self._vod_rows if not r["check_var"].get()]
-        self._vod_canvas.configure(scrollregion=self._vod_canvas.bbox("all"))
-        self._vod_update_delete_btn()
-        if to_delete:
-            self._log(f"[Deleted {len(to_delete)} marked row(s)]\n")
-        else:
-            self._log("[No rows marked to delete]\n")
-
-    def _vod_add_new_row(self):
-        self._vod_add_row("")
-        self._vod_canvas.configure(scrollregion=self._vod_canvas.bbox("all"))
-        self._vod_canvas.yview_moveto(1.0)
-        new_row = self._vod_rows[-1]
-        new_row["entry"].focus_set()
-
-    def _vod_update_delete_btn(self):
-        btn = getattr(self, "_vod_delete_btn", None)
-        if btn is None:
-            return
-        any_checked = any(r["check_var"].get() for r in self._vod_rows)
-        btn.config(state="normal" if any_checked else "disabled")
-
-    def _vod_set_all(self, checked: bool):
-        for r in self._vod_rows:
-            r["check_var"].set(1 if checked else 0)
-            r["recolor"]()
-        self._vod_update_delete_btn()
-
-    def _load_vod_file(self):
-        self._vod_clear_rows()
-        # Cancel any in-progress batch load from a previous file selection
-        if hasattr(self, "_vod_load_job") and self._vod_load_job:
-            self.root.after_cancel(self._vod_load_job)
-            self._vod_load_job = None
-
-        name = self._vod_file_var.get()
-        if not name:
-            return
-        try:
-            content = (ROOT / "Vod_Names" / name).read_text(encoding="utf-8")
-        except Exception:
-            content = ""
-
-        lines = [l for l in content.splitlines() if l.strip()]
-        if not lines:
-            return
-
-        self._vod_loading_label = tk.Label(
-            self._vod_row_frame, text=f"Loading 0 / {len(lines)}…",
-            bg=_BG, fg=_MUTED, font=("Consolas", 9))
-        self._vod_loading_label.pack(anchor="w", padx=6)
-
-        self._vod_load_job = None
-        self._vod_canvas.yview_moveto(0)
-        self._vod_load_batch(lines, 0)
-
-    _VOD_BATCH = 20
-
-    def _vod_load_batch(self, lines: list, offset: int):
-        batch = lines[offset:offset + self._VOD_BATCH]
-        for line in batch:
-            self._vod_add_row(line)
-
-        done = offset + len(batch)
-        if hasattr(self, "_vod_loading_label") and self._vod_loading_label.winfo_exists():
-            if done < len(lines):
-                self._vod_loading_label.config(text=f"Loading {done} / {len(lines)}…")
-                self._vod_loading_label.lift()
+        for key in self._CFG_POS:
+            xe, ye = self._cfg_pos[key]
+            val = cfg.get(key)
+            if isinstance(val, (list, tuple)) and len(val) >= 2:
+                xe.setText(str(val[0]))
+                ye.setText(str(val[1]))
             else:
-                self._vod_loading_label.destroy()
+                xe.setText("")
+                ye.setText("")
 
-        if done < len(lines):
-            self._vod_load_job = self.root.after(0, self._vod_load_batch, lines, done)
-        else:
-            self._vod_load_job = None
+        for key in self._CFG_COLOR:
+            self._cfg_color[key].setValue(cfg.get(key, "#FFFFFF"))
 
-    def _save_vod_file(self):
-        name = self._vod_file_var.get()
-        if not name:
-            self._log("[Error: no VOD names file selected]\n")
+        self._cfg_single_text.setChecked(bool(cfg.get("event_round_single_text", False)))
+        self._cfg_text_split.setText(cfg.get("event_round_text_split", ""))
+
+    def _save_thumbnail_config(self):
+        series = self._thumb_series.currentText().strip()
+        if not series:
+            self._log("[Error: no series selected]\n")
             return
-        content = "\n".join(r["text_var"].get() for r in self._vod_rows)
-        (ROOT / "Vod_Names" / name).write_text(content, encoding="utf-8")
-        self._log(f"[Saved {name}]\n")
+        cfg: dict = {}
+        bg = self._cfg_background.text().strip()
+        fg = self._cfg_foreground.text().strip()
+        font_name = self._cfg_font.currentText().strip()
+        if bg:
+            cfg["background_file"] = bg
+        if fg:
+            cfg["foreground_file"] = fg
+        if font_name:
+            cfg["font_location"] = str(Path("Resources") / "Fonts" / font_name)
+        cfg["char_glow_bool"] = self._cfg_glow.isChecked()
+        cfg["one_char_flag"] = self._cfg_one_char.isChecked()
 
+        for key in self._CFG_FLOAT:
+            val = self._cfg_line[key].text().strip()
+            if val:
+                try:
+                    cfg[key] = float(val)
+                except ValueError:
+                    pass
+        for key in self._CFG_INT:
+            val = self._cfg_line[key].text().strip()
+            if val:
+                try:
+                    cfg[key] = int(val)
+                except ValueError:
+                    pass
+        for key in self._CFG_POS:
+            xe, ye = self._cfg_pos[key]
+            x, y = xe.text().strip(), ye.text().strip()
+            if x and y:
+                try:
+                    cfg[key] = [float(x), float(y)]
+                except ValueError:
+                    pass
+        for key in self._CFG_COLOR:
+            c = self._cfg_color[key].value()
+            if c:
+                cfg[key] = c
+
+        cfg["event_round_single_text"] = self._cfg_single_text.isChecked()
+        split = self._cfg_text_split.text()
+        if split:
+            cfg["event_round_text_split"] = split
+
+        self._event_configs[series] = cfg
+        self._save_event_configs()
+        self._log(f"[Config saved for \"{series}\"]\n")
+
+    def _clear_thumbnail_config(self):
+        series = self._thumb_series.currentText().strip()
+        if series in self._event_configs:
+            del self._event_configs[series]
+            self._save_event_configs()
+        self._cfg_background.clear()
+        self._cfg_foreground.clear()
+        self._cfg_font.setCurrentText("")
+        self._cfg_glow.setChecked(False)
+        self._cfg_one_char.setChecked(False)
+        for e in self._cfg_line.values():
+            e.clear()
+        for xe, ye in self._cfg_pos.values():
+            xe.clear()
+            ye.clear()
+        for cf in self._cfg_color.values():
+            cf.setValue("#FFFFFF")
+        self._cfg_single_text.setChecked(False)
+        self._cfg_text_split.clear()
+        self._log(f"[Config cleared for \"{series}\"]\n")
+
+    # --- thumbnail event wiring ---
     def _refresh_thumbnail_events(self):
         events = load_thumbnail_events()
         self._thumb_event_map = {name: tmpl for name, tmpl in events}
@@ -1187,36 +1376,63 @@ class RivalsGUI:
             if label and name_tmpl and label not in self._thumb_event_map:
                 self._thumb_event_map[label] = name_tmpl
                 names.append(label)
-        self._thumb_series_box["values"] = names
+        cur = self._thumb_series.currentText()
+        self._thumb_series.blockSignals(True)
+        self._thumb_series.clear()
+        self._thumb_series.addItems(names)
         if names:
-            last_series = self._settings.get("last_thumb_series")
-            if last_series in names:
-                self._thumb_series.set(last_series)
-            elif self._thumb_series.get() not in names:
-                self._thumb_series.set(names[0])
-        self._thumb_update_name()
+            last = self._settings.get("last_thumb_series")
+            if last in names:
+                self._thumb_series.setCurrentText(last)
+            elif cur in names:
+                self._thumb_series.setCurrentText(cur)
+            else:
+                self._thumb_series.setCurrentIndex(0)
+        self._thumb_series.blockSignals(False)
+        self._on_thumb_series_change()
+        # Keep Top 8 / Posts series lists in sync
+        if hasattr(self, "_top8_series"):
+            self._refresh_top8_series()
+
+    def _on_thumb_series_change(self):
+        series = self._thumb_series.currentText()
+        widgets = self._fetch_widgets.get(series)
+        if widgets:
+            self._thumb_num.setText(widgets["num"].text())
+        else:
+            custom = next((e for e in self._custom_events if e.get("label") == series), None)
+            if custom:
+                self._thumb_num.setText(custom.get("current_num", ""))
+            else:
+                saved = self._settings.get("last_event_nums", {}).get(series)
+                if saved:
+                    self._thumb_num.setText(saved)
+        self._update_thumb_name()
+        self._load_config_into_form(series)
+        self._refresh_vod_files()
+        self._save_settings()
+
+    def _update_thumb_name(self):
+        template = self._thumb_event_map.get(self._thumb_series.currentText(), "{n}")
+        self._thumb_event_name.setText(template.format(n=self._thumb_num.text().strip()))
+        self._save_settings()
 
     def _generate_thumbnails(self):
-        event_name = self._thumb_event_name.get().strip()
+        event_name = self._thumb_event_name.text().strip()
         if not event_name:
             self._log("[Error: event name is empty]\n")
             return
-        self._run([
-            PYTHON, str(ROOT / "Python_Scripts" / "generate_rivals_thumbnail.py"),
-            "-e", event_name, "-o", str(ROOT / "Vod_Names" / "missing.log"),
-        ], on_done=self._refresh_open_folder_btn)
+        self._run([PYTHON, str(ROOT / "Python_Scripts" / "generate_rivals_thumbnail.py"),
+                   "-e", event_name, "-o", str(ROOT / "Vod_Names" / "missing.log")],
+                  on_done=self._refresh_open_folder_btn)
 
     def _refresh_open_folder_btn(self):
-        """Enable the Open Output Folder button only if the folder exists."""
-        btn = getattr(self, "_open_thumb_folder_btn", None)
-        if btn is None:
-            return
-        event_name = self._thumb_event_name.get().strip()
+        event_name = self._thumb_event_name.text().strip()
         folder = ROOT / "Youtube_Thumbnails" / event_name
-        btn.config(state="normal" if event_name and folder.is_dir() else "disabled")
+        self._open_thumb_btn.setEnabled(bool(event_name) and folder.is_dir())
 
     def _open_thumbnail_folder(self):
-        folder = ROOT / "Youtube_Thumbnails" / self._thumb_event_name.get().strip()
+        folder = ROOT / "Youtube_Thumbnails" / self._thumb_event_name.text().strip()
         if not folder.is_dir():
             self._log(f"[Error: output folder not found: {folder}]\n")
             return
@@ -1225,13 +1441,10 @@ class RivalsGUI:
         except Exception as exc:
             self._log(f"[Error opening folder: {exc}]\n")
 
-    def _browse_overlay(self, path_var: tk.StringVar):
-        from tkinter import filedialog
-        import shutil
-        path = filedialog.askopenfilename(
-            title="Select overlay image",
-            filetypes=[("PNG files", "*.png"), ("Image files", "*.png *.jpg *.jpeg"), ("All files", "*.*")],
-        )
+    def _browse_overlay(self, target: QtWidgets.QLineEdit):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select overlay image", "",
+            "Images (*.png *.jpg *.jpeg);;All files (*.*)")
         if not path:
             return
         dest_dir = ROOT / "Resources" / "Overlays"
@@ -1239,487 +1452,262 @@ class RivalsGUI:
         dest = dest_dir / Path(path).name
         if Path(path).resolve() != dest.resolve():
             shutil.copy2(path, dest)
-        path_var.set(str(Path("Resources") / "Overlays" / Path(path).name))
+        target.setText(str(Path("Resources") / "Overlays" / Path(path).name))
 
-    def _pick_color(self, color_var: tk.StringVar, btn: tk.Button):
-        from tkinter import colorchooser
-        current = color_var.get().strip()
-        result = colorchooser.askcolor(color=current or "#FFFFFF", title="Pick color")
-        if result and result[1]:
-            color_var.set(result[1])
-            try:
-                btn.config(bg=result[1], activebackground=result[1])
-            except Exception:
-                pass
+    # --- VOD editor (virtualized table) ---
+    def _build_vod_editor(self, parent_layout):
+        cbox = CollapsibleBox("VOD Names", collapsed=False)
+        parent_layout.addWidget(cbox)
 
-    def _get_base_event_props(self, series: str) -> dict:
-        if _pg is None:
-            return {}
-        try:
-            if series.startswith('Straight Into The Abyss'):
-                return _pg.setGlobalsStraightIntoTheAbyss(series)
-            elif series.startswith('Immortal Fight Night'):
-                return _pg.setGlobalsIFN(series)
-            elif series.startswith('Super Fusion'):
-                return _pg.setGlobalsSuperFusion(series)
-            elif series.startswith('Twist of Fate'):
-                return _pg.setGlobalsTwistOfFate(series)
-            elif series.startswith('Clip It'):
-                return _pg.setGlobalsClipIt(series)
-            elif series.startswith('CR Clash'):
-                return _pg.setGlobalsCRClash(series)
-            elif series.startswith('CR Arcadian'):
-                return _pg.setGlobalsCRArcadian(series)
-            elif series.startswith('Quarantainment'):
-                return _pg.setGlobalsQuarantainment(series)
-            else:
-                return _pg.set_default_properties(series)
-        except Exception:
-            return {}
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("File:"))
+        self._vod_file = QtWidgets.QComboBox()
+        self._vod_file.setMinimumWidth(360)
+        row.addWidget(self._vod_file)
+        rb = QtWidgets.QPushButton("↺")
+        rb.setObjectName("tool")
+        rb.clicked.connect(self._refresh_vod_files)
+        row.addWidget(rb)
+        row.addStretch(1)
+        cbox.addLayout(row)
 
-    def _load_config_into_form(self, series: str):
-        self._cfg_series_label.config(text=f"Editing: {series}" if series else "No series selected")
-        saved = self._event_configs.get(series, {})
-        base  = self._get_base_event_props(series)
-        # Saved config overrides base defaults; base fills in anything not yet saved
-        cfg = {**base, **saved}
-        self._cfg_background.set(cfg.get("background_file", ""))
-        self._cfg_foreground.set(cfg.get("foreground_file", ""))
-        font_path = cfg.get("font_location", "")
-        self._cfg_font.set(Path(font_path).name if font_path else "")
-        self._cfg_glow.set(bool(cfg.get("char_glow_bool", False)))
-        self._cfg_one_char.set(bool(cfg.get("one_char_flag", False)))
-        self._cfg_resize_1.set(str(cfg["resize_1"]) if "resize_1" in cfg else "")
-        self._cfg_resize_2.set(str(cfg["resize_2"]) if "resize_2" in cfg else "")
-        self._cfg_resize_3.set(str(cfg["resize_3"]) if "resize_3" in cfg else "")
+        self._vod_model = VodModel()
+        self._vod_view = QtWidgets.QTableView()
+        self._vod_view.setModel(self._vod_model)
+        self._vod_view.setMinimumHeight(330)
+        self._vod_view.verticalHeader().setVisible(False)
+        self._vod_view.horizontalHeader().setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        self._vod_view.setColumnWidth(0, 30)
+        self._vod_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._vod_view.customContextMenuRequested.connect(self._vod_context_menu)
+        self._vod_model.dataChanged.connect(lambda *_: self._vod_update_delete_btn())
+        self._vod_model.modelReset.connect(self._vod_update_delete_btn)
+        cbox.addWidget(self._vod_view)
 
-        def _load_shift(x_attr, y_attr, key):
-            val = cfg.get(key)
-            if val is not None:
-                getattr(self, x_attr).set(str(val[0]))
-                getattr(self, y_attr).set(str(val[1]))
-            else:
-                getattr(self, x_attr).set("")
-                getattr(self, y_attr).set("")
+        rb2 = QtWidgets.QHBoxLayout()
+        save = QtWidgets.QPushButton("Save")
+        save.clicked.connect(self._save_vod_file)
+        rb2.addWidget(save)
+        addr = QtWidgets.QPushButton("Add Row")
+        addr.clicked.connect(self._vod_add_new_row)
+        rb2.addWidget(addr)
+        self._vod_delete_btn = QtWidgets.QPushButton("Delete Marked")
+        self._vod_delete_btn.setEnabled(False)
+        self._vod_delete_btn.clicked.connect(self._vod_delete_marked)
+        rb2.addWidget(self._vod_delete_btn)
+        ca = QtWidgets.QPushButton("Check All")
+        ca.clicked.connect(lambda: self._vod_model.set_all(True))
+        rb2.addWidget(ca)
+        ua = QtWidgets.QPushButton("Uncheck All")
+        ua.clicked.connect(lambda: self._vod_model.set_all(False))
+        rb2.addWidget(ua)
+        rb2.addStretch(1)
+        cbox.addLayout(rb2)
 
-        _load_shift("_cfg_shift_1_x",   "_cfg_shift_1_y",   "center_shift_1")
-        _load_shift("_cfg_shift_2_1_x", "_cfg_shift_2_1_y", "center_shift_2_1")
-        _load_shift("_cfg_shift_2_2_x", "_cfg_shift_2_2_y", "center_shift_2_2")
-        _load_shift("_cfg_shift_3_1_x", "_cfg_shift_3_1_y", "center_shift_3_1")
-        _load_shift("_cfg_shift_3_2_x", "_cfg_shift_3_2_y", "center_shift_3_2")
-        _load_shift("_cfg_shift_3_3_x", "_cfg_shift_3_3_y", "center_shift_3_3")
+        self._vod_file.currentTextChanged.connect(self._load_vod_file)
 
-        self._cfg_font_p1.set(str(cfg["font_player1_size"]) if "font_player1_size" in cfg else "")
-        self._cfg_font_p2.set(str(cfg["font_player2_size"]) if "font_player2_size" in cfg else "")
-        self._cfg_font_event.set(str(cfg["font_event_size"]) if "font_event_size" in cfg else "")
-        self._cfg_font_round.set(str(cfg["font_round_size"]) if "font_round_size" in cfg else "")
-        self._cfg_text_angle.set(str(cfg["text_angle"]) if "text_angle" in cfg else "")
-        for attr, btn_attr, key in [
-            ("_cfg_font_color1", "_cfg_color_btn1", "font_color1"),
-            ("_cfg_font_color2", "_cfg_color_btn2", "font_color2"),
-            ("_cfg_font_color3", "_cfg_color_btn3", "font_color3"),
-            ("_cfg_font_color4", "_cfg_color_btn4", "font_color4"),
-        ]:
-            c = cfg.get(key, "#FFFFFF")
-            getattr(self, attr).set(c)
-            try:
-                getattr(self, btn_attr).config(bg=c, activebackground=c)
-            except Exception:
-                pass
-
-        _load_shift("_cfg_text_p1_x", "_cfg_text_p1_y", "text_player1")
-        _load_shift("_cfg_text_p2_x", "_cfg_text_p2_y", "text_player2")
-        _load_shift("_cfg_text_ev_x", "_cfg_text_ev_y", "text_event")
-        _load_shift("_cfg_text_rd_x", "_cfg_text_rd_y", "text_round")
-
-        char_win = cfg.get("char_window")
-        if isinstance(char_win, (list, tuple)) and len(char_win) >= 2:
-            self._cfg_char_win_w.set(str(char_win[0]))
-            self._cfg_char_win_h.set(str(char_win[1]))
-        else:
-            self._cfg_char_win_w.set("")
-            self._cfg_char_win_h.set("")
-
-        _load_shift("_cfg_offset1_x", "_cfg_offset1_y", "char_offset1")
-        _load_shift("_cfg_offset2_x", "_cfg_offset2_y", "char_offset2")
-
-        self._cfg_single_text.set(bool(cfg.get("event_round_single_text", False)))
-        self._cfg_text_split.set(cfg.get("event_round_text_split", ""))
-
-    def _save_thumbnail_config(self):
-        series = self._thumb_series.get().strip()
-        if not series:
-            self._log("[Error: no series selected]\n")
+    def _vod_context_menu(self, pos):
+        idx = self._vod_view.indexAt(pos)
+        if not idx.isValid():
             return
-        cfg: dict = {}
-        bg = self._cfg_background.get().strip()
-        fg = self._cfg_foreground.get().strip()
-        font_name = self._cfg_font.get().strip()
-        if bg:
-            cfg["background_file"] = bg
-        if fg:
-            cfg["foreground_file"] = fg
-        if font_name:
-            cfg["font_location"] = str(Path("Resources") / "Fonts" / font_name)
-        cfg["char_glow_bool"] = self._cfg_glow.get()
-        cfg["one_char_flag"]  = self._cfg_one_char.get()
-        for attr, key in [
-            ("_cfg_resize_1", "resize_1"),
-            ("_cfg_resize_2", "resize_2"),
-            ("_cfg_resize_3", "resize_3"),
-        ]:
-            val = getattr(self, attr).get().strip()
-            if val:
-                try:
-                    cfg[key] = float(val)
-                except ValueError:
-                    pass
+        menu = QtWidgets.QMenu(self)
+        copy_act = menu.addAction("Copy line")
+        del_act = menu.addAction("Delete line")
+        act = menu.exec(self._vod_view.viewport().mapToGlobal(pos))
+        if act == copy_act:
+            QtWidgets.QApplication.clipboard().setText(self._vod_model.text_at(idx.row()))
+            self._log(f"[Copied to clipboard: {self._vod_model.text_at(idx.row())}]\n")
+        elif act == del_act:
+            self._vod_model.delete_row(idx.row())
+            self._vod_update_delete_btn()
 
-        def _save_shift(x_attr, y_attr, key):
-            x = getattr(self, x_attr).get().strip()
-            y = getattr(self, y_attr).get().strip()
-            if x and y:
-                try:
-                    cfg[key] = [float(x), float(y)]
-                except ValueError:
-                    pass
+    def _refresh_vod_files(self):
+        vod_dir = ROOT / "Vod_Names"
+        series = self._thumb_series.currentText()
+        files = []
+        if vod_dir.exists():
+            for f in vod_dir.glob("*.txt"):
+                if not series or f.name.startswith(series):
+                    files.append(f)
 
-        _save_shift("_cfg_shift_1_x",   "_cfg_shift_1_y",   "center_shift_1")
-        _save_shift("_cfg_shift_2_1_x", "_cfg_shift_2_1_y", "center_shift_2_1")
-        _save_shift("_cfg_shift_2_2_x", "_cfg_shift_2_2_y", "center_shift_2_2")
-        _save_shift("_cfg_shift_3_1_x", "_cfg_shift_3_1_y", "center_shift_3_1")
-        _save_shift("_cfg_shift_3_2_x", "_cfg_shift_3_2_y", "center_shift_3_2")
-        _save_shift("_cfg_shift_3_3_x", "_cfg_shift_3_3_y", "center_shift_3_3")
+        def _key(p):
+            nums = re.findall(r"\d+", p.stem)
+            return (-int(nums[-1]) if nums else 0, p.stem)
 
-        for attr, key in [
-            ("_cfg_font_p1",    "font_player1_size"),
-            ("_cfg_font_p2",    "font_player2_size"),
-            ("_cfg_font_event", "font_event_size"),
-            ("_cfg_font_round", "font_round_size"),
-        ]:
-            val = getattr(self, attr).get().strip()
-            if val:
-                try:
-                    cfg[key] = int(val)
-                except ValueError:
-                    pass
-        angle = self._cfg_text_angle.get().strip()
-        if angle:
-            try:
-                cfg["text_angle"] = int(angle)
-            except ValueError:
-                pass
-        for attr, key in [
-            ("_cfg_font_color1", "font_color1"),
-            ("_cfg_font_color2", "font_color2"),
-            ("_cfg_font_color3", "font_color3"),
-            ("_cfg_font_color4", "font_color4"),
-        ]:
-            c = getattr(self, attr).get().strip()
-            if c:
-                cfg[key] = c
+        files.sort(key=_key)
+        names = [f.name for f in files]
+        cur = self._vod_file.currentText()
+        self._vod_file.blockSignals(True)
+        self._vod_file.clear()
+        self._vod_file.addItems(names)
+        if names:
+            self._vod_file.setCurrentText(cur if cur in names else names[0])
+        self._vod_file.blockSignals(False)
+        if names:
+            self._load_vod_file()
+        else:
+            self._vod_model.load([])
 
-        _save_shift("_cfg_text_p1_x", "_cfg_text_p1_y", "text_player1")
-        _save_shift("_cfg_text_p2_x", "_cfg_text_p2_y", "text_player2")
-        _save_shift("_cfg_text_ev_x", "_cfg_text_ev_y", "text_event")
-        _save_shift("_cfg_text_rd_x", "_cfg_text_rd_y", "text_round")
+    def _load_vod_file(self):
+        name = self._vod_file.currentText()
+        if not name:
+            self._vod_model.load([])
+            return
+        try:
+            content = (ROOT / "Vod_Names" / name).read_text(encoding="utf-8")
+        except Exception:
+            content = ""
+        lines = [l for l in content.splitlines() if l.strip()]
+        self._vod_model.load(lines)
+        self._vod_update_delete_btn()
 
-        w = self._cfg_char_win_w.get().strip()
-        h = self._cfg_char_win_h.get().strip()
-        if w and h:
-            try:
-                cfg["char_window"] = [float(w), float(h)]
-            except ValueError:
-                pass
+    def _vod_add_new_row(self):
+        pos = self._vod_model.add_blank()
+        idx = self._vod_model.index(pos, 1)
+        self._vod_view.scrollTo(idx)
+        self._vod_view.setCurrentIndex(idx)
+        self._vod_view.edit(idx)
 
-        _save_shift("_cfg_offset1_x", "_cfg_offset1_y", "char_offset1")
-        _save_shift("_cfg_offset2_x", "_cfg_offset2_y", "char_offset2")
+    def _vod_delete_marked(self):
+        removed = self._vod_model.delete_marked()
+        if removed:
+            self._log(f"[Deleted {removed} marked row(s)]\n")
+        else:
+            self._log("[No rows marked to delete]\n")
+        self._vod_update_delete_btn()
 
-        cfg["event_round_single_text"] = self._cfg_single_text.get()
-        split = self._cfg_text_split.get()
-        if split:
-            cfg["event_round_text_split"] = split
+    def _vod_update_delete_btn(self):
+        if hasattr(self, "_vod_delete_btn"):
+            self._vod_delete_btn.setEnabled(self._vod_model.any_checked())
 
-        self._event_configs[series] = cfg
-        self._save_event_configs()
-        self._log(f"[Config saved for \"{series}\"]\n")
+    def _save_vod_file(self):
+        name = self._vod_file.currentText()
+        if not name:
+            self._log("[Error: no VOD names file selected]\n")
+            return
+        (ROOT / "Vod_Names" / name).write_text(self._vod_model.to_text(), encoding="utf-8")
+        self._log(f"[Saved {name}]\n")
 
-    def _clear_thumbnail_config(self):
-        series = self._thumb_series.get().strip()
-        if series in self._event_configs:
-            del self._event_configs[series]
-            self._save_event_configs()
-        self._cfg_background.set("")
-        self._cfg_foreground.set("")
-        self._cfg_font.set("")
-        self._cfg_glow.set(False)
-        self._cfg_one_char.set(False)
-        for attr in ("_cfg_resize_1", "_cfg_resize_2", "_cfg_resize_3",
-                     "_cfg_shift_1_x",   "_cfg_shift_1_y",
-                     "_cfg_shift_2_1_x", "_cfg_shift_2_1_y",
-                     "_cfg_shift_2_2_x", "_cfg_shift_2_2_y",
-                     "_cfg_shift_3_1_x", "_cfg_shift_3_1_y",
-                     "_cfg_shift_3_2_x", "_cfg_shift_3_2_y",
-                     "_cfg_shift_3_3_x", "_cfg_shift_3_3_y",
-                     "_cfg_font_p1", "_cfg_font_p2", "_cfg_font_event", "_cfg_font_round",
-                     "_cfg_text_angle"):
-            getattr(self, attr).set("")
-        for attr, btn_attr in [
-            ("_cfg_font_color1", "_cfg_color_btn1"),
-            ("_cfg_font_color2", "_cfg_color_btn2"),
-            ("_cfg_font_color3", "_cfg_color_btn3"),
-            ("_cfg_font_color4", "_cfg_color_btn4"),
-        ]:
-            getattr(self, attr).set("#FFFFFF")
-            try:
-                getattr(self, btn_attr).config(bg="#FFFFFF", activebackground="#FFFFFF")
-            except Exception:
-                pass
-        for attr in ("_cfg_text_p1_x", "_cfg_text_p1_y",
-                     "_cfg_text_p2_x", "_cfg_text_p2_y",
-                     "_cfg_text_ev_x", "_cfg_text_ev_y",
-                     "_cfg_text_rd_x", "_cfg_text_rd_y",
-                     "_cfg_char_win_w", "_cfg_char_win_h",
-                     "_cfg_offset1_x", "_cfg_offset1_y",
-                     "_cfg_offset2_x", "_cfg_offset2_y",
-                     "_cfg_text_split"):
-            getattr(self, attr).set("")
-        self._cfg_single_text.set(False)
-        self._log(f"[Config cleared for \"{series}\"]\n")
+    # ================================================================== #
+    #  Tab: Generate Top 8s                                             #
+    # ================================================================== #
+    def _build_top8_tab(self):
+        lay = self._scroll_tab("Generate Top 8s")
 
-    def _save_event_configs(self):
-        EVENT_CONFIGS_PATH.write_text(json.dumps(self._event_configs, indent=2), encoding="utf-8")
+        box = QtWidgets.QGroupBox("Event")
+        v = QtWidgets.QVBoxLayout(box)
+        row1 = QtWidgets.QHBoxLayout()
+        row1.addWidget(QtWidgets.QLabel("Series:"))
+        self._top8_series = QtWidgets.QComboBox()
+        self._top8_series.setMinimumWidth(220)
+        row1.addWidget(self._top8_series)
+        rb = QtWidgets.QPushButton("↺")
+        rb.setObjectName("tool")
+        rb.clicked.connect(self._refresh_top8_series)
+        row1.addWidget(rb)
+        row1.addStretch(1)
+        v.addLayout(row1)
+        row2 = QtWidgets.QHBoxLayout()
+        row2.addWidget(QtWidgets.QLabel("Event name:"))
+        self._top8_event_name = _muted("")
+        row2.addWidget(self._top8_event_name)
+        row2.addStretch(1)
+        v.addLayout(row2)
+        lay.addWidget(box)
 
-    def _make_collapsible_section(self, parent, title, fill="x", expand=False, pady=(0, 6), collapsed=False):
-        wrapper = ttk.Frame(parent)
-        wrapper.pack(fill=fill if not collapsed else "x",
-                     expand=expand if not collapsed else False,
-                     padx=10, pady=pady)
+        self._top8_series.currentTextChanged.connect(self._on_top8_change)
 
-        header = ttk.Frame(wrapper)
-        header.pack(fill="x")
+        # Text data editor
+        ctxt = CollapsibleBox("Top 8 Text Data", collapsed=False)
+        lay.addWidget(ctxt)
+        self._top8_text_path_label = _muted("")
+        ctxt.addWidget(self._top8_text_path_label)
+        self._top8_text = QtWidgets.QPlainTextEdit()
+        self._top8_text.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        self._top8_text.setMinimumHeight(320)
+        Top8DataHighlighter(self._top8_text.document())
+        ctxt.addWidget(self._top8_text)
+        save_txt = QtWidgets.QPushButton("Save")
+        save_txt.clicked.connect(self._save_top8_text)
+        ctxt.addWidget(save_txt)
 
-        btn = ttk.Button(header, text="▼" if not collapsed else "▶", width=2)
-        btn.pack(side="left", padx=(0, 4))
-        ttk.Label(header, text=title, style="TLabelframe.Label").pack(side="left")
-        ttk.Separator(header, orient="horizontal").pack(side="left", fill="x", expand=True, padx=(8, 0))
+        # HTML editor
+        chtml = CollapsibleBox("Top 8 HTML Result", collapsed=False)
+        lay.addWidget(chtml)
+        rowh = QtWidgets.QHBoxLayout()
+        rowh.addWidget(QtWidgets.QLabel("File:"))
+        self._top8_html_file = QtWidgets.QComboBox()
+        self._top8_html_file.setMinimumWidth(320)
+        rowh.addWidget(self._top8_html_file)
+        rbh = QtWidgets.QPushButton("↺")
+        rbh.setObjectName("tool")
+        rbh.clicked.connect(self._refresh_top8_html_files)
+        rowh.addWidget(rbh)
+        openb = QtWidgets.QPushButton("Open in Browser")
+        openb.clicked.connect(self._open_top8_html_in_browser)
+        rowh.addWidget(openb)
+        rowh.addStretch(1)
+        chtml.addLayout(rowh)
 
-        content = ttk.Frame(wrapper, padding=(0, 6, 0, 0))
-        if not collapsed:
-            content.pack(fill=fill, expand=expand)
+        self._top8_html_warning = QtWidgets.QLabel("")
+        self._top8_html_warning.setObjectName("warning")
+        self._top8_html_warning.setWordWrap(True)
+        chtml.addWidget(self._top8_html_warning)
+        chtml.addWidget(_muted(
+            "The HTML files are designed for OBS's fixed canvas, not for interactive browser viewing. "
+            "The browser preview is for spot-checking data (names, placements), not pixel-perfect layout. "
+            "Use Ctrl + + to zoom in, Ctrl+0 to reset."))
 
-        def _toggle():
-            if content.winfo_ismapped():
-                content.pack_forget()
-                btn.config(text="▶")
-                wrapper.pack_configure(fill="x", expand=False)
-            else:
-                content.pack(fill=fill, expand=expand)
-                btn.config(text="▼")
-                wrapper.pack_configure(fill=fill, expand=expand)
+        self._build_default_top8_config(chtml)
 
-        btn.config(command=_toggle)
+        chtml_src = CollapsibleBox("HTML Source", collapsed=True)
+        chtml.addWidget(chtml_src)
+        self._top8_html_text = QtWidgets.QPlainTextEdit()
+        self._top8_html_text.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        self._top8_html_text.setMinimumHeight(360)
+        HtmlHighlighter(self._top8_html_text.document())
+        chtml_src.addWidget(self._top8_html_text)
+        save_html = QtWidgets.QPushButton("Save")
+        save_html.clicked.connect(self._save_top8_html)
+        chtml_src.addWidget(save_html)
 
-        return content
+        self._top8_html_file.currentTextChanged.connect(self._load_top8_html)
+        self._d8_last_html_file = None
+        lay.addStretch(1)
 
-    def _add_resize_grip(self, parent, text_widget, min_rows=4):
-        """Add a draggable grip below a Text widget so the user can resize its height.
-
-        Dragging the grip up/down changes the widget's `height` (in rows). Used to make
-        the text-editing sections scalable inside the vertically-scrolling tab, where
-        `expand=True` alone can't grow a fixed-height Text widget.
-        """
-        grip = tk.Frame(parent, height=7, bg=_BG3, cursor="sb_v_double_arrow")
-        grip.pack(fill="x", pady=(2, 0))
-        # Visual affordance: a centered handle line so it reads as draggable.
-        tk.Frame(grip, height=2, bg=_FG).place(relx=0.5, rely=0.5, relwidth=0.08, anchor="center")
-
-        state = {"y": 0, "rows": 0, "line_px": 16}
-
-        def _start(event):
-            state["y"] = event.y_root
-            state["rows"] = int(text_widget.cget("height"))
-            try:
-                import tkinter.font as tkfont
-                state["line_px"] = max(1, tkfont.Font(font=text_widget.cget("font")).metrics("linespace"))
-            except Exception:
-                state["line_px"] = 16
-
-        def _drag(event):
-            delta_rows = (event.y_root - state["y"]) // state["line_px"]
-            new_rows = max(min_rows, state["rows"] + int(delta_rows))
-            if new_rows != int(text_widget.cget("height")):
-                text_widget.config(height=new_rows)
-
-        grip.bind("<Button-1>", _start)
-        grip.bind("<B1-Motion>", _drag)
-        return grip
-
-    # ------------------------------------------------------------------ #
-    #  Tab: Generate Top 8s                                              #
-    # ------------------------------------------------------------------ #
-    def _build_top8_tab(self, notebook: ttk.Notebook):
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Generate Top 8s")
-
-        # Scrollable container
-        _canvas = tk.Canvas(tab, bg=_BG, highlightthickness=0)
-        _vsb = ttk.Scrollbar(tab, orient="vertical", command=_canvas.yview)
-        _canvas.configure(yscrollcommand=_vsb.set)
-        _vsb.pack(side="right", fill="y")
-        _canvas.pack(side="left", fill="both", expand=True)
-
-        inner = ttk.Frame(_canvas)
-        _inner_win = _canvas.create_window((0, 0), window=inner, anchor="nw")
-        self._setup_scrollable_canvas(_canvas, inner, _inner_win)
-
-        def _on_mousewheel(event):
-            _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        _canvas.bind("<Enter>", lambda e: _canvas.bind_all("<MouseWheel>", _on_mousewheel))
-        _canvas.bind("<Leave>", lambda e: _canvas.unbind_all("<MouseWheel>"))
-
-        # Event selection
-        lf = ttk.LabelFrame(inner, text="Event", padding=(8, 8))
-        lf.pack(fill="x", padx=10, pady=10)
-
-        row1 = ttk.Frame(lf)
-        row1.pack(fill="x", pady=(0, 6))
-        ttk.Label(row1, text="Series:").pack(side="left")
-        self._top8_series = tk.StringVar()
-        self._top8_series_box = ttk.Combobox(
-            row1, textvariable=self._top8_series, state="readonly", width=26,
-        )
-        self._top8_series_box.pack(side="left", padx=(4, 4))
-        ttk.Button(row1, text="↺", command=self._refresh_top8_series).pack(side="left", padx=(0, 12))
-        ttk.Label(row1, text="# / Suffix:").pack(side="left")
-        self._top8_num = tk.StringVar()
-        ttk.Entry(row1, textvariable=self._top8_num, width=8).pack(side="left", padx=4)
-
-        row2 = ttk.Frame(lf)
-        row2.pack(fill="x")
-        ttk.Label(row2, text="Event name:").pack(side="left")
-        self._top8_event_name_label = ttk.Label(row2, text="", style="Muted.TLabel")
-        self._top8_event_name_label.pack(side="left", padx=4)
-
-        def _update_top8_name(*_):
-            template = self._thumb_event_map.get(self._top8_series.get(), self._top8_series.get())
-            name = template.format(n=self._top8_num.get().strip())
-            self._top8_event_name_label.config(text=name)
-
-        def _on_top8_event_change(*_):
-            _update_top8_name()
-            self._refresh_top8_files()
-
-        self._top8_series.trace_add("write", _on_top8_event_change)
-        self._top8_num.trace_add("write", _on_top8_event_change)
-
-        # Top 8 Text editor
-        lf_txt = self._make_collapsible_section(inner, "Top 8 Text Data")
-        self._top8_text_path_label = ttk.Label(lf_txt, text="", style="Muted.TLabel")
-        self._top8_text_path_label.pack(anchor="w", pady=(0, 4))
-
-        txt_inner = ttk.Frame(lf_txt)
-        txt_inner.pack(fill="both", expand=True)
-        txt_ysb = ttk.Scrollbar(txt_inner)
-        txt_ysb.pack(side="right", fill="y")
-        txt_xsb = ttk.Scrollbar(txt_inner, orient="horizontal")
-        txt_xsb.pack(side="bottom", fill="x")
-        self._top8_text = tk.Text(
-            txt_inner, height=22,
-            bg=_BG, fg=_FG, insertbackground=_FG,
-            font=("Consolas", 9), wrap="none",
-            relief="flat", highlightthickness=0,
-            yscrollcommand=txt_ysb.set,
-            xscrollcommand=txt_xsb.set,
-        )
-        self._top8_text.pack(side="left", fill="both", expand=True)
-        txt_ysb.config(command=self._top8_text.yview)
-        txt_xsb.config(command=self._top8_text.xview)
-        self._add_resize_grip(lf_txt, self._top8_text)
-        self._setup_text_data_highlighting(self._top8_text)
-        ttk.Button(lf_txt, text="Save", command=self._save_top8_text).pack(anchor="w", pady=(6, 0))
-
-        # Top 8 HTML editor
-        lf_html = self._make_collapsible_section(inner, "Top 8 HTML Result")
-        row_html = ttk.Frame(lf_html)
-        row_html.pack(fill="x", pady=(0, 6))
-        ttk.Label(row_html, text="File:").pack(side="left")
-        self._top8_html_file_var = tk.StringVar()
-        self._top8_html_file_box = ttk.Combobox(
-            row_html, textvariable=self._top8_html_file_var, state="readonly", width=40,
-        )
-        self._top8_html_file_box.pack(side="left", padx=4)
-        ttk.Button(row_html, text="↺", command=self._refresh_top8_html_files).pack(side="left", padx=(0, 6))
-        ttk.Button(row_html, text="Open in Browser", command=self._open_top8_html_in_browser).pack(side="left")
-
-        # Warning packed between file row and editor; use text="" to hide visually
-        self._top8_html_warning = ttk.Label(
-            lf_html, text="", foreground="#E08000",
-            wraplength=560, justify="left",
-        )
-        self._top8_html_warning.pack(anchor="w")
-
-        ttk.Label(
-            lf_html,
-            text=(
-                "The HTML files are designed for OBS's fixed canvas, not for interactive browser viewing. "
-                "The browser preview is really just for spot-checking the data (player names, placements, etc.) "
-                "rather than pixel-perfect layout review.\n\n"
-                "To see it closer to actual size in the browser you can hit Ctrl + + to zoom in, or Ctrl+0 to reset. "
-                "If you want a quick way to get back to ~actual size, you could also set the browser zoom to something "
-                "like 150–200% depending on your monitor scaling."
-            ),
-            style="Muted.TLabel", wraplength=620, justify="left",
-        ).pack(anchor="w", pady=(0, 6))
-
-        self._build_default_top8_config(lf_html)
-
-        lf_html_src = self._make_collapsible_section(lf_html, "HTML Source", collapsed=True)
-
-        html_inner = ttk.Frame(lf_html_src)
-        html_inner.pack(fill="both", expand=True)
-        html_ysb = ttk.Scrollbar(html_inner)
-        html_ysb.pack(side="right", fill="y")
-        html_xsb = ttk.Scrollbar(html_inner, orient="horizontal")
-        html_xsb.pack(side="bottom", fill="x")
-        self._top8_html_text = tk.Text(
-            html_inner, height=30,
-            bg=_BG, fg=_FG, insertbackground=_FG,
-            font=("Consolas", 9), wrap="none",
-            relief="flat", highlightthickness=0,
-            yscrollcommand=html_ysb.set,
-            xscrollcommand=html_xsb.set,
-        )
-        self._top8_html_text.pack(side="left", fill="both", expand=True)
-        html_ysb.config(command=self._top8_html_text.yview)
-        html_xsb.config(command=self._top8_html_text.xview)
-        self._add_resize_grip(lf_html_src, self._top8_html_text)
-        self._setup_html_highlighting(self._top8_html_text)
-        ttk.Button(lf_html_src, text="Save", command=self._save_top8_html).pack(anchor="w", pady=(6, 0))
-
-        self._top8_html_file_var.trace_add("write", lambda *_: self._schedule_load_top8_html())
-
-        # Populate series dropdown using the same event map as thumbnails tab
+        # Populate the Series dropdown (and cascade to event name + HTML files).
+        # The Thumbnails tab builds first and can't reach this tab yet, so the
+        # tab must seed its own dropdowns here.
         self._refresh_top8_series()
 
     def _refresh_top8_series(self):
         names = list(getattr(self, "_thumb_event_map", {}).keys())
-        self._top8_series_box["values"] = names
-        if names and self._top8_series.get() not in names:
-            self._top8_series.set(names[0])
+        cur = self._top8_series.currentText()
+        self._top8_series.blockSignals(True)
+        self._top8_series.clear()
+        self._top8_series.addItems(names)
+        if names:
+            self._top8_series.setCurrentText(cur if cur in names else names[0])
+        self._top8_series.blockSignals(False)
+        # Signals were blocked during the set above, so run the change handler
+        # explicitly to fill the event-name label and reload the files.
+        self._on_top8_change()
+
+    def _on_top8_change(self):
+        # The event-name label is filled from the loaded text file in _load_top8_text.
         self._refresh_top8_files()
 
-    def _get_top8_text_path(self) -> "Path":
-        if getattr(self, "_top8_html_file_var", None) and self._top8_html_file_var.get() == "Default Top 8.html":
+    def _get_top8_text_path(self) -> Path:
+        if self._top8_html_file.currentText() == "Default Top 8.html":
             return ROOT / "Top_8_Texts" / "Default Top 8 HTML.txt"
-        series = self._top8_series.get()
+        series = self._top8_series.currentText()
         for cfg in FETCH_EVENTS:
             if cfg["label"] == series:
                 return ROOT / "Top_8_Texts" / cfg["top8_file"]
         for entry in self._custom_events:
             if entry.get("label") == series:
-                fname = entry.get("top8_file", f"{series} Top 8 HTML.txt")
-                return ROOT / "Top_8_Texts" / fname
+                return ROOT / "Top_8_Texts" / entry.get("top8_file", f"{series} Top 8 HTML.txt")
         return ROOT / "Top_8_Texts" / f"{series} Top 8 HTML.txt"
 
     def _refresh_top8_files(self):
@@ -1728,190 +1716,165 @@ class RivalsGUI:
 
     def _load_top8_text(self):
         path = self._get_top8_text_path()
-        self._top8_text_path_label.config(text=str(path.relative_to(ROOT)) if path.is_absolute() else str(path))
+        try:
+            rel = str(path.relative_to(ROOT))
+        except ValueError:
+            rel = str(path)
+        self._top8_text_path_label.setText(rel)
         if not path.exists():
-            series = self._top8_series.get()
+            series = self._top8_series.currentText()
             template = self._thumb_event_map.get(series, series)
-            event_name = template.format(n=self._top8_num.get().strip())
+            event_name = template.format(n="").strip()
             content = (
-                "# Top 8 Graphic\n"
-                "# All information is tab deliminated\n\n"
+                "# Top 8 Graphic\n# All information is tab deliminated\n\n"
                 "#Graphic Information\n"
                 f"Event name:\t{event_name}\n"
-                "Event link:\t\n"
-                "Event entrants:\t Competitors\n"
-                "Event date:\t\n\n"
-                "# Placements\n"
-                "# place, name, sponsor, characters\n"
+                "Event link:\t\nEvent entrants:\t Competitors\nEvent date:\t\n\n"
+                "# Placements\n# place, name, sponsor, characters\n"
                 "1,,,\n2,,,\n3,,,\n4,,,\n5,,,\n5,,,\n7,,,\n7,,,"
             )
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
             self._log(f"[Auto-created {path.name}]\n")
-        self._top8_text.config(state="normal")
-        self._top8_text.delete("1.0", "end")
-        self._top8_text.insert("end", path.read_text(encoding="utf-8"))
-        self._top8_text.config(state="normal")
-        self._highlight_text_data(self._top8_text)
+        content = path.read_text(encoding="utf-8")
+        self._top8_text.setPlainText(content)
+        # Event-name preview reflects the file's own "Event name:" field.
+        m = re.search(r'(?m)^Event name:\t*(.*)$', content)
+        self._top8_event_name.setText(
+            m.group(1).strip() if m and m.group(1).strip()
+            else self._top8_series.currentText())
 
     def _save_top8_text(self):
         path = self._get_top8_text_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self._top8_text.get("1.0", "end-1c"), encoding="utf-8")
+        path.write_text(self._top8_text.toPlainText(), encoding="utf-8")
         self._log(f"[Saved {path.name}]\n")
 
     def _refresh_top8_html_files(self):
         results_dir = ROOT / "Top_8_Results"
-        series = self._top8_series.get()
+        series = self._top8_series.currentText()
         all_files = sorted(f.name for f in results_dir.glob("*.html")) if results_dir.exists() else []
-        files = [f for f in all_files if f.startswith(series) or f == "Default Top 8.html"]
-        self._top8_html_file_box["values"] = files
+        # List the event's own files first; keep the generic Default last.
+        series_files = [f for f in all_files if f.startswith(series)]
+        files = series_files + (["Default Top 8.html"] if "Default Top 8.html" in all_files else [])
+        cur = self._top8_html_file.currentText()
+        self._top8_html_file.blockSignals(True)
+        self._top8_html_file.clear()
+        self._top8_html_file.addItems(files)
+        self._top8_html_file.blockSignals(False)
         if files:
-            self._top8_html_warning.config(text="")
-            if self._top8_html_file_var.get() not in files:
-                self._top8_html_file_var.set(files[0])
+            self._top8_html_warning.setText("")
+            # Default to the event's own Top 8 file when present, falling back to
+            # Default only if the event has no file of its own. Keep an explicit
+            # event-file choice the user already made.
+            if cur in series_files:
+                sel = cur
+            elif series_files:
+                top8 = [f for f in series_files if "Top 8" in f]
+                sel = top8[-1] if top8 else series_files[-1]
             else:
-                self._load_top8_html()
+                sel = files[0]
+            self._top8_html_file.setCurrentText(sel)
+            self._load_top8_html()
         else:
-            self._top8_html_file_var.set("")
-            self._top8_html_text.config(state="normal")
-            self._top8_html_text.delete("1.0", "end")
-            self._top8_html_warning.config(
-                text="⚠ No Top 8 HTML file found in Top_8_Results/. "
-                     "Create one by copying an existing template."
-            )
-
-    def _schedule_load_top8_html(self):
-        if hasattr(self, "_top8_html_load_job") and self._top8_html_load_job:
-            self.root.after_cancel(self._top8_html_load_job)
-        self._top8_html_load_job = self.root.after(80, self._load_top8_html)
+            self._top8_html_text.clear()
+            self._top8_html_warning.setText(
+                "⚠ No Top 8 HTML file found in Top_8_Results/. "
+                "Create one by copying an existing template.")
 
     def _load_top8_html(self):
-        self._top8_html_load_job = None
-        name = self._top8_html_file_var.get()
+        name = self._top8_html_file.currentText()
         if not name:
             return
         path = ROOT / "Top_8_Results" / name
         if not path.exists():
             return
-
-        self._top8_html_text.config(state="normal")
-        self._top8_html_text.delete("1.0", "end")
-        self._top8_html_text.insert("end", path.read_text(encoding="utf-8"))
-        self._schedule_highlight(self._top8_html_text, self._highlight_html)
-
-        if name != getattr(self, "_d8_last_html_file", None):
+        self._top8_html_text.setPlainText(path.read_text(encoding="utf-8"))
+        if name != self._d8_last_html_file:
             self._d8_last_html_file = name
             self._load_default_top8_config()
             self._load_top8_text()
 
     def _save_top8_html(self):
-        name = self._top8_html_file_var.get()
+        name = self._top8_html_file.currentText()
         if not name:
             self._log("[Error: no HTML file selected]\n")
             return
         path = ROOT / "Top_8_Results" / name
-        path.write_text(self._top8_html_text.get("1.0", "end-1c"), encoding="utf-8")
+        path.write_text(self._top8_html_text.toPlainText(), encoding="utf-8")
         self._log(f"[Saved {name}]\n")
 
-    # ------------------------------------------------------------------ #
-    #  Default Top 8 layout config form                                    #
-    # ------------------------------------------------------------------ #
-    def _build_default_top8_config(self, parent):
-        import re as _re
-        frame = self._make_collapsible_section(parent, "Layout Config", collapsed=True)
+    # --- Default Top 8 layout config ---
+    def _build_default_top8_config(self, parent_box):
+        cbox = CollapsibleBox("Layout Config", collapsed=True)
+        parent_box.addWidget(cbox)
 
-        self._d8_label_color   = tk.StringVar()
-        self._d8_sponsor_color = tk.StringVar()
-        self._d8_event = [
-            {"top": tk.StringVar(), "left": tk.StringVar(), "size": tk.StringVar(), "color": tk.StringVar()}
-            if i == 0 else
-            {"top": tk.StringVar(), "left": tk.StringVar(), "size": tk.StringVar()}
-            for i in range(4)
-        ]
-        self._d8_renders  = [{"top": tk.StringVar(), "left": tk.StringVar(), "height": tk.StringVar()} for _ in range(8)]
-        self._d8_nums     = [{"top": tk.StringVar(), "left": tk.StringVar(), "size": tk.StringVar()} for _ in range(8)]
-        self._d8_names    = [{"top": tk.StringVar(), "left": tk.StringVar(), "size": tk.StringVar()} for _ in range(8)]
-        self._d8_sponsors = [{"top": tk.StringVar(), "left": tk.StringVar(), "size": tk.StringVar()} for _ in range(8)]
-
-        def _color_btn(p, var):
-            btn = tk.Button(p, text="  ", width=2, relief="flat", cursor="hand2", bg=_BG3)
-            def _pick():
-                from tkinter import colorchooser
-                c = colorchooser.askcolor(color=var.get() or None, parent=p)
-                if c and c[1]:
-                    var.set(c[1])
-            def _sync(*_):
-                try:
-                    btn.config(bg=var.get())
-                except Exception:
-                    pass
-            btn.config(command=_pick)
-            var.trace_add("write", _sync)
-            return btn
-
-        def _entry(p, var, w=6):
-            return ttk.Entry(p, textvariable=var, width=w)
+        self._d8_label_color = ColorField("#ffffff")
+        self._d8_sponsor_color = ColorField("#FFD700")
+        self._d8_event = []
+        for i in range(4):
+            d = {"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60)}
+            if i == 0:
+                d["color"] = ColorField("#ffffff")
+            self._d8_event.append(d)
+        self._d8_renders = [{"top": _hline("", 60), "left": _hline("", 60), "height": _hline("", 60)} for _ in range(8)]
+        self._d8_nums = [{"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60)} for _ in range(8)]
+        self._d8_names = [{"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60)} for _ in range(8)]
+        self._d8_sponsors = [{"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60)} for _ in range(8)]
 
         # Colors
-        lf_col = ttk.LabelFrame(frame, text="Colors", padding=(6, 4))
-        lf_col.pack(fill="x", pady=(0, 6))
-        row = ttk.Frame(lf_col)
-        row.pack(anchor="w")
-        ttk.Label(row, text="Label:").pack(side="left")
-        _entry(row, self._d8_label_color, 8).pack(side="left", padx=(4, 2))
-        _color_btn(row, self._d8_label_color).pack(side="left", padx=(0, 20))
-        ttk.Label(row, text="Sponsor:").pack(side="left")
-        _entry(row, self._d8_sponsor_color, 8).pack(side="left", padx=(4, 2))
-        _color_btn(row, self._d8_sponsor_color).pack(side="left")
+        colbox = QtWidgets.QGroupBox("Colors")
+        ch = QtWidgets.QHBoxLayout(colbox)
+        ch.addWidget(QtWidgets.QLabel("Label:"))
+        ch.addWidget(self._d8_label_color)
+        ch.addSpacing(20)
+        ch.addWidget(QtWidgets.QLabel("Sponsor:"))
+        ch.addWidget(self._d8_sponsor_color)
+        ch.addStretch(1)
+        cbox.addWidget(colbox)
 
-        # Event Info
-        lf_evt = ttk.LabelFrame(frame, text="Event Info", padding=(6, 4))
-        lf_evt.pack(fill="x", pady=(0, 6))
-        hdr = ttk.Frame(lf_evt)
-        hdr.pack(fill="x")
-        for ci, (txt, w) in enumerate([("", 9), ("Top %", 6), ("Left %", 6), ("Size px", 7), ("Color", 9)]):
-            ttk.Label(hdr, text=txt, style="Muted.TLabel", width=w).grid(row=0, column=ci, padx=2, sticky="w")
+        # Event info
+        evbox = QtWidgets.QGroupBox("Event Info")
+        eg = QtWidgets.QGridLayout(evbox)
+        for ci, txt in enumerate(["", "Top %", "Left %", "Size px", "Color"]):
+            eg.addWidget(_muted(txt), 0, ci)
         for i, lbl in enumerate(["Name", "Link", "Entrants", "Date"]):
-            r = ttk.Frame(lf_evt)
-            r.pack(fill="x", pady=1)
             f = self._d8_event[i]
-            ttk.Label(r, text=lbl + ":", width=9).grid(row=0, column=0, padx=2, sticky="w")
-            _entry(r, f["top"]).grid(row=0, column=1, padx=2)
-            _entry(r, f["left"]).grid(row=0, column=2, padx=2)
-            _entry(r, f["size"], 7).grid(row=0, column=3, padx=2)
+            eg.addWidget(QtWidgets.QLabel(lbl + ":"), i + 1, 0)
+            eg.addWidget(f["top"], i + 1, 1)
+            eg.addWidget(f["left"], i + 1, 2)
+            eg.addWidget(f["size"], i + 1, 3)
             if "color" in f:
-                _entry(r, f["color"], 9).grid(row=0, column=4, padx=2)
-                _color_btn(r, f["color"]).grid(row=0, column=5, padx=2)
+                eg.addWidget(f["color"], i + 1, 4)
+        eg.setColumnStretch(5, 1)  # absorb slack so fields stay left-packed
+        cbox.addWidget(evbox)
 
-        def _slot_section(title, vars_list, col3_lbl, key3):
-            lf = ttk.LabelFrame(frame, text=title, padding=(6, 4))
-            lf.pack(fill="x", pady=(0, 6))
-            hdr = ttk.Frame(lf)
-            hdr.pack(fill="x")
-            for ci, (txt, w) in enumerate([("Place", 5), ("Top %", 6), ("Left %", 6), (col3_lbl, 7)]):
-                ttk.Label(hdr, text=txt, style="Muted.TLabel", width=w).grid(row=0, column=ci, padx=3, sticky="w")
+        def slot_section(title, vars_list, col3_lbl):
+            gb = QtWidgets.QGroupBox(title)
+            g = QtWidgets.QGridLayout(gb)
+            for ci, txt in enumerate(["Place", "Top %", "Left %", col3_lbl]):
+                g.addWidget(_muted(txt), 0, ci)
             for i, f in enumerate(vars_list):
-                r = ttk.Frame(lf)
-                r.pack(fill="x", pady=1)
-                ttk.Label(r, text=str(i + 1), width=5).grid(row=0, column=0, padx=3, sticky="w")
-                _entry(r, f["top"]).grid(row=0, column=1, padx=3)
-                _entry(r, f["left"]).grid(row=0, column=2, padx=3)
-                _entry(r, f[key3], 7).grid(row=0, column=3, padx=3)
+                g.addWidget(QtWidgets.QLabel(str(i + 1)), i + 1, 0)
+                g.addWidget(f["top"], i + 1, 1)
+                g.addWidget(f["left"], i + 1, 2)
+                third = "height" if "height" in f else "size"
+                g.addWidget(f[third], i + 1, 3)
+            g.setColumnStretch(4, 1)  # absorb slack so fields stay left-packed
+            cbox.addWidget(gb)
 
-        _slot_section("Character Renders", self._d8_renders,  "Height %", "height")
-        _slot_section("Placement Numbers", self._d8_nums,     "Size px",  "size")
-        _slot_section("Player Names",      self._d8_names,    "Size px",  "size")
-        _slot_section("Sponsors",          self._d8_sponsors, "Size px",  "size")
+        slot_section("Character Renders", self._d8_renders, "Height %")
+        slot_section("Placement Numbers", self._d8_nums, "Size px")
+        slot_section("Player Names", self._d8_names, "Size px")
+        slot_section("Sponsors", self._d8_sponsors, "Size px")
 
-        ttk.Button(frame, text="Apply Config", command=self._apply_default_top8_config,
-                   style="Accent.TButton").pack(anchor="w", pady=(6, 0))
-
-        self._d8_config_frame = frame
+        apply_btn = QtWidgets.QPushButton("Apply Config")
+        apply_btn.setObjectName("accent")
+        apply_btn.clicked.connect(self._apply_default_top8_config)
+        cbox.addWidget(apply_btn)
 
     def _load_default_top8_config(self):
-        import re
-        html = self._top8_html_text.get("1.0", "end-1c")
+        html = self._top8_html_text.toPlainText()
 
         def get_style(elem_id):
             m = re.search(rf'id="{re.escape(elem_id)}"[^>]*?style="([^"]*)"', html)
@@ -1926,58 +1889,54 @@ class RivalsGUI:
             return m.group(1) if m else ""
 
         m = re.search(r'#canvas \.label \{[^}]*color:\s*(#[0-9a-fA-F]+)', html, re.DOTALL)
-        self._d8_label_color.set(m.group(1) if m else "#ffffff")
+        self._d8_label_color.setValue(m.group(1) if m else "#ffffff")
         m = re.search(r'#canvas \.sponsor \{[^}]*color:\s*(#[0-9a-fA-F]+)', html, re.DOTALL)
-        self._d8_sponsor_color.set(m.group(1) if m else "#FFD700")
+        self._d8_sponsor_color.setValue(m.group(1) if m else "#FFD700")
 
         for i, eid in enumerate(["event-name", "event-link", "event-entrants", "event-date"]):
             s = get_style(eid)
             f = self._d8_event[i]
-            f["top"].set(num_prop(s, "top"))
-            f["left"].set(num_prop(s, "left"))
-            f["size"].set(num_prop(s, "font-size"))
+            f["top"].setText(num_prop(s, "top"))
+            f["left"].setText(num_prop(s, "left"))
+            f["size"].setText(num_prop(s, "font-size"))
             if "color" in f:
-                f["color"].set(color_prop(s) or "#ffffff")
+                f["color"].setValue(color_prop(s) or "#ffffff")
 
         for i in range(8):
             n = i + 1
             s = get_style(f"place-{n}-render")
-            self._d8_renders[i]["top"].set(num_prop(s, "top"))
-            self._d8_renders[i]["left"].set(num_prop(s, "left"))
-            self._d8_renders[i]["height"].set(num_prop(s, "height"))
-
+            self._d8_renders[i]["top"].setText(num_prop(s, "top"))
+            self._d8_renders[i]["left"].setText(num_prop(s, "left"))
+            self._d8_renders[i]["height"].setText(num_prop(s, "height"))
             s = get_style(f"place-{n}-num")
-            self._d8_nums[i]["top"].set(num_prop(s, "top"))
-            self._d8_nums[i]["left"].set(num_prop(s, "left"))
-            self._d8_nums[i]["size"].set(num_prop(s, "font-size"))
-
+            self._d8_nums[i]["top"].setText(num_prop(s, "top"))
+            self._d8_nums[i]["left"].setText(num_prop(s, "left"))
+            self._d8_nums[i]["size"].setText(num_prop(s, "font-size"))
             s = get_style(f"place-{n}-name")
-            self._d8_names[i]["top"].set(num_prop(s, "top"))
-            self._d8_names[i]["left"].set(num_prop(s, "left"))
-            self._d8_names[i]["size"].set(num_prop(s, "font-size"))
-
+            self._d8_names[i]["top"].setText(num_prop(s, "top"))
+            self._d8_names[i]["left"].setText(num_prop(s, "left"))
+            self._d8_names[i]["size"].setText(num_prop(s, "font-size"))
             s = get_style(f"place-{n}-sponsor")
-            self._d8_sponsors[i]["top"].set(num_prop(s, "top"))
-            self._d8_sponsors[i]["left"].set(num_prop(s, "left"))
-            self._d8_sponsors[i]["size"].set(num_prop(s, "font-size"))
+            self._d8_sponsors[i]["top"].setText(num_prop(s, "top"))
+            self._d8_sponsors[i]["left"].setText(num_prop(s, "left"))
+            self._d8_sponsors[i]["size"].setText(num_prop(s, "font-size"))
 
     def _apply_default_top8_config(self):
-        import re
-        html = self._top8_html_text.get("1.0", "end-1c")
+        html = self._top8_html_text.toPlainText()
 
         def patch_style(h, elem_id, props):
             def repl(m):
                 style = m.group(2)
                 for prop, val, unit in props:
                     if unit == "color":
-                        style = re.sub(rf'(color:\s*)#[0-9a-fA-F]+', rf'\g<1>{val}', style)
+                        style = re.sub(r'(color:\s*)#[0-9a-fA-F]+', rf'\g<1>{val}', style)
                     elif unit in ("%", "px"):
                         style = re.sub(rf'({re.escape(prop)}:\s*)[\d.]+({re.escape(unit)})', rf'\g<1>{val}\2', style)
                 return m.group(1) + style + '"'
             return re.sub(rf'(id="{re.escape(elem_id)}"[^>]*?style=")([^"]*)"', repl, h)
 
-        label_color   = self._d8_label_color.get()
-        sponsor_color = self._d8_sponsor_color.get()
+        label_color = self._d8_label_color.value()
+        sponsor_color = self._d8_sponsor_color.value()
         html = re.sub(r'(#canvas \.label \{[^}]*color:\s*)#[0-9a-fA-F]+',
                       rf'\g<1>{label_color}', html, flags=re.DOTALL)
         html = re.sub(r'(#canvas \.sponsor \{[^}]*color:\s*)#[0-9a-fA-F]+',
@@ -1985,326 +1944,155 @@ class RivalsGUI:
 
         for i, eid in enumerate(["event-name", "event-link", "event-entrants", "event-date"]):
             f = self._d8_event[i]
-            props = [("top", f["top"].get(), "%"), ("left", f["left"].get(), "%"),
-                     ("font-size", f["size"].get(), "px")]
+            props = [("top", f["top"].text(), "%"), ("left", f["left"].text(), "%"),
+                     ("font-size", f["size"].text(), "px")]
             if "color" in f:
-                props.append(("color", f["color"].get(), "color"))
+                props.append(("color", f["color"].value(), "color"))
             html = patch_style(html, eid, props)
 
         for i in range(8):
             n = i + 1
             f = self._d8_renders[i]
             html = patch_style(html, f"place-{n}-render", [
-                ("top", f["top"].get(), "%"), ("left", f["left"].get(), "%"),
-                ("height", f["height"].get(), "%"),
-            ])
+                ("top", f["top"].text(), "%"), ("left", f["left"].text(), "%"),
+                ("height", f["height"].text(), "%")])
             f = self._d8_nums[i]
             html = patch_style(html, f"place-{n}-num", [
-                ("top", f["top"].get(), "%"), ("left", f["left"].get(), "%"),
-                ("font-size", f["size"].get(), "px"),
-            ])
+                ("top", f["top"].text(), "%"), ("left", f["left"].text(), "%"),
+                ("font-size", f["size"].text(), "px")])
             f = self._d8_names[i]
             html = patch_style(html, f"place-{n}-name", [
-                ("top", f["top"].get(), "%"), ("left", f["left"].get(), "%"),
-                ("font-size", f["size"].get(), "px"),
-            ])
+                ("top", f["top"].text(), "%"), ("left", f["left"].text(), "%"),
+                ("font-size", f["size"].text(), "px")])
             f = self._d8_sponsors[i]
             html = patch_style(html, f"place-{n}-sponsor", [
-                ("top", f["top"].get(), "%"), ("left", f["left"].get(), "%"),
-                ("font-size", f["size"].get(), "px"),
-            ])
+                ("top", f["top"].text(), "%"), ("left", f["left"].text(), "%"),
+                ("font-size", f["size"].text(), "px")])
 
-        self._top8_html_text.delete("1.0", "end")
-        self._top8_html_text.insert("end", html)
-        self._highlight_html(self._top8_html_text)
+        self._top8_html_text.setPlainText(html)
         self._log("[Default config applied — click Save to write to disk]\n")
 
-    # ------------------------------------------------------------------ #
-    #  Syntax highlighting for the Top 8 editors                          #
-    # ------------------------------------------------------------------ #
-    # Both editors are plain tk.Text widgets; we colour them with tags    #
-    # that are re-applied on load and (debounced) on every keystroke.     #
-    def _setup_text_data_highlighting(self, widget: tk.Text):
-        """Configure tags + key binding for the tab-delimited data editor."""
-        # Created low→high priority so a comment always wins on overlap
-        # (key < number < comment).
-        widget.tag_configure("key", foreground=_SYN_KEY)
-        widget.tag_configure("number", foreground=_SYN_NUMBER)
-        widget.tag_configure("comment", foreground=_SYN_COMMENT)
-        widget.bind(
-            "<KeyRelease>",
-            lambda _e: self._schedule_highlight(widget, self._highlight_text_data),
-        )
-
-    def _setup_html_highlighting(self, widget: tk.Text):
-        """Configure tags + key binding for the HTML editor."""
-        # Created low→high priority so later tags win on overlap
-        # (tag name < attr < string < comment).
-        widget.tag_configure("tag", foreground=_SYN_TAG)
-        widget.tag_configure("attr", foreground=_SYN_KEY)
-        widget.tag_configure("string", foreground=_SYN_STRING)
-        widget.tag_configure("comment", foreground=_SYN_COMMENT)
-        widget.bind(
-            "<KeyRelease>",
-            lambda _e: self._schedule_highlight(widget, self._highlight_html),
-        )
-
-    def _schedule_highlight(self, widget: tk.Text, func):
-        """Debounce re-highlighting so typing in large files stays smooth."""
-        job = getattr(widget, "_hl_job", None)
-        if job is not None:
-            try:
-                widget.after_cancel(job)
-            except Exception:
-                pass
-        widget._hl_job = widget.after(150, lambda: func(widget))
-
-    @staticmethod
-    def _apply_tag(widget: tk.Text, tag: str, start: int, end: int):
-        """Tag a [start, end) character span. Tk char indices include the
-        newline at each line's end, matching Python str offsets exactly."""
-        widget.tag_add(tag, f"1.0+{start}c", f"1.0+{end}c")
-
-    def _highlight_text_data(self, widget: tk.Text):
-        content = widget.get("1.0", "end-1c")
-        for tag in ("comment", "key", "number"):
-            widget.tag_remove(tag, "1.0", "end")
-        # Field keys: "Event name:" etc. at the start of a non-comment line
-        for m in re.finditer(r"(?m)^[^#\n][^:\t\n]*:", content):
-            self._apply_tag(widget, "key", m.start(), m.end())
-        # Placement rows: leading integer (the place number)
-        for m in re.finditer(r"(?m)^\d+", content):
-            self._apply_tag(widget, "number", m.start(), m.end())
-        # Comment lines (applied last; highest-priority tag overrides keys)
-        for m in re.finditer(r"(?m)^[ \t]*#.*$", content):
-            self._apply_tag(widget, "comment", m.start(), m.end())
-
-    def _highlight_html(self, widget: tk.Text):
-        content = widget.get("1.0", "end-1c")
-        for tag in ("tag", "attr", "string", "comment"):
-            widget.tag_remove(tag, "1.0", "end")
-        # Tag names: <div, </div, <br/
-        for m in re.finditer(r"</?[a-zA-Z][\w:-]*", content):
-            self._apply_tag(widget, "tag", m.start(), m.end())
-        # Attribute names: foo= (the name immediately before '=')
-        for m in re.finditer(r"[a-zA-Z_:][\w:-]*(?==)", content):
-            self._apply_tag(widget, "attr", m.start(), m.end())
-        # Quoted strings (single or double, may span lines)
-        for m in re.finditer(r"\"[^\"]*\"|'[^']*'", content, re.DOTALL):
-            self._apply_tag(widget, "string", m.start(), m.end())
-        # Comments override everything inside them
-        for m in re.finditer(r"<!--.*?-->", content, re.DOTALL):
-            self._apply_tag(widget, "comment", m.start(), m.end())
-
     def _open_top8_html_in_browser(self):
-        import webbrowser
-        import threading
-        import http.server
-        import socketserver
-        import socket
-
-        name = self._top8_html_file_var.get()
+        name = self._top8_html_file.currentText()
         if not name:
             self._log("[Error: no HTML file selected]\n")
             return
-
-        # Start local HTTP server on first use; reuse on subsequent calls
-        if not getattr(self, "_http_server", None):
-            # Find a free port
+        if not self._http_server:
             with socket.socket() as s:
                 s.bind(("", 0))
                 port = s.getsockname()[1]
-
-            import functools
-            handler = functools.partial(
-                http.server.SimpleHTTPRequestHandler,
-                directory=str(ROOT),
-            )
+            handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(ROOT))
             server = socketserver.TCPServer(("", port), handler)
             server.allow_reuse_address = True
-
-            thread = threading.Thread(
-                target=server.serve_forever, daemon=True, name="top8-http-server"
-            )
-            thread.start()
+            threading.Thread(target=server.serve_forever, daemon=True, name="top8-http-server").start()
             self._http_server = server
             self._http_server_port = port
             self._log(f"[Local server started on port {port}]\n")
-
         url = f"http://localhost:{self._http_server_port}/Top_8_Results/{name}"
         webbrowser.open(url)
         self._log(f"[Opened {url}]\n")
 
-    # ------------------------------------------------------------------ #
-    #  Tab: Generate Posts                                                #
-    # ------------------------------------------------------------------ #
-    def _build_posts_tab(self, notebook: ttk.Notebook):
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Generate Posts")
+    # ================================================================== #
+    #  Tab: Generate Posts                                              #
+    # ================================================================== #
+    def _build_posts_tab(self):
+        lay = self._scroll_tab("Generate Posts")
 
-        # Scrollable container (same pattern as other tabs so resize grip works)
-        _canvas = tk.Canvas(tab, bg=_BG, highlightthickness=0)
-        _vsb = ttk.Scrollbar(tab, orient="vertical", command=_canvas.yview)
-        _canvas.configure(yscrollcommand=_vsb.set)
-        _vsb.pack(side="right", fill="y")
-        _canvas.pack(side="left", fill="both", expand=True)
+        box = QtWidgets.QGroupBox("Event")
+        v = QtWidgets.QVBoxLayout(box)
+        row1 = QtWidgets.QHBoxLayout()
+        row1.addWidget(QtWidgets.QLabel("Series:"))
+        self._posts_series = QtWidgets.QComboBox()
+        self._posts_series.setMinimumWidth(220)
+        row1.addWidget(self._posts_series)
+        rb = QtWidgets.QPushButton("↺")
+        rb.setObjectName("tool")
+        rb.clicked.connect(self._refresh_posts_events)
+        row1.addWidget(rb)
+        row1.addSpacing(12)
+        row1.addWidget(QtWidgets.QLabel("# / Suffix:"))
+        self._posts_num = _hline("", 80)
+        row1.addWidget(self._posts_num)
+        row1.addStretch(1)
+        v.addLayout(row1)
+        row2 = QtWidgets.QHBoxLayout()
+        row2.addWidget(QtWidgets.QLabel("Event name:"))
+        self._posts_event_name = QtWidgets.QLineEdit()
+        self._posts_event_name.setReadOnly(True)
+        self._posts_event_name.setMinimumWidth(320)
+        row2.addWidget(self._posts_event_name)
+        row2.addStretch(1)
+        v.addLayout(row2)
+        lay.addWidget(box)
 
-        inner = ttk.Frame(_canvas)
-        _inner_win = _canvas.create_window((0, 0), window=inner, anchor="nw")
-        self._setup_scrollable_canvas(_canvas, inner, _inner_win)
+        cfgbox = QtWidgets.QGroupBox("Post Settings")
+        cv = QtWidgets.QVBoxLayout(cfgbox)
+        rn = QtWidgets.QHBoxLayout()
+        self._posts_has_next = QtWidgets.QCheckBox("Next Event")
+        self._posts_has_next.setChecked(True)
+        self._posts_has_next.toggled.connect(self._update_posts_next_state)
+        rn.addWidget(self._posts_has_next)
+        rn.addSpacing(8)
+        rn.addWidget(QtWidgets.QLabel("Date:"))
+        self._posts_date = QtWidgets.QDateEdit()
+        self._posts_date.setCalendarPopup(True)
+        self._posts_date.setDisplayFormat("yyyy-MM-dd")
+        self._posts_date.setDate(QtCore.QDate.currentDate())
+        rn.addWidget(self._posts_date)
+        rn.addSpacing(16)
+        rn.addWidget(QtWidgets.QLabel("Link:"))
+        self._posts_next_link = QtWidgets.QLineEdit()
+        self._posts_next_link.setMinimumWidth(260)
+        rn.addWidget(self._posts_next_link)
+        rn.addStretch(1)
+        cv.addLayout(rn)
 
-        def _on_mousewheel(event):
-            _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        _canvas.bind("<Enter>", lambda e: _canvas.bind_all("<MouseWheel>", _on_mousewheel))
-        _canvas.bind("<Leave>", lambda e: _canvas.unbind_all("<MouseWheel>"))
+        rv = QtWidgets.QHBoxLayout()
+        rv.addWidget(QtWidgets.QLabel("Vods link:"))
+        self._posts_vods = QtWidgets.QLineEdit()
+        self._posts_vods.setMinimumWidth(420)
+        rv.addWidget(self._posts_vods)
+        rv.addStretch(1)
+        cv.addLayout(rv)
 
-        # ── Event selector ─────────────────────────────────────────────
-        lf_event = ttk.LabelFrame(inner, text="Event", padding=(8, 8))
-        lf_event.pack(fill="x", padx=10, pady=(10, 4))
+        rb2 = QtWidgets.QHBoxLayout()
+        ft = QtWidgets.QPushButton("Fetch Twitter")
+        ft.clicked.connect(lambda: self._run_fetch_post("twitter"))
+        rb2.addWidget(ft)
+        fd = QtWidgets.QPushButton("Fetch Discord")
+        fd.clicked.connect(lambda: self._run_fetch_post("discord"))
+        rb2.addWidget(fd)
+        rb2.addSpacing(16)
+        sv = QtWidgets.QPushButton("Save")
+        sv.clicked.connect(self._save_post_file)
+        rb2.addWidget(sv)
+        cp = QtWidgets.QPushButton("Copy")
+        cp.clicked.connect(self._copy_post_text)
+        rb2.addWidget(cp)
+        rb2.addStretch(1)
+        cv.addLayout(rb2)
+        lay.addWidget(cfgbox)
 
-        row1 = ttk.Frame(lf_event)
-        row1.pack(fill="x", pady=(0, 4))
-        ttk.Label(row1, text="Series:").pack(side="left")
-        self._posts_series = tk.StringVar()
-        self._posts_series_box = ttk.Combobox(
-            row1, textvariable=self._posts_series, state="readonly", width=26,
-        )
-        self._posts_series_box.pack(side="left", padx=(4, 4))
-        ttk.Button(row1, text="↺", command=self._refresh_posts_events).pack(side="left", padx=(0, 12))
-        ttk.Label(row1, text="# / Suffix:").pack(side="left")
-        self._posts_num = tk.StringVar(value="")
-        ttk.Entry(row1, textvariable=self._posts_num, width=8).pack(side="left", padx=4)
-
-        row2 = ttk.Frame(lf_event)
-        row2.pack(fill="x")
-        ttk.Label(row2, text="Event name:").pack(side="left")
-        self._posts_event_name = tk.StringVar()
-        ttk.Entry(row2, textvariable=self._posts_event_name, width=40,
-                  state="readonly").pack(side="left", padx=4)
-
-        # ── Post settings ──────────────────────────────────────────────
-        lf_cfg = ttk.LabelFrame(inner, text="Post Settings", padding=(8, 8))
-        lf_cfg.pack(fill="x", padx=10, pady=(0, 4))
-
-        # Next event toggle + date + link on one row
-        self._posts_has_next = tk.BooleanVar(value=True)
-        self._posts_next_date = tk.StringVar()  # used only when tkcalendar unavailable
-        self._posts_next_link = tk.StringVar()
-        self._posts_vods = tk.StringVar()
-
-        row_next = ttk.Frame(lf_cfg)
-        row_next.pack(fill="x", pady=(0, 4))
-        ttk.Checkbutton(row_next, text="Next Event",
-                        variable=self._posts_has_next,
-                        command=self._update_posts_next_state).pack(side="left", padx=(0, 8))
-        ttk.Label(row_next, text="Date:").pack(side="left")
-        if _TKCALENDAR_AVAILABLE:
-            import datetime as _dt
-            self._posts_date_picker = _DateEntry(
-                row_next, width=12, justify="center",
-                showweeknumbers=False, firstweekday="sunday",
-            )
-            self._posts_date_picker.pack(side="left", padx=(4, 16))
-            self._posts_next_date_entry = self._posts_date_picker
-        else:
-            self._posts_date_picker = None
-            self._posts_next_date_entry = ttk.Entry(
-                row_next, textvariable=self._posts_next_date, width=14)
-            self._posts_next_date_entry.pack(side="left", padx=(4, 16))
-        ttk.Label(row_next, text="Link:").pack(side="left")
-        self._posts_next_link_entry = ttk.Entry(
-            row_next, textvariable=self._posts_next_link, width=34)
-        self._posts_next_link_entry.pack(side="left", padx=4)
-
-        row_vods = ttk.Frame(lf_cfg)
-        row_vods.pack(fill="x", pady=(0, 6))
-        ttk.Label(row_vods, text="Vods link:").pack(side="left")
-        ttk.Entry(row_vods, textvariable=self._posts_vods, width=56).pack(side="left", padx=4)
-
-        row_btns = ttk.Frame(lf_cfg)
-        row_btns.pack(fill="x")
-        ttk.Button(row_btns, text="Fetch Twitter",
-                   command=lambda: self._run_fetch_post("twitter")).pack(side="left", padx=(0, 6))
-        ttk.Button(row_btns, text="Fetch Discord",
-                   command=lambda: self._run_fetch_post("discord")).pack(side="left", padx=(0, 16))
-        ttk.Button(row_btns, text="Save",
-                   command=self._save_post_file).pack(side="left", padx=(0, 6))
-        ttk.Button(row_btns, text="Copy",
-                   command=self._copy_post_text).pack(side="left")
-
-        self._posts_next_link.trace_add("write", lambda *_: self._save_settings())
-        self._posts_has_next.trace_add("write", lambda *_: self._save_settings())
-        self._posts_vods.trace_add("write", lambda *_: self._save_settings())
-
-        # ── Collapsible editable text area ─────────────────────────────
-        lf_text = self._make_collapsible_section(inner, "Post Text")
-
-        txt_inner = ttk.Frame(lf_text)
-        txt_inner.pack(fill="both", expand=True)
-        txt_sb = ttk.Scrollbar(txt_inner)
-        txt_sb.pack(side="right", fill="y")
-        self._posts_text = tk.Text(
-            txt_inner, height=20,
-            bg=_BG, fg=_FG, insertbackground=_FG,
-            font=("Consolas", 10), wrap="word",
-            relief="flat", highlightthickness=0,
-            yscrollcommand=txt_sb.set,
-        )
-        self._posts_text.pack(side="left", fill="both", expand=True)
-        txt_sb.config(command=self._posts_text.yview)
-        self._add_resize_grip(lf_text, self._posts_text)
-
-        # ── Wire up series/num traces (after all StringVars exist) ─────
-        def _on_posts_series_change(*_):
-            series = self._posts_series.get()
-            widgets = self._fetch_widgets.get(series)
-            if widgets:
-                self._posts_num.set(widgets["num"].get())
-            else:
-                custom = next((e for e in self._custom_events if e.get("label") == series), None)
-                if custom:
-                    slug_tmpl = custom.get("slug_template", custom.get("slug", ""))
-                    cw = self._custom_event_widgets.get(slug_tmpl)
-                    self._posts_num.set(cw["num"].get() if cw else custom.get("current_num", ""))
-                else:
-                    saved = self._settings.get("last_event_nums", {}).get(series)
-                    if saved:
-                        self._posts_num.set(saved)
-            # Load per-series post config fields
-            saved_cfg = self._settings.get("posts_cfg", {}).get(series, {})
-            saved_date = saved_cfg.get("next_date", "")
-            if _TKCALENDAR_AVAILABLE and hasattr(self, "_posts_date_picker") and self._posts_date_picker:
-                import datetime as _dt
-                try:
-                    self._posts_date_picker.set_date(_dt.date.fromisoformat(saved_date))
-                except (ValueError, TypeError):
-                    pass
-            else:
-                self._posts_next_date.set(saved_date)
-            self._posts_next_link.set(saved_cfg.get("next_link",
-                next((c.get("tweet_link", "") for c in FETCH_EVENTS if c["label"] == series), "")))
-            self._posts_vods.set(saved_cfg.get("vods", ""))
-            self._posts_has_next.set(saved_cfg.get("has_next", True))
-            self._update_posts_next_state()
-            self._save_settings()
-
-        def _update_posts_name(*_):
-            template = self._posts_event_map.get(self._posts_series.get(), "{n}")
-            self._posts_event_name.set(template.format(n=self._posts_num.get().strip()))
-            self._posts_load_file()
-
-        self._posts_series.trace_add("write", _on_posts_series_change)
-        self._posts_series.trace_add("write", _update_posts_name)
-        self._posts_num.trace_add("write", _update_posts_name)
+        ctext = CollapsibleBox("Post Text", collapsed=False)
+        lay.addWidget(ctext)
+        self._posts_text = QtWidgets.QPlainTextEdit()
+        self._posts_text.setMinimumHeight(300)
+        ctext.addWidget(self._posts_text)
+        lay.addStretch(1)
 
         self._posts_active_file = None
         self._posts_event_map = {}
+        self._posts_series.currentTextChanged.connect(self._on_posts_series_change)
+        self._posts_num.textChanged.connect(self._update_posts_name)
+        self._posts_next_link.textChanged.connect(self._save_settings)
+        self._posts_vods.textChanged.connect(self._save_settings)
+        self._posts_has_next.toggled.connect(self._save_settings)
         self._refresh_posts_events()
 
     def _update_posts_next_state(self):
-        state = "normal" if self._posts_has_next.get() else "disabled"
-        self._posts_next_date_entry.config(state=state)
-        self._posts_next_link_entry.config(state=state)
+        en = self._posts_has_next.isChecked()
+        self._posts_date.setEnabled(en)
+        self._posts_next_link.setEnabled(en)
 
     def _refresh_posts_events(self):
         events = load_thumbnail_events()
@@ -2316,45 +2104,77 @@ class RivalsGUI:
             if label and name_tmpl and label not in self._posts_event_map:
                 self._posts_event_map[label] = name_tmpl
                 names.append(label)
-        self._posts_series_box["values"] = names
+        cur = self._posts_series.currentText()
+        self._posts_series.blockSignals(True)
+        self._posts_series.clear()
+        self._posts_series.addItems(names)
         if names:
             last = self._settings.get("last_posts_series")
             if last in names:
-                self._posts_series.set(last)
-            elif self._posts_series.get() not in names:
-                self._posts_series.set(names[0])
+                self._posts_series.setCurrentText(last)
+            elif cur in names:
+                self._posts_series.setCurrentText(cur)
+            else:
+                self._posts_series.setCurrentIndex(0)
+        self._posts_series.blockSignals(False)
+        self._on_posts_series_change()
 
-    def _get_posts_cfg(self):
-        """Return the FETCH_EVENTS config for the selected series, or None."""
-        series = self._posts_series.get()
-        return next((c for c in FETCH_EVENTS if c["label"] == series), None)
+    def _on_posts_series_change(self):
+        self._loading = True
+        series = self._posts_series.currentText()
+        widgets = self._fetch_widgets.get(series)
+        if widgets:
+            self._posts_num.setText(widgets["num"].text())
+        else:
+            custom = next((e for e in self._custom_events if e.get("label") == series), None)
+            if custom:
+                self._posts_num.setText(custom.get("current_num", ""))
+            else:
+                saved = self._settings.get("last_event_nums", {}).get(series)
+                if saved:
+                    self._posts_num.setText(saved)
+        saved_cfg = self._settings.get("posts_cfg", {}).get(series, {})
+        saved_date = saved_cfg.get("next_date", "")
+        if saved_date:
+            qd = QtCore.QDate.fromString(saved_date, "yyyy-MM-dd")
+            if qd.isValid():
+                self._posts_date.setDate(qd)
+        default_link = next((c.get("tweet_link", "") for c in FETCH_EVENTS if c["label"] == series), "")
+        self._posts_next_link.setText(saved_cfg.get("next_link", default_link))
+        self._posts_vods.setText(saved_cfg.get("vods", ""))
+        self._posts_has_next.setChecked(saved_cfg.get("has_next", True))
+        self._update_posts_next_state()
+        self._loading = False
+        self._update_posts_name()
+        self._save_settings()
+
+    def _update_posts_name(self):
+        template = self._posts_event_map.get(self._posts_series.currentText(), "{n}")
+        self._posts_event_name.setText(template.format(n=self._posts_num.text().strip()))
+        self._posts_load_file()
 
     def _posts_load_file(self):
-        """Load the most recently generated post file for the current event into the text area."""
-        event_name = self._posts_event_name.get().strip()
+        event_name = self._posts_event_name.text().strip()
         if not event_name:
             return
         folder = ROOT / "Results_Posts"
-        # Prefer whichever file exists (twitter first, then discord)
         for platform in ("twitter", "discord"):
             path = folder / f"{event_name} {platform.capitalize()} Post.txt"
             if path.exists():
                 self._posts_active_file = path
-                self._posts_text.delete("1.0", "end")
-                self._posts_text.insert("1.0", path.read_text(encoding="utf-8").rstrip())
+                self._posts_text.setPlainText(path.read_text(encoding="utf-8").rstrip())
                 return
         self._posts_active_file = None
-        self._posts_text.delete("1.0", "end")
+        self._posts_text.clear()
 
     def _run_fetch_post(self, platform: str):
-        series = self._posts_series.get()
-        n = self._posts_num.get().strip()
-        event_name = self._posts_event_name.get().strip()
+        series = self._posts_series.currentText()
+        n = self._posts_num.text().strip()
+        event_name = self._posts_event_name.text().strip()
         if not event_name:
             self._log("[Error: no event selected]\n")
             return
-
-        cfg = self._get_posts_cfg()
+        cfg = next((c for c in FETCH_EVENTS if c["label"] == series), None)
         if cfg:
             slug = cfg["slug_template"].format(n=n)
         else:
@@ -2363,76 +2183,67 @@ class RivalsGUI:
                 self._log("[Error: no slug found for this event series]\n")
                 return
             slug = custom["slug_template"].replace("{n}", n)
-
         out_path = ROOT / "Results_Posts" / f"{event_name} {platform.capitalize()} Post.txt"
         self._posts_active_file = out_path
-
-        cmd = [
-            PYTHON, str(ROOT / "Python_Scripts" / "fetch_results_tweet.py"),
-            slug, "--name", event_name, "--platform", platform, "--out", str(out_path),
-        ]
-        if self._posts_has_next.get():
-            next_link = self._posts_next_link.get().strip()
+        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_results_tweet.py"),
+               slug, "--name", event_name, "--platform", platform, "--out", str(out_path)]
+        if self._posts_has_next.isChecked():
+            next_link = self._posts_next_link.text().strip()
             if next_link:
                 cmd += ["--link", next_link]
-            if _TKCALENDAR_AVAILABLE and self._posts_date_picker:
-                next_date = _ordinal_date(self._posts_date_picker.get_date())
-            else:
-                next_date = self._posts_next_date.get().strip()
+            next_date = _ordinal_date(self._posts_date.date().toPython())
             if next_date:
                 cmd += ["--next", next_date]
-        vods = self._posts_vods.get().strip()
+        vods = self._posts_vods.text().strip()
         if vods:
             cmd += ["--vods", vods]
 
-        def _on_done():
+        def _done():
             if out_path.exists():
-                self._posts_text.delete("1.0", "end")
-                self._posts_text.insert("1.0", out_path.read_text(encoding="utf-8").rstrip())
-
-        self._run(cmd, on_done=_on_done)
+                self._posts_text.setPlainText(out_path.read_text(encoding="utf-8").rstrip())
+        self._run(cmd, on_done=_done)
 
     def _save_post_file(self):
         if not self._posts_active_file:
-            event_name = self._posts_event_name.get().strip()
+            event_name = self._posts_event_name.text().strip()
             if not event_name:
                 self._log("[Error: no event selected]\n")
                 return
             self._posts_active_file = ROOT / "Results_Posts" / f"{event_name} Post.txt"
         self._posts_active_file.parent.mkdir(parents=True, exist_ok=True)
-        content = self._posts_text.get("1.0", "end-1c")
-        self._posts_active_file.write_text(content + "\n", encoding="utf-8")
+        self._posts_active_file.write_text(self._posts_text.toPlainText() + "\n", encoding="utf-8")
         self._log(f"[Saved {self._posts_active_file.name}]\n")
 
     def _copy_post_text(self):
-        content = self._posts_text.get("1.0", "end-1c")
+        content = self._posts_text.toPlainText()
         if content.strip():
-            self.root.clipboard_clear()
-            self.root.clipboard_append(content)
+            QtWidgets.QApplication.clipboard().setText(content)
             self._log("[Copied post to clipboard]\n")
         else:
             self._log("[Nothing to copy — fetch a post first]\n")
 
-    # ------------------------------------------------------------------ #
-    #  Tab: Character Renders                                             #
-    # ------------------------------------------------------------------ #
-    def _build_renders_tab(self, notebook: ttk.Notebook):
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Character Renders")
-
-        lf = ttk.LabelFrame(tab, text="Manage Renders", padding=(10, 10))
-        lf.pack(fill="x", padx=10, pady=10)
-
-        ttk.Label(lf, text="Download render images from dragdown.wiki or copy them to the Full Renders folder.",
-                  wraplength=560, justify="left").pack(anchor="w", pady=(0, 8))
-
-        btn_cfg = [
-            ("Download & Copy",      self._download_and_copy),
-            ("Download Renders",     self._download_renders),
+    # ================================================================== #
+    #  Tab: Character Renders                                           #
+    # ================================================================== #
+    def _build_renders_tab(self):
+        tab = QtWidgets.QWidget()
+        outer = QtWidgets.QVBoxLayout(tab)
+        outer.setContentsMargins(12, 12, 12, 12)
+        box = QtWidgets.QGroupBox("Manage Renders")
+        v = QtWidgets.QVBoxLayout(box)
+        v.addWidget(_muted("Download render images from dragdown.wiki or copy them to the Full Renders folder."))
+        for label, cmd in [
+            ("Download & Copy", self._download_and_copy),
+            ("Download Renders", self._download_renders),
             ("Copy to Full Renders", self._copy_renders),
-        ]
-        for label, cmd in btn_cfg:
-            ttk.Button(lf, text=label, command=cmd).pack(pady=3, anchor="w")
+        ]:
+            b = QtWidgets.QPushButton(label)
+            b.clicked.connect(cmd)
+            b.setMaximumWidth(220)
+            v.addWidget(b)
+        outer.addWidget(box)
+        outer.addStretch(1)
+        self.tabs.addTab(tab, "Character Renders")
 
     def _download_renders(self):
         self._run([PYTHON, str(ROOT / "Python_Scripts" / "download_rivals_renders.py")])
@@ -2446,12 +2257,13 @@ class RivalsGUI:
             [PYTHON, str(ROOT / "Python_Scripts" / "copy_rivals_renders_to_full.py")],
         )
 
-    # ------------------------------------------------------------------ #
-    #  Tab: Player Database                                               #
-    # ------------------------------------------------------------------ #
-    def _build_player_db_tab(self, notebook: ttk.Notebook):
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Player Database")
+    # ================================================================== #
+    #  Tab: Player Database                                             #
+    # ================================================================== #
+    def _build_player_db_tab(self):
+        tab = QtWidgets.QWidget()
+        outer = QtWidgets.QHBoxLayout(tab)
+        outer.setContentsMargins(12, 12, 12, 12)
 
         self._db_header: list[str] = []
         self._db_players: dict[str, list[tuple[str, str]]] = {}
@@ -2459,199 +2271,190 @@ class RivalsGUI:
         self._db_selected_char_idx: int | None = None
         self._skin_stems: list[str] = []
 
-        # Two-pane layout
-        pane = tk.PanedWindow(tab, orient="horizontal", sashrelief="flat",
-                              bg=_BG2, sashwidth=6)
-        pane.pack(fill="both", expand=True, padx=10, pady=10)
+        splitter = QtWidgets.QSplitter(Qt.Orientation.Horizontal)
+        outer.addWidget(splitter)
 
-        # --- Left: player list ---
-        left = ttk.Frame(pane)
-        pane.add(left, width=190)
+        # Left
+        left = QtWidgets.QWidget()
+        lv = QtWidgets.QVBoxLayout(left)
+        lv.setContentsMargins(0, 0, 0, 0)
+        hl = QtWidgets.QLabel("Players")
+        hl.setObjectName("heading")
+        lv.addWidget(hl)
+        self._player_search = QtWidgets.QLineEdit()
+        self._player_search.setPlaceholderText("Search players...")
+        self._search_timer = QtCore.QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(200)
+        self._search_timer.timeout.connect(self._refresh_player_list)
+        self._player_search.textChanged.connect(lambda: self._search_timer.start())
+        lv.addWidget(self._player_search)
+        self._player_list = QtWidgets.QListWidget()
+        self._player_list.currentItemChanged.connect(self._on_player_select)
+        lv.addWidget(self._player_list)
+        np_row = QtWidgets.QHBoxLayout()
+        np_row.addWidget(QtWidgets.QLabel("Name:"))
+        self._new_player = QtWidgets.QLineEdit()
+        self._new_player.setPlaceholderText("Player name...")
+        self._new_player.returnPressed.connect(self._confirm_add_player)
+        np_row.addWidget(self._new_player)
+        lv.addLayout(np_row)
+        pb_row = QtWidgets.QHBoxLayout()
+        addb = QtWidgets.QPushButton("+ Add")
+        addb.clicked.connect(self._confirm_add_player)
+        pb_row.addWidget(addb)
+        remb = QtWidgets.QPushButton("- Remove")
+        remb.clicked.connect(self._remove_player)
+        pb_row.addWidget(remb)
+        lv.addLayout(pb_row)
+        splitter.addWidget(left)
 
-        ttk.Label(left, text="Players", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 2))
+        # Right
+        right = QtWidgets.QWidget()
+        rv = QtWidgets.QVBoxLayout(right)
+        rv.setContentsMargins(8, 0, 0, 0)
+        self._editing_label = QtWidgets.QLabel("Select a player")
+        self._editing_label.setObjectName("heading")
+        rv.addWidget(self._editing_label)
 
-        self._player_search = tk.StringVar()
-        self._player_search_entry = ttk.Entry(left, textvariable=self._player_search)
-        self._player_search_entry.pack(fill="x", pady=(0, 4))
-        self._player_search.trace_add("write", lambda *_: self._debounce_player_search())
-        _add_placeholder(self._player_search_entry, "Search players...")
+        self._char_tree = QtWidgets.QTreeWidget()
+        self._char_tree.setColumnCount(2)
+        self._char_tree.setHeaderLabels(["Character", "Skin"])
+        self._char_tree.setColumnWidth(0, 130)
+        self._char_tree.setRootIsDecorated(False)
+        self._char_tree.currentItemChanged.connect(self._on_char_tree_select)
+        rv.addWidget(self._char_tree)
 
-        lb_frame = ttk.Frame(left)
-        lb_frame.pack(fill="both", expand=True)
-        lb_sb = ttk.Scrollbar(lb_frame)
-        lb_sb.pack(side="right", fill="y")
-        self._player_listbox = tk.Listbox(lb_frame, yscrollcommand=lb_sb.set, selectmode="single",
-                                          activestyle="none", relief="flat", borderwidth=0)
-        self._player_listbox.pack(side="left", fill="both", expand=True)
-        lb_sb.config(command=self._player_listbox.yview)
-        self._player_listbox.bind("<<ListboxSelect>>", self._on_player_select)
+        tb = QtWidgets.QHBoxLayout()
+        eb = QtWidgets.QPushButton("Edit Selected")
+        eb.clicked.connect(self._edit_char_entry)
+        tb.addWidget(eb)
+        rmb = QtWidgets.QPushButton("Remove Selected")
+        rmb.clicked.connect(self._remove_char_entry)
+        tb.addWidget(rmb)
+        tb.addStretch(1)
+        up = QtWidgets.QPushButton("Move Up")
+        up.clicked.connect(lambda: self._move_char_entry(-1))
+        tb.addWidget(up)
+        dn = QtWidgets.QPushButton("Move Down")
+        dn.clicked.connect(lambda: self._move_char_entry(1))
+        tb.addWidget(dn)
+        rv.addLayout(tb)
 
-        self._new_player_frame = ttk.Frame(left)
-        ttk.Label(self._new_player_frame, text="Name:").pack(side="left")
-        self._new_player_var = tk.StringVar()
-        self._new_player_entry = ttk.Entry(self._new_player_frame, textvariable=self._new_player_var)
-        self._new_player_entry.pack(side="left", padx=(4, 0), fill="x", expand=True)
-        self._new_player_entry.bind("<Return>", lambda _: self._confirm_add_player())
-        self._new_player_entry.bind("<Escape>", lambda _: self._cancel_add_player())
-        _add_placeholder(self._new_player_entry, "Player name...")
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {_BG3};")
+        rv.addWidget(sep)
 
-        self._new_player_frame.pack(fill="x", pady=(4, 0))
+        ael = QtWidgets.QLabel("Add / Edit Entry")
+        ael.setStyleSheet("font-weight: 600;")
+        rv.addWidget(ael)
 
-        self._btn_row = ttk.Frame(left)
-        btn_row = self._btn_row
-        btn_row.pack(fill="x", pady=(6, 0))
-        ttk.Button(btn_row, text="+ Add", command=self._add_player).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        ttk.Button(btn_row, text="- Remove", command=self._remove_player).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        form_section = QtWidgets.QHBoxLayout()
+        form_left = QtWidgets.QVBoxLayout()
+        form_row = QtWidgets.QHBoxLayout()
+        form_row.addWidget(QtWidgets.QLabel("Character:"))
+        self._form_char = QtWidgets.QComboBox()
+        self._form_char.addItems([""] + CHARACTERS)
+        self._form_char.currentTextChanged.connect(self._on_form_char_change)
+        form_row.addWidget(self._form_char)
+        form_row.addSpacing(12)
+        form_row.addWidget(QtWidgets.QLabel("Skin:"))
+        self._form_skin = QtWidgets.QComboBox()
+        self._form_skin.setMinimumWidth(200)
+        self._form_skin.currentTextChanged.connect(self._on_form_skin_change)
+        form_row.addWidget(self._form_skin)
+        form_left.addLayout(form_row)
+        fb = QtWidgets.QHBoxLayout()
+        self._form_add_btn = QtWidgets.QPushButton("Add Entry")
+        self._form_add_btn.clicked.connect(self._add_char_entry)
+        fb.addWidget(self._form_add_btn)
+        self._form_edit_btn = QtWidgets.QPushButton("Update Entry")
+        self._form_edit_btn.setEnabled(False)
+        self._form_edit_btn.clicked.connect(self._update_char_entry)
+        fb.addWidget(self._form_edit_btn)
+        clf = QtWidgets.QPushButton("Clear Form")
+        clf.clicked.connect(self._clear_form)
+        fb.addWidget(clf)
+        fb.addStretch(1)
+        form_left.addLayout(fb)
+        form_left.addStretch(1)
 
-        # --- Right: editor ---
-        right = ttk.Frame(pane)
-        pane.add(right)
+        self._preview_label = QtWidgets.QLabel()
+        self._preview_label.setFixedSize(200, 200)
+        self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._preview_label.setStyleSheet(f"background-color: {_BG3}; border-radius: 4px;")
+        # Preview on the left, form to its right, free space pushed to the far right.
+        form_section.addWidget(self._preview_label, 0, Qt.AlignmentFlag.AlignTop)
+        form_section.addSpacing(16)
+        form_section.addLayout(form_left, 0)
+        form_section.addStretch(1)
+        rv.addLayout(form_section)
 
-        self._editing_label = ttk.Label(right, text="Select a player", font=("Segoe UI", 10, "bold"))
-        self._editing_label.pack(anchor="w", pady=(0, 6))
+        save_row = QtWidgets.QHBoxLayout()
+        sb = QtWidgets.QPushButton("Save Player Database")
+        sb.setObjectName("accent")
+        sb.clicked.connect(self._save_player_db)
+        save_row.addWidget(sb)
+        rl = QtWidgets.QPushButton("Reload from File")
+        rl.clicked.connect(self._reload_player_db)
+        save_row.addWidget(rl)
+        save_row.addStretch(1)
+        rv.addLayout(save_row)
 
-        # Anchor save row to the bottom before packing expanding widgets so it
-        # is never displaced when the skin preview image grows tall.
-        save_row = ttk.Frame(right)
-        save_row.pack(fill="x", side="bottom")
-        ttk.Button(save_row, text="Save Player Database", command=self._save_player_db,
-                   style="Accent.TButton").pack(side="left")
-        ttk.Button(save_row, text="Reload from File", command=self._reload_player_db).pack(side="left", padx=(8, 0))
-        ttk.Separator(right, orient="horizontal").pack(fill="x", pady=6, side="bottom")
-
-        # Treeview
-        tree_frame = ttk.Frame(right)
-        tree_frame.pack(fill="both", expand=True)
-        tree_sb = ttk.Scrollbar(tree_frame)
-        tree_sb.pack(side="right", fill="y")
-        self._char_tree = ttk.Treeview(
-            tree_frame, columns=("char", "skin"), show="headings",
-            yscrollcommand=tree_sb.set, selectmode="browse", height=8,
-        )
-        self._char_tree.heading("char", text="Character")
-        self._char_tree.heading("skin", text="Skin")
-        self._char_tree.column("char", width=130)
-        self._char_tree.column("skin", width=240)
-        self._char_tree.pack(side="left", fill="both", expand=True)
-        tree_sb.config(command=self._char_tree.yview)
-        self._char_tree.bind("<<TreeviewSelect>>", self._on_char_tree_select)
-
-        tree_btns = ttk.Frame(right)
-        tree_btns.pack(fill="x", pady=4)
-        ttk.Button(tree_btns, text="Edit Selected", command=self._edit_char_entry).pack(side="left", padx=(0, 4))
-        ttk.Button(tree_btns, text="Remove Selected", command=self._remove_char_entry).pack(side="left")
-        ttk.Button(tree_btns, text="Move Up", command=lambda: self._move_char_entry(-1)).pack(side="right", padx=(4, 0))
-        ttk.Button(tree_btns, text="Move Down", command=lambda: self._move_char_entry(1)).pack(side="right")
-
-        ttk.Separator(right, orient="horizontal").pack(fill="x", pady=6)
-
-        ttk.Label(right, text="Add / Edit Entry", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
-
-        form_section = ttk.Frame(right)
-        form_section.pack(fill="x")
-        form_left = ttk.Frame(form_section)
-        form_left.pack(side="left", fill="y")
-        form_right = ttk.Frame(form_section)
-        form_right.pack(side="left", padx=(12, 0), anchor="n")
-
-        form_row = ttk.Frame(form_left)
-        form_row.pack(fill="x")
-        ttk.Label(form_row, text="Character:").pack(side="left")
-        self._form_char = tk.StringVar()
-        ttk.Combobox(
-            form_row, textvariable=self._form_char, values=CHARACTERS, state="readonly", width=14,
-        ).pack(side="left", padx=(4, 12))
-        self._form_char.trace_add("write", self._on_form_char_change)
-
-        ttk.Label(form_row, text="Skin:").pack(side="left")
-        self._form_skin_var = tk.StringVar()
-        self._form_skin_box = ttk.Combobox(form_row, textvariable=self._form_skin_var, state="readonly", width=30)
-        self._form_skin_box.pack(side="left", padx=4)
-        self._form_skin_var.trace_add("write", self._on_form_skin_change)
-
-        form_btns = ttk.Frame(form_left)
-        form_btns.pack(fill="x", pady=4)
-        self._form_add_btn = ttk.Button(form_btns, text="Add Entry", command=self._add_char_entry)
-        self._form_add_btn.pack(side="left", padx=(0, 4))
-        self._form_edit_btn = ttk.Button(form_btns, text="Update Entry", command=self._update_char_entry, state="disabled")
-        self._form_edit_btn.pack(side="left")
-        ttk.Button(form_btns, text="Clear Form", command=self._clear_form).pack(side="left", padx=(8, 0))
-
-        self._preview_label = tk.Label(form_right, bg=_BG3, width=22, height=9)
-        self._preview_label.pack()
-        self._preview_img = None
-        self._preview_cache = {}
-        self._preview_debounce_job = None
-        self._preview_loading_stem = None
-
+        splitter.addWidget(right)
+        splitter.setSizes([220, 760])
+        self.tabs.addTab(tab, "Player Database")
         self._reload_player_db()
 
     def _reload_player_db(self):
         self._db_header, self._db_players = load_player_db()
         self._refresh_player_list()
-        self._clear_char_tree()
-        self._editing_label.config(text="Select a player")
+        self._char_tree.clear()
+        self._editing_label.setText("Select a player")
         self._db_selected_player = None
 
-    def _debounce_player_search(self):
-        if hasattr(self, "_player_search_job") and self._player_search_job:
-            self.root.after_cancel(self._player_search_job)
-        self._player_search_job = self.root.after(200, self._refresh_player_list)
-
     def _refresh_player_list(self):
-        raw = self._player_search.get()
-        query = "" if raw == "Search players..." else raw.lower()
-        self._player_listbox.delete(0, "end")
+        raw = self._player_search.text()
+        query = raw.lower()
+        self._player_list.blockSignals(True)
+        self._player_list.clear()
         for name in sorted(self._db_players, key=str.casefold):
             if query in name.lower():
-                self._player_listbox.insert("end", name)
+                self._player_list.addItem(name)
+        self._player_list.blockSignals(False)
 
-    def _on_player_select(self, _event=None):
-        sel = self._player_listbox.curselection()
-        if not sel:
+    def _on_player_select(self, current, _prev=None):
+        if current is None:
             return
-        name = self._player_listbox.get(sel[0])
+        name = current.text()
         self._db_selected_player = name
-        self._editing_label.config(text=f"Editing: {name}")
+        self._editing_label.setText(f"Editing: {name}")
         self._populate_char_tree(name)
         self._clear_form()
 
     def _populate_char_tree(self, name: str):
-        self._clear_char_tree()
-        for idx, (char, skin) in enumerate(self._db_players.get(name, [])):
+        self._char_tree.clear()
+        for char, skin in self._db_players.get(name, []):
             lbl = skin_label(skin) if skin else "(none)"
-            self._char_tree.insert("", "end", iid=str(idx), values=(char, lbl))
-
-    def _clear_char_tree(self):
-        for row in self._char_tree.get_children():
-            self._char_tree.delete(row)
-
-    def _add_player(self):
-        self._confirm_add_player()
+            QtWidgets.QTreeWidgetItem(self._char_tree, [char, lbl])
 
     def _confirm_add_player(self):
-        raw = self._new_player_var.get()
-        name = "" if raw == "Player name..." else raw.strip()
+        name = self._new_player.text().strip()
         if not name:
             return
         if name in self._db_players:
             self._log(f"[Player '{name}' already exists]\n")
-            self._new_player_var.set("")
+            self._new_player.clear()
             return
         self._db_players[name] = []
-        self._new_player_var.set("")
-        self._player_search.set("")
+        self._new_player.clear()
+        self._player_search.clear()
         self._refresh_player_list()
-        all_names = list(self._player_listbox.get(0, "end"))
-        if name in all_names:
-            idx = all_names.index(name)
-            self._player_listbox.selection_clear(0, "end")
-            self._player_listbox.selection_set(idx)
-            self._player_listbox.see(idx)
-            self._on_player_select()
-
-    def _cancel_add_player(self):
-        self._new_player_var.set("")
+        items = self._player_list.findItems(name, Qt.MatchFlag.MatchExactly)
+        if items:
+            self._player_list.setCurrentItem(items[0])
+        self._autosave_player_db()
 
     def _remove_player(self):
         if not self._db_selected_player or self._db_selected_player not in self._db_players:
@@ -2659,80 +2462,56 @@ class RivalsGUI:
         del self._db_players[self._db_selected_player]
         self._db_selected_player = None
         self._refresh_player_list()
-        self._clear_char_tree()
-        self._editing_label.config(text="Select a player")
+        self._char_tree.clear()
+        self._editing_label.setText("Select a player")
+        self._autosave_player_db()
 
     def _on_form_char_change(self, *_):
-        char = self._form_char.get()
+        char = self._form_char.currentText()
         stems = get_skins_for_char(char)
         self._skin_stems = stems
         labels = [skin_label(s) for s in stems]
-        self._form_skin_box["values"] = labels
-        self._form_skin_var.set(labels[0] if labels else "")
+        self._form_skin.blockSignals(True)
+        self._form_skin.clear()
+        self._form_skin.addItems(labels)
+        self._form_skin.blockSignals(False)
+        if labels:
+            self._form_skin.setCurrentIndex(0)
+            self._on_form_skin_change()
 
     def _on_form_skin_change(self, *_):
-        stem = self._skin_stem_from_label(self._form_skin_var.get())
+        stem = self._skin_stem_from_label(self._form_skin.currentText())
         self._show_preview(stem)
 
-    def _on_char_tree_select(self, _event=None):
-        sel = self._char_tree.selection()
-        if not sel:
+    def _on_char_tree_select(self, current, _prev=None):
+        if current is None:
             return
-        values = self._char_tree.item(sel[0], "values")
-        if not values or len(values) < 2:
-            return
-        char, lbl = values[0], values[1]
+        char = current.text(0)
+        lbl = current.text(1)
         stems = get_skins_for_char(char)
         labels = [skin_label(s) for s in stems]
         stem = stems[labels.index(lbl)] if lbl in labels else ""
         self._show_preview(stem)
 
-    def _show_preview(self, skin_stem: str):
-        if not _PIL_AVAILABLE:
+    def _show_preview(self, stem: str):
+        if not stem:
+            self._preview_label.clear()
             return
-        if self._preview_debounce_job:
-            self.root.after_cancel(self._preview_debounce_job)
-        self._preview_debounce_job = self.root.after(150, self._load_preview, skin_stem)
-
-    def _load_preview(self, skin_stem: str):
-        self._preview_debounce_job = None
-        if not skin_stem:
-            self._clear_preview()
+        if stem in self._preview_cache:
+            self._preview_label.setPixmap(self._preview_cache[stem])
             return
-        if skin_stem in self._preview_cache:
-            photo, w, h = self._preview_cache[skin_stem]
-            self._preview_img = photo
-            self._preview_label.config(image=photo, width=w, height=h)
-            return
-        path = RENDERS_DIR / f"{skin_stem}.png"
+        path = RENDERS_DIR / f"{stem}.png"
         if not path.exists():
-            self._clear_preview()
+            self._preview_label.clear()
             return
-        self._preview_loading_stem = skin_stem
-
-        def _worker():
-            try:
-                img = Image.open(path)
-                w = 220
-                h = round(img.height * w / img.width)
-                img = img.resize((w, h), Image.LANCZOS)
-                self.root.after(0, self._apply_preview, skin_stem, img, w, h)
-            except Exception:
-                self.root.after(0, self._clear_preview)
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _apply_preview(self, skin_stem: str, img, w: int, h: int):
-        if self._preview_loading_stem != skin_stem:
+        pix = QtGui.QPixmap(str(path))
+        if pix.isNull():
+            self._preview_label.clear()
             return
-        photo = ImageTk.PhotoImage(img)
-        self._preview_cache[skin_stem] = (photo, w, h)
-        self._preview_img = photo
-        self._preview_label.config(image=photo, width=w, height=h)
-
-    def _clear_preview(self):
-        self._preview_img = None
-        self._preview_label.config(image="", width=22, height=9)
+        scaled = pix.scaled(self._preview_label.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation)
+        self._preview_cache[stem] = scaled
+        self._preview_label.setPixmap(scaled)
 
     def _skin_stem_from_label(self, lbl: str) -> str:
         labels = [skin_label(s) for s in self._skin_stems]
@@ -2744,71 +2523,71 @@ class RivalsGUI:
         if not self._db_selected_player:
             self._log("[Select a player first]\n")
             return
-        char = self._form_char.get()
+        char = self._form_char.currentText()
         if not char:
             self._log("[Select a character]\n")
             return
-        skin_stem = self._skin_stem_from_label(self._form_skin_var.get())
-        self._db_players[self._db_selected_player].append((char, skin_stem))
+        stem = self._skin_stem_from_label(self._form_skin.currentText())
+        self._db_players[self._db_selected_player].append((char, stem))
         self._populate_char_tree(self._db_selected_player)
+        self._autosave_player_db()
 
     def _edit_char_entry(self):
-        sel = self._char_tree.selection()
-        if not sel or not self._db_selected_player:
+        idx = self._char_tree.indexOfTopLevelItem(self._char_tree.currentItem())
+        if idx < 0 or not self._db_selected_player:
             return
-        idx = int(sel[0])
         chars = self._db_players[self._db_selected_player]
         if idx >= len(chars):
             return
-        char, skin_stem = chars[idx]
-        self._form_char.set(char)  # trace fires _on_form_char_change → loads skins
-        self._form_skin_var.set(skin_label(skin_stem) if skin_stem else "")
+        char, stem = chars[idx]
+        self._form_char.setCurrentText(char)
+        self._form_skin.setCurrentText(skin_label(stem) if stem else "")
         self._db_selected_char_idx = idx
-        self._form_add_btn.config(state="disabled")
-        self._form_edit_btn.config(state="normal")
+        self._form_add_btn.setEnabled(False)
+        self._form_edit_btn.setEnabled(True)
 
     def _update_char_entry(self):
         if self._db_selected_char_idx is None or not self._db_selected_player:
             return
-        char = self._form_char.get()
-        skin_stem = self._skin_stem_from_label(self._form_skin_var.get())
+        char = self._form_char.currentText()
+        stem = self._skin_stem_from_label(self._form_skin.currentText())
         chars = self._db_players[self._db_selected_player]
         if self._db_selected_char_idx < len(chars):
-            chars[self._db_selected_char_idx] = (char, skin_stem)
+            chars[self._db_selected_char_idx] = (char, stem)
         self._populate_char_tree(self._db_selected_player)
         self._clear_form()
+        self._autosave_player_db()
 
     def _remove_char_entry(self):
-        sel = self._char_tree.selection()
-        if not sel or not self._db_selected_player:
+        idx = self._char_tree.indexOfTopLevelItem(self._char_tree.currentItem())
+        if idx < 0 or not self._db_selected_player:
             return
-        idx = int(sel[0])
         chars = self._db_players[self._db_selected_player]
         if idx < len(chars):
             chars.pop(idx)
         self._populate_char_tree(self._db_selected_player)
+        self._autosave_player_db()
 
     def _move_char_entry(self, direction: int):
-        sel = self._char_tree.selection()
-        if not sel or not self._db_selected_player:
+        idx = self._char_tree.indexOfTopLevelItem(self._char_tree.currentItem())
+        if idx < 0 or not self._db_selected_player:
             return
-        idx = int(sel[0])
         chars = self._db_players[self._db_selected_player]
         new_idx = idx + direction
         if 0 <= new_idx < len(chars):
             chars[idx], chars[new_idx] = chars[new_idx], chars[idx]
             self._populate_char_tree(self._db_selected_player)
-            self._char_tree.selection_set(str(new_idx))
+            self._char_tree.setCurrentItem(self._char_tree.topLevelItem(new_idx))
+            self._autosave_player_db()
 
     def _clear_form(self):
-        self._form_char.set("")
-        self._form_skin_var.set("")
+        self._form_char.setCurrentText("")
+        self._form_skin.clear()
         self._skin_stems = []
-        self._form_skin_box["values"] = []
-        self._form_add_btn.config(state="normal")
-        self._form_edit_btn.config(state="disabled")
+        self._form_add_btn.setEnabled(True)
+        self._form_edit_btn.setEnabled(False)
         self._db_selected_char_idx = None
-        self._clear_preview()
+        self._preview_label.clear()
 
     def _save_player_db(self):
         try:
@@ -2817,221 +2596,228 @@ class RivalsGUI:
         except Exception as exc:
             self._log(f"[Error saving player database: {exc}]\n")
 
-    # ------------------------------------------------------------------ #
-    #  Tab: Character Database                                            #
-    # ------------------------------------------------------------------ #
-    def _build_char_db_tab(self, notebook: ttk.Notebook):
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text="Character Database")
+    def _autosave_player_db(self):
+        """Persist after each edit. Silent on success to avoid console spam;
+        errors are still logged. The explicit Save button gives loud feedback."""
+        try:
+            save_player_db(self._db_header, self._db_players)
+        except Exception as exc:
+            self._log(f"[Error auto-saving player database: {exc}]\n")
+
+    # ================================================================== #
+    #  Tab: Character Database                                          #
+    # ================================================================== #
+    def _build_char_db_tab(self):
+        tab = QtWidgets.QWidget()
+        outer = QtWidgets.QVBoxLayout(tab)
+        outer.setContentsMargins(12, 12, 12, 12)
 
         self._cdb_headers: list[str] = []
-        self._cdb_chars: list[str] = []
 
-        top = ttk.Frame(tab)
-        top.pack(fill="both", expand=True, padx=10, pady=(10, 4))
+        hl = QtWidgets.QLabel("Characters")
+        hl.setObjectName("heading")
+        outer.addWidget(hl)
+        self._cdb_list = QtWidgets.QListWidget()
+        outer.addWidget(self._cdb_list)
 
-        ttk.Label(top, text="Characters", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 2))
+        ar = QtWidgets.QHBoxLayout()
+        ar.addWidget(QtWidgets.QLabel("Name:"))
+        self._cdb_new = QtWidgets.QLineEdit()
+        self._cdb_new.setPlaceholderText("Character name...")
+        self._cdb_new.returnPressed.connect(self._cdb_add)
+        ar.addWidget(self._cdb_new)
+        ar.addStretch(1)
+        outer.addLayout(ar)
 
-        list_frame = ttk.Frame(top)
-        list_frame.pack(fill="both", expand=True)
-        cdb_sb = ttk.Scrollbar(list_frame)
-        cdb_sb.pack(side="right", fill="y")
-        self._cdb_listbox = tk.Listbox(
-            list_frame, yscrollcommand=cdb_sb.set,
-            selectmode="single", activestyle="none", width=34,
-            relief="flat", borderwidth=0,
-        )
-        self._cdb_listbox.pack(side="left", fill="both", expand=True)
-        cdb_sb.config(command=self._cdb_listbox.yview)
+        br = QtWidgets.QHBoxLayout()
+        ab = QtWidgets.QPushButton("+ Add")
+        ab.clicked.connect(self._cdb_add)
+        br.addWidget(ab)
+        rnb = QtWidgets.QPushButton("Rename")
+        rnb.clicked.connect(self._cdb_rename)
+        br.addWidget(rnb)
+        rmb = QtWidgets.QPushButton("- Remove")
+        rmb.clicked.connect(self._cdb_remove)
+        br.addWidget(rmb)
+        br.addStretch(1)
+        up = QtWidgets.QPushButton("Move Up")
+        up.clicked.connect(lambda: self._cdb_move(-1))
+        br.addWidget(up)
+        dn = QtWidgets.QPushButton("Move Down")
+        dn.clicked.connect(lambda: self._cdb_move(1))
+        br.addWidget(dn)
+        outer.addLayout(br)
 
-        add_row = ttk.Frame(tab)
-        add_row.pack(fill="x", padx=10, pady=(4, 0))
-        ttk.Label(add_row, text="Name:").pack(side="left")
-        self._cdb_new_var = tk.StringVar()
-        self._cdb_new_entry = ttk.Entry(add_row, textvariable=self._cdb_new_var, width=25)
-        self._cdb_new_entry.pack(side="left", padx=(4, 0))
-        self._cdb_new_entry.bind("<Return>", lambda _: self._cdb_add())
-        self._cdb_new_entry.bind("<Escape>", lambda _: self._cdb_new_var.set(""))
-        _add_placeholder(self._cdb_new_entry, "Character name...")
+        sr = QtWidgets.QHBoxLayout()
+        sb = QtWidgets.QPushButton("Save Character Database")
+        sb.setObjectName("accent")
+        sb.clicked.connect(self._cdb_save)
+        sr.addWidget(sb)
+        rl = QtWidgets.QPushButton("Reload from File")
+        rl.clicked.connect(self._cdb_reload)
+        sr.addWidget(rl)
+        sr.addStretch(1)
+        outer.addLayout(sr)
 
-        btn_row = ttk.Frame(tab)
-        btn_row.pack(fill="x", padx=10, pady=4)
-        ttk.Button(btn_row, text="+ Add",    command=self._cdb_add).pack(side="left", padx=(0, 4))
-        ttk.Button(btn_row, text="Rename",   command=self._cdb_rename).pack(side="left", padx=(0, 4))
-        ttk.Button(btn_row, text="- Remove", command=self._cdb_remove).pack(side="left")
-        ttk.Button(btn_row, text="Move Up",   command=lambda: self._cdb_move(-1)).pack(side="right", padx=(4, 0))
-        ttk.Button(btn_row, text="Move Down", command=lambda: self._cdb_move(1)).pack(side="right")
-
-        ttk.Separator(tab, orient="horizontal").pack(fill="x", padx=10, pady=4)
-
-        save_row = ttk.Frame(tab)
-        save_row.pack(fill="x", padx=10, pady=(0, 8))
-        ttk.Button(save_row, text="Save Character Database", command=self._cdb_save,
-                   style="Accent.TButton").pack(side="left")
-        ttk.Button(save_row, text="Reload from File", command=self._cdb_reload).pack(side="left", padx=(8, 0))
-
+        self.tabs.addTab(tab, "Character Database")
         self._cdb_reload()
 
     def _cdb_reload(self):
-        self._cdb_headers, self._cdb_chars = load_char_db()
-        self._cdb_refresh()
+        self._cdb_headers, chars = load_char_db()
+        self._cdb_list.clear()
+        self._cdb_list.addItems(chars)
 
-    def _cdb_refresh(self):
-        self._cdb_listbox.delete(0, "end")
-        for name in self._cdb_chars:
-            self._cdb_listbox.insert("end", name)
-
-    def _cdb_selected_idx(self):
-        sel = self._cdb_listbox.curselection()
-        return int(sel[0]) if sel else None
+    def _cdb_chars(self) -> list[str]:
+        return [self._cdb_list.item(i).text() for i in range(self._cdb_list.count())]
 
     def _cdb_add(self):
-        raw = self._cdb_new_var.get()
-        name = "" if raw == "Character name..." else raw.strip()
+        name = self._cdb_new.text().strip()
         if not name:
             return
-        if name in self._cdb_chars:
+        if name in self._cdb_chars():
             self._log(f"['{name}' already in character database]\n")
-            self._cdb_new_var.set("")
+            self._cdb_new.clear()
             return
-        self._cdb_chars.append(name)
-        self._cdb_new_var.set("")
-        self._cdb_refresh()
-        idx = len(self._cdb_chars) - 1
-        self._cdb_listbox.selection_set(idx)
-        self._cdb_listbox.see(idx)
+        self._cdb_list.addItem(name)
+        self._cdb_new.clear()
+        self._cdb_list.setCurrentRow(self._cdb_list.count() - 1)
 
     def _cdb_rename(self):
-        idx = self._cdb_selected_idx()
-        if idx is None:
+        idx = self._cdb_list.currentRow()
+        if idx < 0:
             self._log("[Select a character to rename]\n")
             return
-        old_name = self._cdb_chars[idx]
-
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Rename Character")
-        dialog.geometry("280x110")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        ttk.Label(dialog, text="New name:").pack(pady=(14, 4))
-        name_var = tk.StringVar(value=old_name)
-        entry = ttk.Entry(dialog, textvariable=name_var, width=28)
-        entry.pack()
-        entry.focus()
-        entry.select_range(0, "end")
-
-        def confirm():
-            name = name_var.get().strip()
-            if not name or name == old_name:
-                dialog.destroy()
-                return
-            if name in self._cdb_chars:
-                self._log(f"['{name}' already in character database]\n")
-                dialog.destroy()
-                return
-            self._cdb_chars[idx] = name
-            self._cdb_refresh()
-            self._cdb_listbox.selection_set(idx)
-            self._cdb_listbox.see(idx)
-            dialog.destroy()
-
-        entry.bind("<Return>", lambda _: confirm())
-        ttk.Button(dialog, text="Rename", command=confirm).pack(pady=8)
+        old = self._cdb_list.item(idx).text()
+        new, ok = QtWidgets.QInputDialog.getText(self, "Rename Character", "New name:", text=old)
+        if not ok:
+            return
+        new = new.strip()
+        if not new or new == old:
+            return
+        if new in self._cdb_chars():
+            self._log(f"['{new}' already in character database]\n")
+            return
+        self._cdb_list.item(idx).setText(new)
 
     def _cdb_remove(self):
-        idx = self._cdb_selected_idx()
-        if idx is None:
+        idx = self._cdb_list.currentRow()
+        if idx < 0:
             return
-        self._cdb_chars.pop(idx)
-        self._cdb_refresh()
-        new_sel = min(idx, len(self._cdb_chars) - 1)
-        if new_sel >= 0:
-            self._cdb_listbox.selection_set(new_sel)
+        self._cdb_list.takeItem(idx)
 
     def _cdb_move(self, direction: int):
-        idx = self._cdb_selected_idx()
-        if idx is None:
+        idx = self._cdb_list.currentRow()
+        if idx < 0:
             return
         new_idx = idx + direction
-        if 0 <= new_idx < len(self._cdb_chars):
-            self._cdb_chars[idx], self._cdb_chars[new_idx] = self._cdb_chars[new_idx], self._cdb_chars[idx]
-            self._cdb_refresh()
-            self._cdb_listbox.selection_set(new_idx)
-            self._cdb_listbox.see(new_idx)
+        if 0 <= new_idx < self._cdb_list.count():
+            item = self._cdb_list.takeItem(idx)
+            self._cdb_list.insertItem(new_idx, item)
+            self._cdb_list.setCurrentRow(new_idx)
 
     def _cdb_save(self):
         try:
-            save_char_db(self._cdb_headers, self._cdb_chars)
+            save_char_db(self._cdb_headers, self._cdb_chars())
             self._log("[Character database saved]\n")
         except Exception as exc:
             self._log(f"[Error saving character database: {exc}]\n")
 
-    # ------------------------------------------------------------------ #
-    #  Process runners                                                    #
-    # ------------------------------------------------------------------ #
+    # ================================================================== #
+    #  Process runners (QProcess; streams output to the console)        #
+    # ================================================================== #
     def _run(self, cmd: list, on_done=None):
-        def worker():
-            self._log(f"> {' '.join(str(c) for c in cmd)}\n")
-            success = False
-            try:
-                proc = subprocess.Popen(
-                    cmd, cwd=str(ROOT),
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace", bufsize=1,
-                )
-                for line in proc.stdout:
-                    self._log(line)
-                proc.wait()
-                success = proc.returncode == 0
-                self._log(f"[Done — exit {proc.returncode}]\n\n")
-            except Exception as exc:
-                self._log(f"[Error: {exc}]\n\n")
-            # Fire completion callback on the main thread (worker runs off-thread).
-            if success and on_done is not None:
-                self.root.after(0, on_done)
-        threading.Thread(target=worker, daemon=True).start()
+        proc = QProcess(self)
+        proc.setWorkingDirectory(str(ROOT))
+        proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        self._log("> " + " ".join(str(c) for c in cmd) + "\n")
+        proc.readyReadStandardOutput.connect(lambda p=proc: self._read_proc(p))
+
+        def _fin(code, _status, p=proc, cb=on_done):
+            self._read_proc(p)
+            self._log(f"[Done — exit {code}]\n\n")
+            if code == 0 and cb:
+                cb()
+            self._procs.discard(p)
+        proc.finished.connect(_fin)
+        proc.errorOccurred.connect(
+            lambda _e, p=proc: self._log(f"[Error: {p.errorString()}]\n\n"))
+        self._procs.add(proc)
+        proc.start(str(cmd[0]), [str(c) for c in cmd[1:]])
 
     def _run_sequential(self, *cmds: list):
-        def worker():
-            for cmd in cmds:
-                self._log(f"> {' '.join(str(c) for c in cmd)}\n")
-                try:
-                    proc = subprocess.Popen(
-                        cmd, cwd=str(ROOT),
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, encoding="utf-8", errors="replace", bufsize=1,
-                    )
-                    for line in proc.stdout:
-                        self._log(line)
-                    proc.wait()
-                    if proc.returncode != 0:
-                        self._log(f"[Stopped — exit {proc.returncode}]\n\n")
-                        return
-                except Exception as exc:
-                    self._log(f"[Error: {exc}]\n\n")
+        queue = list(cmds)
+
+        def _next():
+            if not queue:
+                self._log("[Done]\n\n")
+                return
+            cmd = queue.pop(0)
+            proc = QProcess(self)
+            proc.setWorkingDirectory(str(ROOT))
+            proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+            self._log("> " + " ".join(str(c) for c in cmd) + "\n")
+            proc.readyReadStandardOutput.connect(lambda p=proc: self._read_proc(p))
+
+            def _fin(code, _status, p=proc):
+                self._read_proc(p)
+                self._procs.discard(p)
+                if code != 0:
+                    self._log(f"[Stopped — exit {code}]\n\n")
                     return
-            self._log("[Done]\n\n")
-        threading.Thread(target=worker, daemon=True).start()
+                _next()
+            proc.finished.connect(_fin)
+            proc.errorOccurred.connect(
+                lambda _e, p=proc: self._log(f"[Error: {p.errorString()}]\n\n"))
+            self._procs.add(proc)
+            proc.start(str(cmd[0]), [str(c) for c in cmd[1:]])
+
+        _next()
+
+    def _read_proc(self, proc: QProcess):
+        data = bytes(proc.readAllStandardOutput()).decode("utf-8", "replace")
+        if data:
+            self._log(data)
 
     # ------------------------------------------------------------------ #
-    #  Console helpers                                                    #
+    #  Console                                                           #
     # ------------------------------------------------------------------ #
     def _log(self, text: str):
-        self.root.after(0, self._append_console, text)
+        # Thread-safe: marshal onto the GUI thread via a signal
+        self.log_signal.emit(text)
 
     def _append_console(self, text: str):
-        self.console.config(state="normal")
-        self.console.insert("end", text)
-        self.console.see("end")
-        self.console.config(state="disabled")
+        self.console.moveCursor(QtGui.QTextCursor.MoveOperation.End)
+        self.console.insertPlainText(text)
+        self.console.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _clear_console(self):
-        self.console.config(state="normal")
-        self.console.delete("1.0", "end")
-        self.console.config(state="disabled")
+        self.console.clear()
+
+
+def main():
+    app = QtWidgets.QApplication(sys.argv)
+    app.setStyle("Fusion")
+
+    # The Fusion combo-popup delegate paints the hovered/selected row from the
+    # palette's Highlight role, ignoring ::item stylesheet rules — so set a
+    # bright Highlight here to make dropdown hovering clearly visible.
+    pal = app.palette()
+    pal.setColor(QtGui.QPalette.ColorRole.Highlight, QtGui.QColor(_HILITE))
+    pal.setColor(QtGui.QPalette.ColorRole.HighlightedText, QtGui.QColor("#ffffff"))
+    app.setPalette(pal)
+
+    app.setStyleSheet(STYLESHEET)
+    win = RivalsWindow()
+
+    if "--selftest" in sys.argv:
+        # Construct, show briefly, then quit 0 — used to validate the build.
+        QtCore.QTimer.singleShot(0, app.quit)
+        win.show()
+        return app.exec()
+
+    win.showMaximized()
+    return app.exec()
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = RivalsGUI(root)
-    root.mainloop()
+    sys.exit(main())

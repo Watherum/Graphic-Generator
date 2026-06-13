@@ -255,7 +255,7 @@ Rivals_2_Generator/
 ├── rivals_event_configs.json      # Per-series thumbnail config overrides
 │
 ├── Python_Scripts/
-│   ├── rivals_gui.py              # Tkinter GUI
+│   ├── rivals_gui.py              # PySide6 (Qt) GUI
 │   ├── generate_rivals_thumbnail.py  # Thumbnail pipeline
 │   ├── populate_rivals_globals.py    # Per-series config & dispatcher
 │   ├── fetch_sets.py              # start.gg match data fetcher
