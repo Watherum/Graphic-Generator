@@ -1,6 +1,6 @@
 {
   "last_event_nums": {
-    "Immortal Fight Night": "279",
+    "Immortal Fight Night": "280",
     "Straight Into The Abyss": "53"
   },
   "last_thumb_series": "Immortal Fight Night",
@@ -13,9 +13,10 @@
       "has_next": true
     },
     "Immortal Fight Night": {
-      "next_date": "",
+      "next_date": "2026-06-12",
       "next_link": "https://start.gg/UIFN",
-      "vods": ""
+      "vods": "",
+      "has_next": true
     },
     "Super Fusion": {
       "next_date": "",
@@ -28,5 +29,6 @@
       "next_link": "",
       "vods": ""
     }
-  }
+  },
+  "last_update_tree": ""
 }

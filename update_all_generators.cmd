@@ -2,7 +2,7 @@
 setlocal
 
 echo ============================================
-echo  Graphic Generator - Update from GitHub
+echo  Graphic Generator - Update ALL Generators
 echo ============================================
 echo.
 

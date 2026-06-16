@@ -1,0 +1,25 @@
+{
+  "last_event_nums": {
+    "CR Clash": "77",
+    "Immortal Fight Night": "145",
+    "Clip It": "3",
+    "CR Arcadian": ""
+  },
+  "last_thumb_series": "CR Clash",
+  "last_posts_series": "Quarantainment",
+  "posts_cfg": {
+    "Quarantainment": {
+      "next_date": "2026-06-16",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
+    },
+    "CR Clash": {
+      "next_date": "2026-06-16",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
+    }
+  },
+  "last_update_tree": ""
+}

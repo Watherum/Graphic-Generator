@@ -79,6 +79,18 @@ def setGlobals(weekly_event, property_settings=None):
         global_properties = populate_globals.setGlobalsIzAw(weekly_event)
     else:
         global_properties = populate_globals.set_default_properties(weekly_event)
+    # Apply per-event JSON config overrides (from melee_event_configs.json)
+    try:
+        import json as _json
+        _cfg_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "melee_event_configs.json")
+        with open(_cfg_path, encoding="utf-8") as _f:
+            _all_cfgs = _json.load(_f)
+        for _label in sorted(_all_cfgs, key=len, reverse=True):
+            if weekly_event.startswith(_label):
+                global_properties.update(_all_cfgs[_label])
+                break
+    except Exception:
+        pass
     # return properties
     return global_properties
 
@@ -149,7 +161,13 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
         # grab whole title
         a_title = a_line.strip()
         # trim off the event
-        a_line = a_line[r_start:]
+        a_line = a_line[r_start:].lstrip()
+        # New format separates the event from the round with ' - '
+        # ("{event} - {round} - ..."); old format used a space
+        # ("{event} {round} - ..."). Drop a leading separator so the round
+        # parses the same way for both.
+        if a_line.startswith('- '):
+            a_line = a_line[2:]
         # split based off '-' to grab round information
         a_line = a_line.split(' - ', 1)
         a_round = a_line[0].strip()

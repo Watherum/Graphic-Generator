@@ -1,0 +1,22 @@
+{
+  "last_event_nums": {
+    "Immortal Fight Night": "280"
+  },
+  "last_thumb_series": "Immortal Fight Night",
+  "last_posts_series": "Quarantainment",
+  "posts_cfg": {
+    "Quarantainment": {
+      "next_date": "2026-06-16",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
+    },
+    "Immortal Fight Night": {
+      "next_date": "2026-06-16",
+      "next_link": "https://start.gg/UIFN",
+      "vods": "",
+      "has_next": true
+    }
+  },
+  "last_update_tree": ""
+}

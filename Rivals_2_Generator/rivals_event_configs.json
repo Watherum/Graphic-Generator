@@ -1,0 +1,75 @@
+{
+  "Immortal Fight Night": {
+    "background_file": "Resources\\Overlays\\Background_IFN.png",
+    "foreground_file": "Resources\\Overlays\\Foreground_IFN.png",
+    "font_location": "Resources\\Fonts\\Bantayog-Light.otf",
+    "char_glow_bool": false,
+    "one_char_flag": false,
+    "resize_1": 0.8,
+    "resize_2": 0.32,
+    "resize_3": 0.32,
+    "font_player1_size": 90,
+    "font_player2_size": 90,
+    "font_event_size": 65,
+    "font_round_size": 95,
+    "text_angle": 0,
+    "center_shift_1": [
+      -0.0,
+      0.0
+    ],
+    "center_shift_2_1": [
+      -0.0,
+      0.0
+    ],
+    "center_shift_2_2": [
+      -0.35,
+      0.03
+    ],
+    "center_shift_3_1": [
+      -0.0,
+      0.0
+    ],
+    "center_shift_3_2": [
+      -0.35,
+      0.1
+    ],
+    "center_shift_3_3": [
+      0.025,
+      0.1
+    ],
+    "text_player1": [
+      0.24,
+      0.065
+    ],
+    "text_player2": [
+      0.76,
+      0.065
+    ],
+    "text_event": [
+      0.795,
+      0.919
+    ],
+    "text_round": [
+      0.205,
+      0.919
+    ],
+    "char_offset1": [
+      0.0,
+      0.0
+    ],
+    "char_offset2": [
+      0.5,
+      0.0
+    ],
+    "char_window": [
+      0.5,
+      1.0
+    ],
+    "font_color1": "#FCBA1C",
+    "font_color2": "#FCBA1C",
+    "font_color3": "#FCBA1C",
+    "font_color4": "#FCBA1C",
+    "event_round_single_text": false,
+    "event_round_text_split": " "
+  }
+}

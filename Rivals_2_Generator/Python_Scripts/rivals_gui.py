@@ -18,6 +18,7 @@ import re
 import shutil
 import socket
 import socketserver
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -31,6 +32,8 @@ from PySide6.QtCore import Qt, QProcess, Signal
 #  Paths & constants                                                          #
 # --------------------------------------------------------------------------- #
 ROOT = Path(__file__).parent.parent
+REPO_ROOT = ROOT.parent            # git repo root (contains all generators)
+GENERATOR_DIR = ROOT.name          # this generator's folder name (update pathspec)
 PYTHON = sys.executable
 THUMBNAIL_SCRIPT = ROOT / "Python_Scripts" / "generate_rivals_thumbnail.py"
 RENDERS_DIR = ROOT / "Resources" / "Character_Renders" / "Rivals_2_Full_Renders"
@@ -338,7 +341,22 @@ QPushButton#accent {{
     font-weight: 600;
 }}
 QPushButton#accent:hover {{ background-color: #1a86dd; }}
-QPushButton#tool {{ padding: 4px 6px; }}
+QPushButton#tool {{
+    padding: 0;
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    border-radius: 6px;
+    font-size: 16px;
+    color: {_MUTED};
+}}
+QPushButton#tool:hover {{
+    color: {_FG};
+    background-color: #474747;
+    border-color: {_HILITE};
+}}
+QPushButton#tool:pressed {{ background-color: #525252; }}
 
 QTabWidget::pane {{ border: 0; background-color: {_BG}; }}
 QTabBar::tab {{
@@ -488,7 +506,7 @@ def _muted(text: str) -> QtWidgets.QLabel:
 #  VOD list model (virtualized — handles large match lists smoothly)          #
 # --------------------------------------------------------------------------- #
 class VodModel(QtCore.QAbstractTableModel):
-    HEADERS = ["", "Match line"]
+    HEADERS = ["", "", "Match line"]
 
     def __init__(self):
         super().__init__()
@@ -499,15 +517,17 @@ class VodModel(QtCore.QAbstractTableModel):
         return 0 if parent.isValid() else len(self._rows)
 
     def columnCount(self, parent=QtCore.QModelIndex()):
-        return 2
+        return 3
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
         row = self._rows[index.row()]
         col = index.column()
-        if col == 1 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+        if col == 2 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             return row["text"]
+        if col == 1 and role == Qt.ItemDataRole.ToolTipRole:
+            return "Copy line"
         if col == 0 and role == Qt.ItemDataRole.CheckStateRole:
             return Qt.CheckState.Checked if row["checked"] else Qt.CheckState.Unchecked
         if role == Qt.ItemDataRole.BackgroundRole and row["checked"]:
@@ -518,14 +538,14 @@ class VodModel(QtCore.QAbstractTableModel):
         if not index.isValid():
             return False
         row = self._rows[index.row()]
-        if index.column() == 1 and role == Qt.ItemDataRole.EditRole:
+        if index.column() == 2 and role == Qt.ItemDataRole.EditRole:
             row["text"] = value
             self.dataChanged.emit(index, index)
             return True
         if index.column() == 0 and role == Qt.ItemDataRole.CheckStateRole:
             row["checked"] = (Qt.CheckState(value) == Qt.CheckState.Checked)
             left = self.index(index.row(), 0)
-            right = self.index(index.row(), 1)
+            right = self.index(index.row(), 2)
             self.dataChanged.emit(left, right)
             return True
         return False
@@ -536,7 +556,7 @@ class VodModel(QtCore.QAbstractTableModel):
         f = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         if index.column() == 0:
             f |= Qt.ItemFlag.ItemIsUserCheckable
-        else:
+        elif index.column() == 2:
             f |= Qt.ItemFlag.ItemIsEditable
         return f
 
@@ -564,7 +584,7 @@ class VodModel(QtCore.QAbstractTableModel):
         for r in self._rows:
             r["checked"] = checked
         self.dataChanged.emit(self.index(0, 0),
-                              self.index(len(self._rows) - 1, 1))
+                              self.index(len(self._rows) - 1, 2))
 
     def delete_marked(self) -> int:
         keep = [r for r in self._rows if not r["checked"]]
@@ -685,14 +705,69 @@ class ComboItemDelegate(QtWidgets.QStyledItemDelegate):
 
 
 # --------------------------------------------------------------------------- #
+#  Copy-line button delegate (VOD table)                                       #
+# --------------------------------------------------------------------------- #
+class CopyButtonDelegate(QtWidgets.QStyledItemDelegate):
+    """Paints a small clickable "copy" icon per row instead of using a real
+    per-row widget, so the virtualized VOD table stays cheap. Emits
+    ``copyRequested(row)`` on left-click."""
+
+    copyRequested = QtCore.Signal(int)
+
+    def paint(self, painter, option, index):
+        painter.save()
+        # Preserve the model's row background (e.g. checked-row highlight).
+        bg = index.data(Qt.ItemDataRole.BackgroundRole)
+        base = QtGui.QColor(bg) if bg is not None else QtGui.QColor(_BG3)
+        painter.fillRect(option.rect, base)
+
+        hovered = bool(option.state & QtWidgets.QStyle.StateFlag.State_MouseOver)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+
+        size = 22
+        bx = option.rect.x() + (option.rect.width() - size) // 2
+        by = option.rect.y() + (option.rect.height() - size) // 2
+        btn = QtCore.QRect(bx, by, size, size)
+        if hovered:
+            base = QtGui.QColor("#474747")
+            painter.setBrush(base)
+            painter.setPen(QtGui.QPen(QtGui.QColor(_HILITE), 1))
+            painter.drawRoundedRect(btn, 5, 5)
+
+        # Two offset sheets = a "copy" glyph.
+        cx, cy = btn.center().x(), btn.center().y()
+        back = QtCore.QRectF(cx - 1.0, cy - 6.0, 7.0, 9.0)
+        front = QtCore.QRectF(cx - 4.0, cy - 3.0, 7.0, 9.0)
+        ink = QtGui.QColor(_FG if hovered else _MUTED)
+        painter.setPen(QtGui.QPen(ink, 1.3))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(back, 1.6, 1.6)
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(front, 1.6, 1.6)
+        painter.fillPath(path, base)           # occlude the overlap
+        painter.drawRoundedRect(front, 1.6, 1.6)
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        if (event.type() == QtCore.QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton
+                and option.rect.contains(event.pos())):
+            self.copyRequested.emit(index.row())
+            return True
+        return False
+
+
+# --------------------------------------------------------------------------- #
 #  Main window                                                                 #
 # --------------------------------------------------------------------------- #
 class RivalsWindow(QtWidgets.QMainWindow):
     log_signal = Signal(str)
+    update_status_signal = Signal(str, str)   # (message, level: ok|avail|err|busy)
+    update_done_signal = Signal(bool, str)    # (success, new folder-tree sha)
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Rivals 2 Generator Made by Watherum")
+        self.setWindowTitle("Rivals 2 Generator Powered By Watherum")
         for folder in _OUTPUT_FOLDERS:
             (ROOT / folder).mkdir(exist_ok=True)
 
@@ -731,6 +806,8 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._splitter = splitter
 
         self.log_signal.connect(self._append_console)
+        self.update_status_signal.connect(self._on_update_status)
+        self.update_done_signal.connect(self._on_update_done)
 
         # Build tabs
         self._build_fetch_tab()
@@ -740,6 +817,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._build_renders_tab()
         self._build_player_db_tab()
         self._build_char_db_tab()
+        self._build_update_tab()
 
         # Give every dropdown a visibly highlighted hover/selection. A custom
         # delegate is used because the stylesheet/palette can't reliably reach
@@ -796,6 +874,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
             "last_thumb_series": self._thumb_series.currentText() if hasattr(self, "_thumb_series") else "",
             "last_posts_series": series,
             "posts_cfg": posts_cfg,
+            "last_update_tree": self._settings.get("last_update_tree", ""),
         }
         self._settings = data
         SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -1047,8 +1126,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._thumb_series = QtWidgets.QComboBox()
         self._thumb_series.setMinimumWidth(220)
         row1.addWidget(self._thumb_series)
-        refresh = QtWidgets.QPushButton("↺")
+        refresh = QtWidgets.QPushButton("⟳")
         refresh.setObjectName("tool")
+        refresh.setToolTip("Refresh event list")
         refresh.clicked.connect(self._refresh_thumbnail_events)
         row1.addWidget(refresh)
         row1.addSpacing(12)
@@ -1475,8 +1555,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._vod_file = QtWidgets.QComboBox()
         self._vod_file.setMinimumWidth(360)
         row.addWidget(self._vod_file)
-        rb = QtWidgets.QPushButton("↺")
+        rb = QtWidgets.QPushButton("⟳")
         rb.setObjectName("tool")
+        rb.setToolTip("Refresh VOD file list")
         rb.clicked.connect(self._refresh_vod_files)
         row.addWidget(rb)
         row.addStretch(1)
@@ -1488,8 +1569,13 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._vod_view.setMinimumHeight(330)
         self._vod_view.verticalHeader().setVisible(False)
         self._vod_view.horizontalHeader().setSectionResizeMode(
-            1, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            2, QtWidgets.QHeaderView.ResizeMode.Stretch)
         self._vod_view.setColumnWidth(0, 30)
+        self._vod_view.setColumnWidth(1, 34)
+        self._vod_view.setMouseTracking(True)  # enables per-cell hover state
+        self._vod_copy_delegate = CopyButtonDelegate(self._vod_view)
+        self._vod_copy_delegate.copyRequested.connect(self._vod_copy_row)
+        self._vod_view.setItemDelegateForColumn(1, self._vod_copy_delegate)
         self._vod_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._vod_view.customContextMenuRequested.connect(self._vod_context_menu)
         self._vod_model.dataChanged.connect(lambda *_: self._vod_update_delete_btn())
@@ -1575,10 +1661,16 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
     def _vod_add_new_row(self):
         pos = self._vod_model.add_blank()
-        idx = self._vod_model.index(pos, 1)
+        idx = self._vod_model.index(pos, 2)
         self._vod_view.scrollTo(idx)
         self._vod_view.setCurrentIndex(idx)
         self._vod_view.edit(idx)
+
+    def _vod_copy_row(self, r: int):
+        text = self._vod_model.text_at(r)
+        if text:
+            QtWidgets.QApplication.clipboard().setText(text)
+            self._log(f"[Copied to clipboard: {text}]\n")
 
     def _vod_delete_marked(self):
         removed = self._vod_model.delete_marked()
@@ -1613,8 +1705,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._top8_series = QtWidgets.QComboBox()
         self._top8_series.setMinimumWidth(220)
         row1.addWidget(self._top8_series)
-        rb = QtWidgets.QPushButton("↺")
+        rb = QtWidgets.QPushButton("⟳")
         rb.setObjectName("tool")
+        rb.setToolTip("Refresh series list")
         rb.clicked.connect(self._refresh_top8_series)
         row1.addWidget(rb)
         row1.addStretch(1)
@@ -1651,8 +1744,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._top8_html_file = QtWidgets.QComboBox()
         self._top8_html_file.setMinimumWidth(320)
         rowh.addWidget(self._top8_html_file)
-        rbh = QtWidgets.QPushButton("↺")
+        rbh = QtWidgets.QPushButton("⟳")
         rbh.setObjectName("tool")
+        rbh.setToolTip("Refresh HTML file list")
         rbh.clicked.connect(self._refresh_top8_html_files)
         rowh.addWidget(rbh)
         openb = QtWidgets.QPushButton("Open in Browser")
@@ -2016,8 +2110,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._posts_series = QtWidgets.QComboBox()
         self._posts_series.setMinimumWidth(220)
         row1.addWidget(self._posts_series)
-        rb = QtWidgets.QPushButton("↺")
+        rb = QtWidgets.QPushButton("⟳")
         rb.setObjectName("tool")
+        rb.setToolTip("Refresh event list")
         rb.clicked.connect(self._refresh_posts_events)
         row1.addWidget(rb)
         row1.addSpacing(12)
@@ -2248,8 +2343,35 @@ class RivalsWindow(QtWidgets.QMainWindow):
         b.setMaximumWidth(220)
         v.addWidget(b)
         outer.addWidget(box)
+
+        folders = QtWidgets.QGroupBox("Open Folders")
+        fv = QtWidgets.QVBoxLayout(folders)
+        fv.addWidget(_muted("Open the render folders in File Explorer."))
+        frow = QtWidgets.QHBoxLayout()
+        open_full = QtWidgets.QPushButton("Open Full Renders")
+        open_full.clicked.connect(
+            lambda: self._open_dir(RENDERS_DIR, "Full Renders"))
+        frow.addWidget(open_full)
+        open_src = QtWidgets.QPushButton("Open Renders Source")
+        open_src.clicked.connect(
+            lambda: self._open_dir(ROOT / "Resources" / "Character_Renders_Source",
+                                   "Character Renders Source"))
+        frow.addWidget(open_src)
+        frow.addStretch(1)
+        fv.addLayout(frow)
+        outer.addWidget(folders)
+
         outer.addStretch(1)
         self.tabs.addTab(tab, "Character Renders")
+
+    def _open_dir(self, folder, label: str):
+        if not folder.is_dir():
+            self._log(f"[Error: {label} folder not found: {folder}]\n")
+            return
+        try:
+            os.startfile(str(folder))
+        except Exception as exc:
+            self._log(f"[Error opening folder: {exc}]\n")
 
     def _download_renders(self):
         self._run([PYTHON, str(ROOT / "Python_Scripts" / "download_rivals_renders.py")])
@@ -2262,6 +2384,191 @@ class RivalsWindow(QtWidgets.QMainWindow):
             [PYTHON, str(ROOT / "Python_Scripts" / "download_rivals_renders.py")],
             [PYTHON, str(ROOT / "Python_Scripts" / "copy_rivals_renders_to_full.py")],
         )
+
+    # ================================================================== #
+    #  Tab: Update                                                      #
+    # ================================================================== #
+    def _build_update_tab(self):
+        tab = QtWidgets.QWidget()
+        outer = QtWidgets.QVBoxLayout(tab)
+        outer.setContentsMargins(12, 12, 12, 12)
+
+        box = QtWidgets.QGroupBox("Update Rivals 2 Generator")
+        v = QtWidgets.QVBoxLayout(box)
+        v.addWidget(_muted(
+            "Check GitHub for a newer version of this generator and apply it. "
+            "Only the Rivals_2_Generator folder is updated — your player "
+            "database and settings are preserved. Restart the app after updating "
+            "to load the new version."))
+
+        self._update_status = QtWidgets.QLabel("Status: not checked yet.")
+        self._update_status.setObjectName("heading")
+        v.addWidget(self._update_status)
+
+        row = QtWidgets.QHBoxLayout()
+        self._check_update_btn = QtWidgets.QPushButton("Check for Updates")
+        self._check_update_btn.clicked.connect(self._on_check_updates)
+        row.addWidget(self._check_update_btn)
+        self._do_update_btn = QtWidgets.QPushButton("Update Now")
+        self._do_update_btn.setObjectName("accent")
+        self._do_update_btn.clicked.connect(self._on_do_update)
+        row.addWidget(self._do_update_btn)
+        row.addStretch(1)
+        v.addLayout(row)
+
+        outer.addWidget(box)
+        outer.addStretch(1)
+        self.tabs.addTab(tab, "Update")
+
+    # -- git helper (runs from the repo root; streams output to the console) -- #
+    def _run_git(self, args: list, echo: bool = True):
+        cmd = ["git"] + args
+        if echo:
+            self._log("> " + " ".join(cmd) + "\n")
+        try:
+            proc = subprocess.run(
+                cmd, cwd=str(REPO_ROOT), capture_output=True,
+                text=True, encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            self._log("[Error: git not found. Install Git for Windows to enable updates.]\n")
+            return 1, ""
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if echo and out.strip():
+            self._log(out if out.endswith("\n") else out + "\n")
+        return proc.returncode, (proc.stdout or "")
+
+    def _on_check_updates(self):
+        if getattr(self, "_update_running", False):
+            return
+        self._update_running = True
+        self.update_status_signal.emit("Checking…", "busy")
+        threading.Thread(target=self._check_updates_worker, daemon=True).start()
+
+    def _on_do_update(self):
+        if getattr(self, "_update_running", False):
+            return
+        resp = QtWidgets.QMessageBox.question(
+            self, "Update Generator",
+            "Update this generator to the latest version from GitHub?\n\n"
+            "Your player database and settings will be preserved. "
+            "Restart the app afterwards to load the new version.",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No)
+        if resp != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        self._update_running = True
+        self.update_status_signal.emit("Updating…", "busy")
+        threading.Thread(target=self._apply_update_worker, daemon=True).start()
+
+    def _check_updates_worker(self):
+        try:
+            if self._run_git(["rev-parse", "--is-inside-work-tree"], echo=False)[0] != 0:
+                self.update_status_signal.emit(
+                    "Not a git checkout — updates unavailable. "
+                    "Re-clone from GitHub to enable updating.", "err")
+                return
+            if self._run_git(["fetch", "origin", "main"])[0] != 0:
+                self.update_status_signal.emit(
+                    "Could not reach GitHub. Check your internet connection.", "err")
+                return
+            remote = self._run_git(
+                ["rev-parse", "FETCH_HEAD:" + GENERATOR_DIR], echo=False)[1].strip()
+            head = self._run_git(
+                ["rev-parse", "HEAD:" + GENERATOR_DIR], echo=False)[1].strip()
+            marker = self._settings.get("last_update_tree", "")
+            if not remote:
+                self.update_status_signal.emit(
+                    "Could not determine update status.", "err")
+            elif remote == head or remote == marker:
+                self.update_status_signal.emit("Up to date.", "ok")
+            else:
+                self.update_status_signal.emit(
+                    "Update available! Click “Update Now” to install.", "avail")
+        finally:
+            self._update_running = False
+
+    def _apply_update_worker(self):
+        try:
+            self._log("\n=== Updating " + GENERATOR_DIR + " ===\n")
+            if self._run_git(["rev-parse", "--is-inside-work-tree"], echo=False)[0] != 0:
+                self._log("[Not a git checkout — cannot update.]\n\n")
+                self.update_done_signal.emit(False, "")
+                return
+
+            # Stash local changes within this folder so they aren't clobbered.
+            dirty = bool(self._run_git(
+                ["status", "--porcelain", "--", GENERATOR_DIR], echo=False)[1].strip())
+            stashed = False
+            if dirty:
+                self._log("Stashing your local changes…\n")
+                stashed = self._run_git(
+                    ["stash", "push", "--include-untracked",
+                     "-m", "pre-update (GUI)", "--", GENERATOR_DIR])[0] == 0
+
+            if self._run_git(["fetch", "origin", "main"])[0] != 0:
+                if stashed:
+                    self._run_git(["stash", "pop"])
+                self.update_done_signal.emit(False, "")
+                return
+
+            ok = self._run_git(
+                ["checkout", "FETCH_HEAD", "--", GENERATOR_DIR])[0] == 0
+
+            if stashed:
+                self._log("Restoring your local changes…\n")
+                if self._run_git(["stash", "pop"])[0] != 0:
+                    self._log("[Warning: could not auto-restore local changes due to a "
+                              "conflict. Run 'git stash pop' manually to resolve.]\n")
+
+            if ok:
+                sha = self._run_git(
+                    ["rev-parse", "FETCH_HEAD:" + GENERATOR_DIR], echo=False)[1].strip()
+                self.update_done_signal.emit(True, sha)
+            else:
+                self.update_done_signal.emit(False, "")
+        finally:
+            self._update_running = False
+
+    def _on_update_status(self, msg: str, level: str):
+        colors = {"ok": "#3FB950", "avail": "#E08000",
+                  "err": "#E5534B", "busy": _MUTED}
+        self._update_status.setText("Status: " + msg)
+        self._update_status.setStyleSheet(
+            "font-weight: 600; font-size: 11pt; color: %s;"
+            % colors.get(level, _FG))
+        busy = (level == "busy")
+        self._check_update_btn.setEnabled(not busy)
+        self._do_update_btn.setEnabled(not busy)
+
+    def _on_update_done(self, success: bool, sha: str):
+        if success:
+            if sha:
+                self._settings["last_update_tree"] = sha
+                self._save_settings()
+            self._log("[Update complete. Restart the generator to load the new version.]\n\n")
+            self.update_status_signal.emit(
+                "Updated! Restart the app to load the new version.", "ok")
+            box = QtWidgets.QMessageBox(self)
+            box.setIcon(QtWidgets.QMessageBox.Icon.Information)
+            box.setWindowTitle("Update Complete")
+            box.setText("The generator was updated successfully.\n\n"
+                        "Restart the app now to load the new version.")
+            restart_btn = box.addButton("Restart Now",
+                                        QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Later", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is restart_btn:
+                self._restart_app()
+        else:
+            self._log("[Update failed. See messages above.]\n\n")
+            self.update_status_signal.emit(
+                "Update failed. See the console for details.", "err")
+
+    def _restart_app(self):
+        """Relaunch this app with the same interpreter/arguments, then quit."""
+        self._log("[Restarting…]\n")
+        QProcess.startDetached(sys.executable, sys.argv[:])
+        QtWidgets.QApplication.quit()
 
     # ================================================================== #
     #  Tab: Player Database                                             #

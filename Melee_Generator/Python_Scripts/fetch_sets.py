@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fetch completed sets from a start.gg event and print them in the VOD naming format:
-  {Tournament} {Round} - {Player1} ({Chars}) Vs {Player2} ({Chars}) - {Game}
+  {Tournament} - {Round} - {Player1} ({Chars}) Vs {Player2} ({Chars}) - {Game}
 
 Usage:
   python fetch_sets.py <event-slug> [--name "My Tournament"] [--station N] [--out sets.txt]
@@ -144,7 +144,7 @@ def format_set(set_node: dict, tournament_name: str, game_name: str) -> Optional
         .replace("Semi-Final", "Semi")
     )
 
-    prefix = " ".join(p for p in [tournament_name, round_text] if p)
+    prefix = " - ".join(p for p in [tournament_name, round_text] if p)
     line = f"{prefix} - {matchup}"
     if game_name:
         line += f" - {game_name}"
