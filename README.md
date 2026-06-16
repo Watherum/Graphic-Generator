@@ -1,6 +1,6 @@
 # Graphic Generator
 
-Batch image generator for Rivals 2 esports — creates YouTube thumbnails, Top 8 bracket graphics, and results posts for weekly events. Originally based on work by CR_Jetstream; now primarily focused on Rivals 2. Ultimate and Melee generators are also included.
+Batch image generator for Rivals 2 esports — creates YouTube thumbnails, Top 8 bracket graphics, and results posts for weekly events. Originally based on work by CR_Jetstream; now primarily focused on Rivals 2. Ultimate and Melee generators are also included and share the same Qt GUI and feature set.
 
 ## Requirements
 
@@ -9,7 +9,11 @@ Batch image generator for Rivals 2 esports — creates YouTube thumbnails, Top 8
 
 ## Updating
 
-Run `update.cmd` from the repo root to pull the latest code from GitHub. It will stash any local changes (generated outputs, VOD name files, etc.), pull the latest source, then restore your local changes. Requires [Git for Windows](https://git-scm.com/download/win).
+Requires [Git for Windows](https://git-scm.com/download/win). Every method stashes your local changes (generated outputs, VOD name files, databases, settings), pulls the latest source, then restores your changes — so updating won't clobber your data. There are three ways:
+
+- **Update everything** — run `update_all_generators.cmd` from the repo root to pull the latest code for all three generators at once.
+- **Update one game** — run `update.cmd` inside that generator's folder (e.g. `Rivals_2_Generator\update.cmd`) to update only that generator and leave the others untouched.
+- **From the GUI** — open the **Update** tab in any generator's GUI, click **Check for Updates**, then **Update Now**. You'll be prompted to restart the app afterwards so the new version loads.
 
 ---
 
@@ -23,7 +27,14 @@ Ultimate_Generator\Launch_Ultimate_GUI.vbs
 Melee_Generator\Launch_Melee_GUI.vbs
 ```
 
-The Rivals 2 GUI has seven tabs:
+The **Ultimate** and **Melee** generators now have the same Qt GUI with the same tabs. The main game-specific differences:
+
+- Costume **skins are numbered 1–8** (rather than Rivals' named skins) in the Player Database, with the same live preview
+- The **Character Database** is a two-column `alias → render filename` mapping rather than a single-column name list
+- The **Character Renders** tab simply opens the full render folder (the dragdown.wiki downloader is Rivals-only)
+- Per-event thumbnail overrides save to `ultimate_event_configs.json` / `melee_event_configs.json` respectively
+
+The Rivals 2 GUI has eight tabs:
 
 ---
 
@@ -146,9 +157,9 @@ Fetch and edit results posts for Twitter/X or Discord from start.gg results.
 
 - Select a series and event number
 - Toggle **Next Event** to include the next event's date and link in the post
-- Choose **Twitter** or **Discord** platform and click **Fetch Post**
+- Click **Fetch Twitter** or **Fetch Discord** to pull standings with the matching social handles
 - The generated post text appears in the editable text area
-- Click **Save** to write changes back to `Results_Posts/{Event Name} {Platform} Post.txt`
+- Click **Save** to write changes back to `Results_Posts/{Event Name} {Platform} Post.txt`, or **Copy** to copy it to the clipboard
 
 ---
 
@@ -176,6 +187,20 @@ Add, edit, and search player entries and their character mains/alts.
 ### 7. Character Database
 
 Manage the list of recognised character names used during thumbnail generation. Add entries inline — changes take effect on the next thumbnail run.
+
+*(In the Ultimate and Melee GUIs this is a two-column `alias → render filename` table instead.)*
+
+---
+
+### 8. Update
+
+Check for and install updates to this generator from GitHub without leaving the GUI.
+
+- **Check for Updates** — compares your copy against the latest on GitHub and reports whether you're up to date
+- **Update Now** — downloads and applies the update for **this generator only**; your databases and settings are preserved
+- After a successful update, a prompt offers to **Restart Now** so the new version loads
+
+Requires the project to be a Git checkout (cloned, not a downloaded ZIP). Detection ignores your local edits (databases, settings), so they never trigger a false "update available".
 
 ---
 
