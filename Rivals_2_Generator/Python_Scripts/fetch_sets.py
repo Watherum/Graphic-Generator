@@ -113,7 +113,11 @@ def build_entrant_characters(games: list) -> dict[str, list[str]]:
     return entrant_chars
 
 
-def format_set(set_node: dict, tournament_name: str, game_name: str) -> Optional[str]:
+MAX_LINE_LEN = 100
+
+
+def format_set(set_node: dict, tournament_name: str, game_name: str,
+               abbrev: str = "", max_len: int = MAX_LINE_LEN) -> Optional[str]:
     games = set_node.get("games") or []
     entrant_chars = build_entrant_characters(games)
 
@@ -144,10 +148,18 @@ def format_set(set_node: dict, tournament_name: str, game_name: str) -> Optional
         .replace("Semi-Final", "Semi")
     )
 
-    prefix = " - ".join(p for p in [tournament_name, round_text] if p)
-    line = f"{prefix} - {matchup}"
-    if game_name:
-        line += f" - {game_name}"
+    def assemble(event_prefix: str) -> str:
+        prefix = " - ".join(p for p in [event_prefix, round_text] if p)
+        ln = f"{prefix} - {matchup}"
+        if game_name:
+            ln += f" - {game_name}"
+        return ln
+
+    line = assemble(tournament_name)
+    # Swap in the shorter abbreviation only when the full name pushes the line
+    # past the length budget — keeps most lines spelled out in full.
+    if abbrev and len(line) > max_len:
+        line = assemble(abbrev)
     return line
 
 
@@ -159,6 +171,11 @@ def main():
     parser.add_argument(
         "--name", "-n", default="",
         help="Tournament short name (default: event name from API)",
+    )
+    parser.add_argument(
+        "--abbrev", "-a", default="",
+        help="Abbreviated tournament name; substituted for --name on any line "
+             f"longer than {MAX_LINE_LEN} characters",
     )
     parser.add_argument(
         "--station", "-s", type=int, default=None,
@@ -207,19 +224,23 @@ def main():
 
     lines = []
     for node in nodes:
-        line = format_set(node, tournament_name, game_name_out)
+        line = format_set(node, tournament_name, game_name_out, args.abbrev)
         if line:
             lines.append(line)
 
     print(f"Formatted sets: {len(lines)}", file=sys.stderr)
 
+    # When an abbreviation is in play, record it as a header comment so the
+    # thumbnail generator recognises abbreviated lines as the same event.
+    header = f"# ABBREV: {args.abbrev}\n" if args.abbrev else ""
+
     output = "\n".join(lines)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
-            f.write(output + "\n")
+            f.write(header + output + "\n")
         print(f"Wrote to {args.out}", file=sys.stderr)
     else:
-        print(output)
+        print(header + output)
 
 
 if __name__ == "__main__":

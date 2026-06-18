@@ -119,7 +119,28 @@ def readMatchLines(filename, event_name=None):
     return return_lines
 
 
-def createMatches(match_lines, log_file=None, event_name=None, event_short_name=None):
+def readEventAbbrev(filename):
+    """
+    Scan a VOD names file for an '# ABBREV: <name>' header written by
+    fetch_sets.py. Returns the abbreviated tournament name, or None if absent.
+    Long match lines use this abbreviation in place of the full event name, so
+    the parser must accept it as an alternate prefix.
+    """
+    try:
+        with io.open(filename, "r", encoding='utf8') as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped.startswith('#'):
+                    continue
+                if stripped[1:].strip().upper().startswith('ABBREV:'):
+                    return stripped.split(':', 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
+def createMatches(match_lines, log_file=None, event_name=None, event_short_name=None,
+                  event_abbrev=None):
     """
     Take in list of line information, create a list of matches
     Writes out information to log file if present
@@ -148,12 +169,23 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
     #  {event_name} - {player_1} ({char_A, char_B, char_C}) Vs. {player_2} ({char_X, char_Y, char_Z}) - SSBU
     print("--- Reading Match Lines ---")
     match_list = []
-    r_start = len(event_name)  # index for reading the round information
+    # A line may begin with either the full event name or its abbreviation
+    # (see readEventAbbrev). Try the longest known prefix first so the whole
+    # event token is removed before the round is parsed.
+    _prefixes = sorted({p for p in (event_name, event_abbrev) if p},
+                       key=len, reverse=True)
     for a_line in match_lines:
         # grab whole title
         a_title = a_line.strip()
-        # trim off the event
-        a_line = a_line[r_start:].lstrip()
+        # trim off the event (full name or abbreviation)
+        a_line = a_title
+        for _prefix in _prefixes:
+            if a_line.startswith(_prefix):
+                a_line = a_line[len(_prefix):]
+                break
+        else:
+            a_line = a_line[len(event_name):]  # fallback: trim by full-name length
+        a_line = a_line.lstrip()
         # New format separates the event from the round with ' - '
         # ("{event} - {round} - ..."); old format used a space
         # ("{event} {round} - ..."). Drop a leading separator so the round
@@ -685,9 +717,13 @@ def main(argv):
     # 1. Read in the names file to get event, round, names, characters information
     print("Reading event information from \"{s}\"".format(s=_properties['event_file']))
     event_match_lines = readMatchLines(_properties['event_file'])
+    # Pick up any abbreviated event prefix recorded in the names file so that
+    # long match lines (which use the abbreviation) still parse correctly.
+    event_abbrev = readEventAbbrev(_properties['event_file'])
     # Create list of matches
     event_match_list = createMatches(event_match_lines, output_file,
-                                     _properties['event_name'], _properties['event_short_name'])
+                                     _properties['event_name'], _properties['event_short_name'],
+                                     event_abbrev=event_abbrev)
     # 2. Have a blank graphic ready to populate the information
     back_image = Image.open(_properties['background_file'])
     # back_image.show()

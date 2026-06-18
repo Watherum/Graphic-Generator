@@ -43,19 +43,14 @@ SETTINGS_PATH = ROOT / "rivals_gui_settings.json"
 CUSTOM_EVENTS_PATH = ROOT / "rivals_custom_events.json"
 EVENT_CONFIGS_PATH = ROOT / "rivals_event_configs.json"
 
-CHARACTERS = [
-    "Absa", "Armando", "Clairen", "Etalus", "Fleet", "Forsburn",
-    "Galvan", "Kragg", "La Reina", "Loxodont", "Maypul", "Olympia",
-    "Orcane", "Ranno", "Random", "Slade", "Wrastor", "Zetterburn",
-]
+def char_abbrev(char_name: str) -> str:
+    """The 3-letter prefix the devs use in render filenames (T_<Abbrev>_..._CSP.png).
 
-CHAR_ABBREVS = {
-    "Absa": "Abs", "Armando": "Arm", "Clairen": "Cla", "Etalus": "Eta",
-    "Fleet": "Fle", "Forsburn": "For", "Galvan": "Gal", "Kragg": "Kra",
-    "La Reina": "Lar", "Loxodont": "Lox", "Maypul": "May", "Olympia": "Oly",
-    "Orcane": "Orc", "Ranno": "Ran", "Slade": "Sla", "Wrastor": "Wra",
-    "Zetterburn": "Zet",
-}
+    By convention the prefix is the first three letters of the character name with
+    spaces removed (Absa->Abs, La Reina->Lar). Deriving it here means new characters
+    work with no code changes as long as their CSPs follow that naming."""
+    return char_name.replace(" ", "")[:3]
+
 
 # Dark palette
 _BG = "#1c1c1c"
@@ -79,6 +74,7 @@ FETCH_EVENTS = [
         "label": "Immortal Fight Night",
         "slug_template": "tournament/ultimate-immortal-fight-night-{n}/event/rivals-2-singles",
         "name_template": "Immortal Fight Night {n}",
+        "default_abbrev": "IFN",
         "default_num": "274",
         "default_link": "https://start.gg/UIFN{n}",
         "top8_file": "Immortal Fight Night Top 8 HTML.txt",
@@ -88,6 +84,7 @@ FETCH_EVENTS = [
         "label": "Straight Into The Abyss",
         "slug_template": "tournament/straight-into-the-abyss-{n}/event/rivals-2-singles",
         "name_template": "Straight Into The Abyss {n}",
+        "default_abbrev": "SITA",
         "default_num": "47",
         "default_link": "https://start.gg/SITA{n}",
         "top8_file": "Straight Into The Abyss Top 8 HTML.txt",
@@ -96,6 +93,10 @@ FETCH_EVENTS = [
 ]
 
 _OUTPUT_FOLDERS = ["Vod_Names", "Youtube_Thumbnails", "Top_8_Texts", "Results_Posts"]
+
+# VOD match-line length budget. Lines longer than this get the series abbreviation
+# swapped in for the full tournament name (see fetch_sets.py --abbrev).
+MAX_LINE_LEN = 100
 
 try:
     import populate_rivals_globals as _pg
@@ -114,10 +115,11 @@ def get_skins_for_char(char_name: str) -> list[str]:
             f.stem for f in RENDERS_DIR.glob("T_Ran_*.png")
             if not f.stem.endswith("_CSP")
         )
-    abbrev = CHAR_ABBREVS.get(char_name)
-    if not abbrev:
-        return []
-    return sorted(f.stem for f in RENDERS_DIR.glob(f"T_{abbrev}_*_CSP.png"))
+    prefix = f"t_{char_abbrev(char_name)}_".lower()
+    return sorted(
+        f.stem for f in RENDERS_DIR.glob("T_*_CSP.png")
+        if f.stem.lower().startswith(prefix)
+    )
 
 
 def skin_label(stem: str) -> str:
@@ -506,7 +508,7 @@ def _muted(text: str) -> QtWidgets.QLabel:
 #  VOD list model (virtualized — handles large match lists smoothly)          #
 # --------------------------------------------------------------------------- #
 class VodModel(QtCore.QAbstractTableModel):
-    HEADERS = ["", "", "Match line"]
+    HEADERS = ["", "", "Match line", "Len"]
 
     def __init__(self):
         super().__init__()
@@ -517,7 +519,7 @@ class VodModel(QtCore.QAbstractTableModel):
         return 0 if parent.isValid() else len(self._rows)
 
     def columnCount(self, parent=QtCore.QModelIndex()):
-        return 3
+        return 4
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
@@ -526,6 +528,18 @@ class VodModel(QtCore.QAbstractTableModel):
         col = index.column()
         if col == 2 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             return row["text"]
+        if col == 3:
+            length = len(row["text"].strip())
+            if role == Qt.ItemDataRole.DisplayRole:
+                return f"{length}/{MAX_LINE_LEN}"
+            if role == Qt.ItemDataRole.TextAlignmentRole:
+                return int(Qt.AlignmentFlag.AlignCenter)
+            if role == Qt.ItemDataRole.ForegroundRole and length > MAX_LINE_LEN:
+                return QtGui.QColor("#ff6b6b")
+            if role == Qt.ItemDataRole.ToolTipRole:
+                return ("Over the 100-character limit — set an Abbreviation for this "
+                        "series in the Fetch tab and re-fetch" if length > MAX_LINE_LEN
+                        else "Match-line length")
         if col == 1 and role == Qt.ItemDataRole.ToolTipRole:
             return "Copy line"
         if col == 0 and role == Qt.ItemDataRole.CheckStateRole:
@@ -540,12 +554,13 @@ class VodModel(QtCore.QAbstractTableModel):
         row = self._rows[index.row()]
         if index.column() == 2 and role == Qt.ItemDataRole.EditRole:
             row["text"] = value
-            self.dataChanged.emit(index, index)
+            # Refresh both the edited cell and the length column beside it
+            self.dataChanged.emit(index, self.index(index.row(), 3))
             return True
         if index.column() == 0 and role == Qt.ItemDataRole.CheckStateRole:
             row["checked"] = (Qt.CheckState(value) == Qt.CheckState.Checked)
             left = self.index(index.row(), 0)
-            right = self.index(index.row(), 2)
+            right = self.index(index.row(), 3)
             self.dataChanged.emit(left, right)
             return True
         return False
@@ -584,10 +599,19 @@ class VodModel(QtCore.QAbstractTableModel):
         for r in self._rows:
             r["checked"] = checked
         self.dataChanged.emit(self.index(0, 0),
-                              self.index(len(self._rows) - 1, 2))
+                              self.index(len(self._rows) - 1, 3))
 
     def delete_marked(self) -> int:
         keep = [r for r in self._rows if not r["checked"]]
+        removed = len(self._rows) - len(keep)
+        if removed:
+            self.beginResetModel()
+            self._rows = keep
+            self.endResetModel()
+        return removed
+
+    def delete_unmarked(self) -> int:
+        keep = [r for r in self._rows if r["checked"]]
         removed = len(self._rows) - len(keep)
         if removed:
             self.beginResetModel()
@@ -871,6 +895,10 @@ class RivalsWindow(QtWidgets.QMainWindow):
             "last_event_nums": {
                 label: w["num"].text() for label, w in self._fetch_widgets.items()
             },
+            "abbrevs": {
+                label: w["abbrev"].text() for label, w in self._fetch_widgets.items()
+                if "abbrev" in w
+            },
             "last_thumb_series": self._thumb_series.currentText() if hasattr(self, "_thumb_series") else "",
             "last_posts_series": series,
             "posts_cfg": posts_cfg,
@@ -923,6 +951,20 @@ class RivalsWindow(QtWidgets.QMainWindow):
             row1.addStretch(1)
             v.addLayout(row1)
 
+            rowa = QtWidgets.QHBoxLayout()
+            rowa.addWidget(QtWidgets.QLabel("Abbrev:"))
+            saved_abbrev = self._settings.get("abbrevs", {}).get(
+                cfg["label"], cfg.get("default_abbrev", ""))
+            abbrev = _hline(saved_abbrev, 90)
+            abbrev.setToolTip("Short tournament name used for VOD lines over "
+                              f"{MAX_LINE_LEN} characters (e.g. IFN). The event "
+                              "number is appended automatically.")
+            rowa.addWidget(abbrev)
+            rowa.addWidget(_muted(f"used when a match line exceeds {MAX_LINE_LEN} chars"))
+            rowa.addStretch(1)
+            v.addLayout(rowa)
+            abbrev.textChanged.connect(lambda _t: self._save_settings())
+
             def _on_num(text, lk=link, tmpl=cfg["default_link"], label=cfg["label"]):
                 lk.setText(tmpl.replace("{n}", text.strip()))
                 if hasattr(self, "_thumb_series") and self._thumb_series.currentText() == label:
@@ -934,7 +976,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
             row2 = QtWidgets.QHBoxLayout()
             b1 = QtWidgets.QPushButton("Fetch VOD Names")
-            b1.clicked.connect(lambda _=False, c=cfg, n=num: self._fetch_sets(c, n.text().strip()))
+            b1.clicked.connect(lambda _=False, c=cfg, n=num, a=abbrev: self._fetch_sets(c, n.text().strip(), a.text().strip()))
             row2.addWidget(b1)
             b2 = QtWidgets.QPushButton("Fetch Top 8")
             b2.clicked.connect(lambda _=False, c=cfg, n=num, lk=link: self._fetch_top8(c, n.text().strip(), lk.text().strip()))
@@ -942,7 +984,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
             row2.addStretch(1)
             v.addLayout(row2)
             lay.addWidget(box)
-            self._fetch_widgets[cfg["label"]] = {"num": num, "link": link}
+            self._fetch_widgets[cfg["label"]] = {"num": num, "link": link, "abbrev": abbrev}
 
         # Saved custom tournaments
         self._saved_custom_box = QtWidgets.QGroupBox("Saved Custom Tournaments")
@@ -963,12 +1005,17 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._custom_name.setFixedWidth(250)
         form.addWidget(self._custom_name, 1, 1)
         form.addWidget(_muted("e.g. Immortal Fight Night"), 1, 2)
-        form.addWidget(QtWidgets.QLabel("Event #:"), 2, 0)
+        form.addWidget(QtWidgets.QLabel("Abbrev:"), 2, 0)
+        self._custom_abbrev = QtWidgets.QLineEdit()
+        self._custom_abbrev.setFixedWidth(120)
+        form.addWidget(self._custom_abbrev, 2, 1)
+        form.addWidget(_muted(f"optional — used when a match line exceeds {MAX_LINE_LEN} chars"), 2, 2)
+        form.addWidget(QtWidgets.QLabel("Event #:"), 3, 0)
         self._custom_num = _hline("", 60)
-        form.addWidget(self._custom_num, 2, 1)
+        form.addWidget(self._custom_num, 3, 1)
         save_fetch = QtWidgets.QPushButton("Save & Fetch VOD Names")
         save_fetch.clicked.connect(self._fetch_custom_sets)
-        form.addWidget(save_fetch, 3, 1)
+        form.addWidget(save_fetch, 4, 1)
         form.setColumnStretch(3, 1)
         lay.addWidget(addbox)
         lay.addStretch(1)
@@ -1009,8 +1056,24 @@ class RivalsWindow(QtWidgets.QMainWindow):
                 e["top8_link"] = text
                 self._save_custom_events()
 
+            rowa = QtWidgets.QHBoxLayout()
+            rowa.addWidget(QtWidgets.QLabel("Abbrev:"))
+            abbrev = _hline(entry.get("abbrev", ""), 90)
+            abbrev.setToolTip("Short tournament name used for VOD lines over "
+                              f"{MAX_LINE_LEN} characters. The event number is "
+                              "appended automatically.")
+            rowa.addWidget(abbrev)
+            rowa.addWidget(_muted(f"used when a match line exceeds {MAX_LINE_LEN} chars"))
+            rowa.addStretch(1)
+            v.addLayout(rowa)
+
+            def _on_abbrev(text, e=entry):
+                e["abbrev"] = text
+                self._save_custom_events()
+
             num.textChanged.connect(_on_num)
             link.textChanged.connect(_on_link)
+            abbrev.textChanged.connect(_on_abbrev)
 
             row2 = QtWidgets.QHBoxLayout()
             b1 = QtWidgets.QPushButton("Fetch VOD Names")
@@ -1034,12 +1097,14 @@ class RivalsWindow(QtWidgets.QMainWindow):
             self._log("[Error: slug is required]\n")
             return
         label = (name_tmpl or slug_tmpl).replace(" {n}", "").replace("{n}", "").strip()
+        abbrev = self._custom_abbrev.text().strip()
         slug = slug_tmpl.replace("{n}", num)
         name = (name_tmpl or slug_tmpl).replace("{n}", num)
         out = str(ROOT / "Vod_Names" / f"{name} Names.txt")
         entry = {
             "label": label, "slug_template": slug_tmpl,
             "name_template": name_tmpl or slug_tmpl,
+            "abbrev": abbrev,
             "top8_file": f"{label} Top 8 HTML.txt",
             "current_num": num, "top8_link": "",
         }
@@ -1052,13 +1117,20 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._save_custom_events()
         self._build_saved_custom_rows()
         self._refresh_thumbnail_events()
-        self._run([PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out])
+        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out]
+        if abbrev:
+            cmd += ["--abbrev", f"{abbrev} {num}".strip()]
+        self._run(cmd)
 
     def _fetch_saved_custom(self, entry: dict, num: str):
         slug = entry["slug_template"].replace("{n}", num)
         name = entry["name_template"].replace("{n}", num)
         out = str(ROOT / "Vod_Names" / f"{name} Names.txt")
-        self._run([PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out])
+        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out]
+        abbrev = entry.get("abbrev", "").strip()
+        if abbrev:
+            cmd += ["--abbrev", f"{abbrev} {num}".strip()]
+        self._run(cmd)
 
     def _fetch_saved_custom_top8(self, entry: dict, num: str, link: str):
         slug = entry["slug_template"].replace("{n}", num)
@@ -1086,11 +1158,14 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._build_saved_custom_rows()
         self._refresh_thumbnail_events()
 
-    def _fetch_sets(self, cfg: dict, n: str):
+    def _fetch_sets(self, cfg: dict, n: str, abbrev: str = ""):
         name = cfg["name_template"].format(n=n)
         slug = cfg["slug_template"].format(n=n)
         out = str(ROOT / "Vod_Names" / f"{name} Names.txt")
-        self._run([PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out])
+        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out]
+        if abbrev:
+            cmd += ["--abbrev", f"{abbrev} {n}".strip()]
+        self._run(cmd)
 
     def _fetch_top8(self, cfg: dict, n: str, link: str):
         name = cfg["name_template"].format(n=n)
@@ -1560,6 +1635,23 @@ class RivalsWindow(QtWidgets.QMainWindow):
         rb.setToolTip("Refresh VOD file list")
         rb.clicked.connect(self._refresh_vod_files)
         row.addWidget(rb)
+        row.addSpacing(20)
+        row.addWidget(QtWidgets.QLabel("Character:"))
+        self._vod_char_picker = QtWidgets.QComboBox()
+        self._vod_char_picker.setMinimumWidth(160)
+        self._vod_char_picker.setToolTip(
+            "Pick a character, then Copy to paste the exact spelling into a VOD line")
+        self._refresh_vod_char_picker()
+        row.addWidget(self._vod_char_picker)
+        crb = QtWidgets.QPushButton("⟳")
+        crb.setObjectName("tool")
+        crb.setToolTip("Refresh character list")
+        crb.clicked.connect(self._refresh_vod_char_picker)
+        row.addWidget(crb)
+        cc = QtWidgets.QPushButton("Copy")
+        cc.setToolTip("Copy the selected character name to the clipboard")
+        cc.clicked.connect(self._copy_vod_char)
+        row.addWidget(cc)
         row.addStretch(1)
         cbox.addLayout(row)
 
@@ -1572,6 +1664,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
             2, QtWidgets.QHeaderView.ResizeMode.Stretch)
         self._vod_view.setColumnWidth(0, 30)
         self._vod_view.setColumnWidth(1, 34)
+        self._vod_view.setColumnWidth(3, 64)
         self._vod_view.setMouseTracking(True)  # enables per-cell hover state
         self._vod_copy_delegate = CopyButtonDelegate(self._vod_view)
         self._vod_copy_delegate.copyRequested.connect(self._vod_copy_row)
@@ -1593,6 +1686,10 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._vod_delete_btn.setEnabled(False)
         self._vod_delete_btn.clicked.connect(self._vod_delete_marked)
         rb2.addWidget(self._vod_delete_btn)
+        self._vod_delete_unmarked_btn = QtWidgets.QPushButton("Delete Unmarked")
+        self._vod_delete_unmarked_btn.setEnabled(False)
+        self._vod_delete_unmarked_btn.clicked.connect(self._vod_delete_unmarked)
+        rb2.addWidget(self._vod_delete_unmarked_btn)
         ca = QtWidgets.QPushButton("Check All")
         ca.clicked.connect(lambda: self._vod_model.set_all(True))
         rb2.addWidget(ca)
@@ -1603,6 +1700,23 @@ class RivalsWindow(QtWidgets.QMainWindow):
         cbox.addLayout(rb2)
 
         self._vod_file.currentTextChanged.connect(self._load_vod_file)
+
+    def _refresh_vod_char_picker(self):
+        cur = self._vod_char_picker.currentText()
+        chars = sorted(load_char_db()[1], key=str.casefold)
+        self._vod_char_picker.blockSignals(True)
+        self._vod_char_picker.clear()
+        self._vod_char_picker.addItems(chars)
+        if cur in chars:
+            self._vod_char_picker.setCurrentText(cur)
+        self._vod_char_picker.blockSignals(False)
+
+    def _copy_vod_char(self):
+        name = self._vod_char_picker.currentText().strip()
+        if not name:
+            return
+        QtWidgets.QApplication.clipboard().setText(name)
+        self._log(f"[Copied character to clipboard: {name}]\n")
 
     def _vod_context_menu(self, pos):
         idx = self._vod_view.indexAt(pos)
@@ -1680,9 +1794,20 @@ class RivalsWindow(QtWidgets.QMainWindow):
             self._log("[No rows marked to delete]\n")
         self._vod_update_delete_btn()
 
+    def _vod_delete_unmarked(self):
+        removed = self._vod_model.delete_unmarked()
+        if removed:
+            self._log(f"[Deleted {removed} unmarked row(s)]\n")
+        else:
+            self._log("[No unmarked rows to delete]\n")
+        self._vod_update_delete_btn()
+
     def _vod_update_delete_btn(self):
+        checked = self._vod_model.any_checked()
         if hasattr(self, "_vod_delete_btn"):
-            self._vod_delete_btn.setEnabled(self._vod_model.any_checked())
+            self._vod_delete_btn.setEnabled(checked)
+        if hasattr(self, "_vod_delete_unmarked_btn"):
+            self._vod_delete_unmarked_btn.setEnabled(checked)
 
     def _save_vod_file(self):
         name = self._vod_file.currentText()
@@ -1973,7 +2098,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         slot_section("Player Names", self._d8_names, "Size px")
         slot_section("Sponsors", self._d8_sponsors, "Size px")
 
-        apply_btn = QtWidgets.QPushButton("Apply Config")
+        apply_btn = QtWidgets.QPushButton("Apply Config && Save")
         apply_btn.setObjectName("accent")
         apply_btn.clicked.connect(self._apply_default_top8_config)
         cbox.addWidget(apply_btn)
@@ -2075,7 +2200,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
                 ("font-size", f["size"].text(), "px")])
 
         self._top8_html_text.setPlainText(html)
-        self._log("[Default config applied — click Save to write to disk]\n")
+        self._save_top8_html()
 
     def _open_top8_html_in_browser(self):
         name = self._top8_html_file.currentText()
@@ -2668,7 +2793,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         form_row = QtWidgets.QHBoxLayout()
         form_row.addWidget(QtWidgets.QLabel("Character:"))
         self._form_char = QtWidgets.QComboBox()
-        self._form_char.addItems([""] + CHARACTERS)
+        self._form_char.addItems([""] + load_char_db()[1])
         self._form_char.currentTextChanged.connect(self._on_form_char_change)
         form_row.addWidget(self._form_char)
         form_row.addSpacing(12)
@@ -3032,8 +3157,23 @@ class RivalsWindow(QtWidgets.QMainWindow):
         try:
             save_char_db(self._cdb_headers, self._cdb_chars())
             self._log("[Character database saved]\n")
+            self._reload_char_dropdowns()
         except Exception as exc:
             self._log(f"[Error saving character database: {exc}]\n")
+
+    def _reload_char_dropdowns(self):
+        """Repopulate character dropdowns from the live CSV so edits in the
+        Character Database tab appear everywhere without an app restart."""
+        chars = load_char_db()[1]
+        if hasattr(self, "_form_char"):
+            cur = self._form_char.currentText()
+            self._form_char.blockSignals(True)
+            self._form_char.clear()
+            self._form_char.addItems([""] + chars)
+            self._form_char.setCurrentText(cur if cur in chars else "")
+            self._form_char.blockSignals(False)
+        if hasattr(self, "_vod_char_picker"):
+            self._refresh_vod_char_picker()
 
     # ================================================================== #
     #  Process runners (QProcess; streams output to the console)        #

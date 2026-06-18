@@ -5,6 +5,12 @@
     "Clip It": "3",
     "CR Arcadian": ""
   },
+  "abbrevs": {
+    "CR Clash": "CRC",
+    "Immortal Fight Night": "IFN",
+    "Clip It": "",
+    "CR Arcadian": "CRA"
+  },
   "last_thumb_series": "CR Clash",
   "last_posts_series": "Quarantainment",
   "posts_cfg": {

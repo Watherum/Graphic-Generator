@@ -44,21 +44,29 @@ Pull match data and top 8 standings directly from start.gg.
 
 **Preset Tournaments** (Immortal Fight Night, Straight Into The Abyss)
 - Enter the event number and top 8 link
+- Optionally set an **Abbrev** (e.g. `IFN`) — see *Tournament abbreviations* below
 - Click **Fetch VOD Names** or **Fetch Top 8**
-- Event numbers and links are saved automatically between sessions
+- Event numbers, links, and abbreviations are saved automatically between sessions
 
 **Saved Custom Tournaments**
 - Custom tournaments you've previously added appear here as their own sections
-- Each shows an Event # field, Top 8 Link field, and **Fetch VOD Names** / **Fetch Top 8** / **Delete** buttons
-- Event numbers and top 8 links are saved automatically between sessions
+- Each shows an Event # field, Top 8 Link field, an **Abbrev** field, and **Fetch VOD Names** / **Fetch Top 8** / **Delete** buttons
+- Event numbers, top 8 links, and abbreviations are saved automatically between sessions
 
 **Add New Custom Tournament**
 - Enter a slug template (use `{n}` as a placeholder for the event number, e.g. `tournament/my-event-{n}/event/rivals-2-singles`)
 - Enter a series name (e.g. `My Weekly`)
+- Optionally enter an **Abbrev** for the series
 - Enter a starting event number
 - Click **Save & Fetch VOD Names** — the tournament is saved and will appear in Saved Custom Tournaments on future boots
 
 > **Fetch Top 8** always writes to both the event-specific text file and `Top_8_Texts/Default Top 8 HTML.txt`, keeping the default template in sync with the latest event.
+
+#### Tournament abbreviations
+
+YouTube limits video titles to 100 characters. Each VOD match line begins with the full tournament name, and long names plus long player tags can push a line over that limit.
+
+Set a short **Abbrev** for a series (e.g. `IFN` for *Immortal Fight Night*) and the event number is appended automatically (`IFN 274`). When fetching VOD names, any line that would exceed 100 characters has its tournament name swapped for the abbreviation; lines that already fit keep the full name. Thumbnails still generate correctly from abbreviated lines — the abbreviation only shortens the title, and the full series name is still drawn on the graphic.
 
 ---
 
@@ -90,7 +98,9 @@ View and edit match data files without leaving the GUI.
 
 - Dropdown shows only files matching the selected series, sorted by event number (highest first)
 - Click ↺ to rescan the folder
-- Edit lines directly in the text area and click **Save**
+- Edit lines directly in the table and click **Save**
+- The **Len** column shows each line's character count as `N/100` and turns red when a line exceeds the 100-character title limit — a cue to set an **Abbrev** for the series and re-fetch
+- Tick rows and use **Delete Marked** to remove them, or **Delete Unmarked** to keep only the ticked rows
 
 Click **Generate Thumbnails** to run the pipeline. Output goes to `Youtube_Thumbnails/{Event Name}/`. Missing player/character lookups are logged to `Vod_Names/missing.log`.
 
@@ -143,7 +153,7 @@ A visual config form for adjusting the layout of the selected HTML file without 
 | Player Names | Top %, Left %, Size px for each slot |
 | Sponsors | Top %, Left %, Size px for each slot |
 
-Click **Apply Config** to push the form values into the HTML editor, then **Save** (in the HTML Source section) to write to disk.
+Click **Apply Config & Save** to push the form values into the HTML editor and write them to disk in one step.
 
 **HTML Source** *(collapsible, starts collapsed)*
 
@@ -215,6 +225,9 @@ python "Python_Scripts\generate_rivals_thumbnail.py" -e "Straight Into The Abyss
 
 # Fetch match data from start.gg
 python "Python_Scripts\fetch_sets.py" tournament/straight-into-the-abyss-41/event/rivals-2-singles --name "Straight Into The Abyss 41" --out "Vod_Names\Straight Into The Abyss 41 Names.txt"
+
+# ...add --abbrev to shorten lines over 100 chars (writes an "# ABBREV:" header the generator reads)
+python "Python_Scripts\fetch_sets.py" tournament/straight-into-the-abyss-41/event/rivals-2-singles --name "Straight Into The Abyss 41" --abbrev "SITA 41" --out "Vod_Names\Straight Into The Abyss 41 Names.txt"
 
 # Fetch top 8 bracket data
 python "Python_Scripts\fetch_startgg_top8.py" tournament/straight-into-the-abyss-41/event/rivals-2-singles --name "Straight Into The Abyss 41" --out "Top_8_Texts\Straight Into The Abyss Top 8 HTML.txt"
