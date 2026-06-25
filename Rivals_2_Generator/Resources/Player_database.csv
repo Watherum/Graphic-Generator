@@ -3,7 +3,7 @@
 # Player,character,alt,character,alt,character,alt,character,alt,character,alt,character,alt,,,,,,
 Watherum,Ranno,T_Ran_Tuxedo_Neutral_CSP,Clairen,T_Cla_Abyss_Red_CSP,Kragg,T_Kra_Default_Abyssal_CSP,Zetterburn,T_Zet_Abyss_Red_CSP,Galvan,T_Gal_Genesis_Red_CSP
 Monocle Gentlesir,Maypul,T_May_Sylvan_Green_CSP,Clairen,T_Cla_Abyss_Green_CSP,La Reina,T_Lar_Hornet_Green_CSP
-Average Alex,Clairen,T_Cla_Leopard_Pink_CSP,Forsburn,T_For_Default_Neutral_CSP,Random,T_Ran_Blue,Maypul,T_May_Primal_Orange_CSP,Wrastor,T_Wra_Default_Neutral_CSP,Kragg,T_Kra_Default_Neutral_CSP,Orcane,T_Orc_Prehistoric_CoolBlue_CSP,Loxodont,T_Lox_Summer_Blue_CSP,Zetterburn,T_Zet_Default_Neutral_CSP,Etalus,T_Eta_Default_Green_CSP,Olympia,T_Oly_LowPoly_Green_CSP,Fleet,T_Fle_Ranger_Green_CSP,Ranno,T_Ran_LowPoly_Orange_CSP,Absa,T_Abs_Summer_Green_CSP,Galvan,T_Gal_Abyss_Midnight_CSP,La Reina,T_Lar_Lucha_Green_CSP,Slade,T_Sla_Champion_Red_CSP
+Average Alex,Clairen,T_Cla_Leopard_Pink_CSP,Forsburn,T_For_Default_Neutral_CSP,Random,T_Ran_Blue,Maypul,T_May_Primal_Orange_CSP,Wrastor,T_Wra_Default_Neutral_CSP,Kragg,T_Kra_Default_Neutral_CSP,Orcane,T_Orc_Prehistoric_CoolBlue_CSP,Loxodont,T_Lox_Summer_Blue_CSP,Zetterburn,T_Zet_Default_Neutral_CSP,Etalus,T_Eta_Default_Green_CSP,Olympia,T_Oly_LowPoly_Green_CSP,Fleet,T_Fle_Ranger_Green_CSP,Ranno,T_Ran_LowPoly_Orange_CSP,Absa,T_Abs_Summer_Green_CSP,Galvan,T_Gal_Champion_Red_CSP,La Reina,T_Lar_Lucha_Green_CSP,Slade,T_Sla_Champion_Red_CSP
 ZeeBee,Kragg,T_Kra_Default_Blue_CSP,Random,T_Ran_Blue,Etalus,T_Eta_Default_Green_CSP,Clairen,T_Cla_Default_Blue_CSP,Zetterburn,T_Zet_Default_Red_CSP,Orcane,T_Orc_Default_Red_CSP,Slade,T_Sla_Abyss_Midnight_CSP
 Mars,Clairen,T_Cla_Default_Neutral_CSP
 Crowbar,Kragg,T_Kra_Soccer_Neutral_CSP,Zetterburn,T_Zet_Default_Blue_CSP,Random,T_Ran_Blue
@@ -65,9 +65,9 @@ ZAP,Absa,T_Abs_Default_Yellow_CSP
 Markrealth,Etalus,T_Eta_Lucha_Blue_CSP,Kragg,T_Kra_Rockstar_Blue_CSP,Loxodont,T_Lox_Hockey_Green_CSP,Random,T_Ran_Blue
 Ross,Zetterburn,T_Zet_Flavorburn_Green_CSP
 Drewsephix,Orcane,T_Orc_Genesis_Neutral_CSP,Absa,T_Abs_Mecha_Red_CSP,Slade,T_Sla_Lovers_Neutral_CSP
-Bowler,Clairen,T_Cla_Summer_Summer_CSP
+Bowler,Clairen,T_Cla_Pirate_Neutral_CSP
 hotel pneumario,Etalus,T_Eta_Striped_Red_CSP
-Shard,Fleet,T_Fle_Summer_Red_CSP,Maypul,T_May_Pirate_Red_CSP,Absa,T_Abs_Abyss_Blue_CSP
+Shard,Fleet,T_Fle_Abyss_Midnight_CSP,Maypul,T_May_Pirate_Red_CSP,Absa,T_Abs_Abyss_Blue_CSP
 SapphireGD,Zetterburn,T_Zet_Cheetah_Blue_CSP
 Nothigh,Loxodont,T_Lox_Lovers_Neutral_CSP,La Reina,T_Lar_Abyss_Red_CSP
 Turnap,Ranno,T_Ran_Default_Summer_CSP,La Reina,T_Lar_Default_Blue_CSP
@@ -156,7 +156,7 @@ Env3lop,Wrastor,T_Wra_Puffin_Neutral_CSP
 DrLobster,Kragg,T_Kra_Salaryman_Neutral_CSP
 Triforce!,Forsburn,T_For_Summer_Green_CSP
 B-Rabbit,Ranno,T_Ran_Clown_Yellow_CSP
-Cap Aigis,Ranno,T_Ran_LowPoly_Blue_CSP
+Cap Aigis,Ranno,T_Ran_Abyss_Midnight_CSP
 Mimi,Galvan,T_Gal_Yuletide_Neutral_CSP
 JollyRoger,Clairen,T_Cla_Pirate_Neutral_CSP
 edith,Clairen,T_Cla_Tiger_Red_CSP
@@ -164,3 +164,7 @@ Jessu,Slade,T_Sla_Champion_Blue_CSP
 AlphaStone,Fleet,T_Fle_Ranger_Blue_CSP
 Glum,Slade,T_Sla_Default_Neutral_CSP
 Mecano,Zetterburn,T_Zet_Vampire_White_CSP
+DirtbagCarlos,Loxodont,T_Lox_Hockey_Valhalla_CSP,La Reina,T_Lar_Pajama_Siesta_CSP
+MERGAS,Loxodont,T_Lox_Lovers_CoolBlue_CSP
+Gusta,Maypul,T_May_Default_Neutral_CSP
+Oneoutkast,Kragg,T_Kra_Prehistoric_Red_CSP

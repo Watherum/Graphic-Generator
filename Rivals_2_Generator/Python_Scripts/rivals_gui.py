@@ -447,6 +447,18 @@ class CollapsibleBox(QtWidgets.QWidget):
         self.content.setVisible(checked)
         self._toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
 
+    def setExpanding(self):
+        """Allow this box to grow vertically to fill available space in its parent layout."""
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self.content.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self.layout().setStretchFactor(self.content, 1)
+
     def addWidget(self, w):
         self.content_layout.addWidget(w)
 
@@ -504,6 +516,44 @@ def _muted(text: str) -> QtWidgets.QLabel:
     return lbl
 
 
+_VOD_VS_RE = re.compile(r'\bVs\b')
+_VOD_PARENS_RE = re.compile(r'\(([^)]*)\)')
+_VOD_PLAYER_RE = re.compile(r'^(.+?)\s*\(([^)]*)\)\s*$')
+
+def _vod_missing_chars(text: str) -> bool:
+    """True when a match line has a Vs but is missing or has empty character parens."""
+    if not _VOD_VS_RE.search(text):
+        return False
+    parens = _VOD_PARENS_RE.findall(text)
+    # No parens at all, or at least one set of parens is blank
+    return not parens or any(not p.strip() for p in parens)
+
+
+def _parse_vod_players(line: str) -> list:
+    """Return [(player_name, [char, ...]), ...] for a match line."""
+    parts = line.split(" - ")
+    if len(parts) < 4:
+        return []
+    players_section = " - ".join(parts[2:-1])
+    results = []
+    for player_str in re.split(r'\s+Vs\s+', players_section):
+        m = _VOD_PLAYER_RE.match(player_str.strip())
+        if m:
+            name = m.group(1).strip()
+            chars = [c.strip() for c in m.group(2).split(',') if c.strip()]
+            results.append((name, chars))
+    return results
+
+
+def _neutral_skin_for(char: str) -> str:
+    """Return the neutral-skin stem for a character, or '' if none found."""
+    skins = get_skins_for_char(char)
+    for s in skins:
+        if "neutral" in s.lower():
+            return s
+    return skins[0] if skins else ""
+
+
 # --------------------------------------------------------------------------- #
 #  VOD list model (virtualized — handles large match lists smoothly)          #
 # --------------------------------------------------------------------------- #
@@ -528,6 +578,11 @@ class VodModel(QtCore.QAbstractTableModel):
         col = index.column()
         if col == 2 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             return row["text"]
+        if col == 2 and _vod_missing_chars(row["text"]):
+            if role == Qt.ItemDataRole.ForegroundRole:
+                return QtGui.QColor("#ff6b6b")
+            if role == Qt.ItemDataRole.ToolTipRole:
+                return "Missing character data — add character name(s) inside the parentheses"
         if col == 3:
             length = len(row["text"].strip())
             if role == Qt.ItemDataRole.DisplayRole:
@@ -838,8 +893,8 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._build_thumbnails_tab()
         self._build_top8_tab()
         self._build_posts_tab()
-        self._build_renders_tab()
         self._build_player_db_tab()
+        self._build_renders_tab()
         self._build_char_db_tab()
         self._build_update_tab()
 
@@ -1192,7 +1247,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
     #  Tab: Generate Thumbnails                                          #
     # ================================================================== #
     def _build_thumbnails_tab(self):
-        lay = self._scroll_tab("Generate Thumbnails")
+        tab_widget = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(tab_widget)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(10)
+        self.tabs.addTab(tab_widget, "Generate Thumbnails")
 
         box = QtWidgets.QGroupBox("Event")
         v = QtWidgets.QVBoxLayout(box)
@@ -1231,10 +1290,12 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
         # Generate buttons
         row_gen = QtWidgets.QHBoxLayout()
-        gen = QtWidgets.QPushButton("Generate Thumbnails")
-        gen.setObjectName("accent")
-        gen.clicked.connect(self._generate_thumbnails)
-        row_gen.addWidget(gen)
+        self._gen_thumb_btn = QtWidgets.QPushButton("Generate Thumbnails")
+        self._gen_thumb_btn.setObjectName("accent")
+        self._gen_thumb_btn.setEnabled(False)
+        self._gen_thumb_btn.setToolTip("Fill in character data for all match lines to enable")
+        self._gen_thumb_btn.clicked.connect(self._generate_thumbnails)
+        row_gen.addWidget(self._gen_thumb_btn)
         self._open_thumb_btn = QtWidgets.QPushButton("Open Output Folder")
         self._open_thumb_btn.clicked.connect(self._open_thumbnail_folder)
         row_gen.addWidget(self._open_thumb_btn)
@@ -1242,9 +1303,8 @@ class RivalsWindow(QtWidgets.QMainWindow):
         lay.addLayout(row_gen)
         self._thumb_event_name.textChanged.connect(self._refresh_open_folder_btn)
 
-        # VOD Names editor
-        self._build_vod_editor(lay)
-        lay.addStretch(1)
+        # VOD Names editor — expands to fill remaining vertical space
+        self._build_vod_editor(lay, expanding=True)
 
         self._refresh_thumbnail_events()
         self._refresh_open_folder_btn()
@@ -1621,9 +1681,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
         target.setText(str(Path("Resources") / "Overlays" / Path(path).name))
 
     # --- VOD editor (virtualized table) ---
-    def _build_vod_editor(self, parent_layout):
+    def _build_vod_editor(self, parent_layout, expanding=False):
         cbox = CollapsibleBox("VOD Names", collapsed=False)
-        parent_layout.addWidget(cbox)
+        if expanding:
+            cbox.setExpanding()
+        parent_layout.addWidget(cbox, 1 if expanding else 0)
 
         row = QtWidgets.QHBoxLayout()
         row.addWidget(QtWidgets.QLabel("File:"))
@@ -1652,13 +1714,20 @@ class RivalsWindow(QtWidgets.QMainWindow):
         cc.setToolTip("Copy the selected character name to the clipboard")
         cc.clicked.connect(self._copy_vod_char)
         row.addWidget(cc)
+        row.addSpacing(20)
+        self._import_players_btn = QtWidgets.QPushButton("Import Missing Players")
+        self._import_players_btn.setToolTip(
+            "Add players from these VOD lines who are not yet in the player database")
+        self._import_players_btn.clicked.connect(self._import_missing_players)
+        self._import_players_btn.setEnabled(False)
+        row.addWidget(self._import_players_btn)
         row.addStretch(1)
         cbox.addLayout(row)
 
         self._vod_model = VodModel()
         self._vod_view = QtWidgets.QTableView()
         self._vod_view.setModel(self._vod_model)
-        self._vod_view.setMinimumHeight(330)
+        self._vod_view.setMinimumHeight(120)
         self._vod_view.verticalHeader().setVisible(False)
         self._vod_view.horizontalHeader().setSectionResizeMode(
             2, QtWidgets.QHeaderView.ResizeMode.Stretch)
@@ -1672,7 +1741,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._vod_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._vod_view.customContextMenuRequested.connect(self._vod_context_menu)
         self._vod_model.dataChanged.connect(lambda *_: self._vod_update_delete_btn())
+        self._vod_model.dataChanged.connect(lambda *_: self._update_import_btn())
         self._vod_model.modelReset.connect(self._vod_update_delete_btn)
+        self._vod_model.modelReset.connect(self._update_import_btn)
         cbox.addWidget(self._vod_view)
 
         rb2 = QtWidgets.QHBoxLayout()
@@ -1718,6 +1789,23 @@ class RivalsWindow(QtWidgets.QMainWindow):
         QtWidgets.QApplication.clipboard().setText(name)
         self._log(f"[Copied character to clipboard: {name}]\n")
 
+    def _refresh_top8_char_picker(self):
+        cur = self._top8_char_picker.currentText()
+        chars = sorted(load_char_db()[1], key=str.casefold)
+        self._top8_char_picker.blockSignals(True)
+        self._top8_char_picker.clear()
+        self._top8_char_picker.addItems(chars)
+        if cur in chars:
+            self._top8_char_picker.setCurrentText(cur)
+        self._top8_char_picker.blockSignals(False)
+
+    def _copy_top8_char(self):
+        name = self._top8_char_picker.currentText().strip()
+        if not name:
+            return
+        QtWidgets.QApplication.clipboard().setText(name)
+        self._log(f"[Copied character to clipboard: {name}]\n")
+
     def _vod_context_menu(self, pos):
         idx = self._vod_view.indexAt(pos)
         if not idx.isValid():
@@ -1727,8 +1815,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
         del_act = menu.addAction("Delete line")
         act = menu.exec(self._vod_view.viewport().mapToGlobal(pos))
         if act == copy_act:
-            QtWidgets.QApplication.clipboard().setText(self._vod_model.text_at(idx.row()))
-            self._log(f"[Copied to clipboard: {self._vod_model.text_at(idx.row())}]\n")
+            text = self._vod_model.text_at(idx.row())
+            out = self._vod_abbrev_line(text)
+            QtWidgets.QApplication.clipboard().setText(out)
+            suffix = " (abbreviated)" if out != text else ""
+            self._log(f"[Copied to clipboard{suffix}: {out}]\n")
         elif act == del_act:
             self._vod_model.delete_row(idx.row())
             self._vod_update_delete_btn()
@@ -1769,9 +1860,77 @@ class RivalsWindow(QtWidgets.QMainWindow):
             content = (ROOT / "Vod_Names" / name).read_text(encoding="utf-8")
         except Exception:
             content = ""
+        self._vod_abbrev = ""
+        self._vod_event_name = ""
+        for raw in content.splitlines():
+            stripped = raw.strip()
+            if stripped.startswith("# ABBREV:"):
+                self._vod_abbrev = stripped[len("# ABBREV:"):].strip()
+            elif stripped and not stripped.startswith("#") and " - " in stripped:
+                self._vod_event_name = stripped.split(" - ")[0].strip()
+                break
         lines = [l for l in content.splitlines() if l.strip()]
         self._vod_model.load(lines)
         self._vod_update_delete_btn()
+
+    def _vod_abbrev_line(self, text: str) -> str:
+        """Return text with abbreviation applied when over the length limit."""
+        if len(text) <= MAX_LINE_LEN:
+            return text
+        abbrev = getattr(self, "_vod_abbrev", "")
+        if not abbrev:
+            series = self._thumb_series.currentText() if hasattr(self, "_thumb_series") else ""
+            w = self._fetch_widgets.get(series, {}) if hasattr(self, "_fetch_widgets") else {}
+            abbrev = w["abbrev"].text().strip() if "abbrev" in w else ""
+        event_name = getattr(self, "_vod_event_name", "")
+        if abbrev and event_name and text.startswith(event_name):
+            return abbrev + text[len(event_name):]
+        return text
+
+    def _update_import_btn(self):
+        if not hasattr(self, "_import_players_btn"):
+            return
+        count = self._vod_model.rowCount()
+        vs_lines = [self._vod_model.text_at(r) for r in range(count)
+                    if _VOD_VS_RE.search(self._vod_model.text_at(r))]
+        ready = bool(vs_lines) and not any(_vod_missing_chars(t) for t in vs_lines)
+        self._import_players_btn.setEnabled(ready)
+        if hasattr(self, "_gen_thumb_btn"):
+            self._gen_thumb_btn.setEnabled(ready)
+            self._gen_thumb_btn.setToolTip(
+                "" if ready else "Fill in character data for all match lines to enable"
+            )
+
+    def _import_missing_players(self):
+        headers, db = load_player_db()
+        db_lower = {k.lower() for k in db}
+
+        # Accumulate players and their chars across all VOD lines
+        new_players: dict = {}  # lower_name -> (canonical_name, set_of_chars)
+        for r in range(self._vod_model.rowCount()):
+            text = self._vod_model.text_at(r)
+            for name, chars in _parse_vod_players(text):
+                key = name.lower()
+                if key not in db_lower:
+                    if key not in new_players:
+                        new_players[key] = (name, set())
+                    new_players[key][1].update(chars)
+
+        if not new_players:
+            self._log("[Import: all players already in database]\n")
+            return
+
+        for key, (name, chars) in new_players.items():
+            entries = [(char, _neutral_skin_for(char)) for char in sorted(chars)]
+            db[name] = entries
+            char_list = ", ".join(f"{c} ({s})" if s else c for c, s in entries)
+            self._log(f"[Import: added '{name}' — {char_list}]\n")
+
+        save_player_db(headers, db)
+        self._log(f"[Import: saved {len(new_players)} new player(s) to database]\n")
+        if hasattr(self, "_db_players"):
+            self._db_players = db
+            self._refresh_player_list()
 
     def _vod_add_new_row(self):
         pos = self._vod_model.add_blank()
@@ -1783,8 +1942,10 @@ class RivalsWindow(QtWidgets.QMainWindow):
     def _vod_copy_row(self, r: int):
         text = self._vod_model.text_at(r)
         if text:
-            QtWidgets.QApplication.clipboard().setText(text)
-            self._log(f"[Copied to clipboard: {text}]\n")
+            out = self._vod_abbrev_line(text)
+            QtWidgets.QApplication.clipboard().setText(out)
+            suffix = " (abbreviated)" if out != text else ""
+            self._log(f"[Copied to clipboard{suffix}: {out}]\n")
 
     def _vod_delete_marked(self):
         removed = self._vod_model.delete_marked()
@@ -1852,6 +2013,27 @@ class RivalsWindow(QtWidgets.QMainWindow):
         lay.addWidget(ctxt)
         self._top8_text_path_label = _muted("")
         ctxt.addWidget(self._top8_text_path_label)
+
+        t8_char_row = QtWidgets.QHBoxLayout()
+        t8_char_row.addWidget(QtWidgets.QLabel("Character:"))
+        self._top8_char_picker = QtWidgets.QComboBox()
+        self._top8_char_picker.setMinimumWidth(160)
+        self._top8_char_picker.setToolTip(
+            "Pick a character, then Copy to paste the exact spelling into the text data")
+        self._refresh_top8_char_picker()
+        t8_char_row.addWidget(self._top8_char_picker)
+        t8_crb = QtWidgets.QPushButton("⟳")
+        t8_crb.setObjectName("tool")
+        t8_crb.setToolTip("Refresh character list")
+        t8_crb.clicked.connect(self._refresh_top8_char_picker)
+        t8_char_row.addWidget(t8_crb)
+        t8_cc = QtWidgets.QPushButton("Copy")
+        t8_cc.setToolTip("Copy the selected character name to the clipboard")
+        t8_cc.clicked.connect(self._copy_top8_char)
+        t8_char_row.addWidget(t8_cc)
+        t8_char_row.addStretch(1)
+        ctxt.addLayout(t8_char_row)
+
         self._top8_text = QtWidgets.QPlainTextEdit()
         self._top8_text.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
         self._top8_text.setMinimumHeight(320)
@@ -3174,6 +3356,8 @@ class RivalsWindow(QtWidgets.QMainWindow):
             self._form_char.blockSignals(False)
         if hasattr(self, "_vod_char_picker"):
             self._refresh_vod_char_picker()
+        if hasattr(self, "_top8_char_picker"):
+            self._refresh_top8_char_picker()
 
     # ================================================================== #
     #  Process runners (QProcess; streams output to the console)        #
