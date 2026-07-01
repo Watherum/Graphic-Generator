@@ -42,6 +42,8 @@ The Rivals 2 GUI has eight tabs:
 
 Pull match data and top 8 standings directly from start.gg.
 
+Each tournament series is shown in a **collapsible panel** — click the header to expand/collapse it. Collapsed/expanded state is remembered between sessions.
+
 **Preset Tournaments** (Immortal Fight Night, Straight Into The Abyss)
 - Enter the event number and top 8 link
 - Optionally set an **Abbrev** (e.g. `IFN`) — see *Tournament abbreviations* below
@@ -54,7 +56,7 @@ Pull match data and top 8 standings directly from start.gg.
 - Event numbers, top 8 links, and abbreviations are saved automatically between sessions
 
 **Add New Custom Tournament**
-- Enter a slug template (use `{n}` as a placeholder for the event number, e.g. `tournament/my-event-{n}/event/rivals-2-singles`)
+- Enter a slug template (use `{n}` as a placeholder for the event number, e.g. `tournament/my-event-{n}/event/rivals-2-singles`) — pasting a full start.gg URL is also accepted and automatically trimmed down to the slug
 - Enter a series name (e.g. `My Weekly`)
 - Optionally enter an **Abbrev** for the series
 - Enter a starting event number
@@ -101,6 +103,12 @@ View and edit match data files without leaving the GUI.
 - Edit lines directly in the table and click **Save**
 - The **Len** column shows each line's character count as `N/100` and turns red when a line exceeds the 100-character title limit — a cue to set an **Abbrev** for the series and re-fetch
 - Tick rows and use **Delete Marked** to remove them, or **Delete Unmarked** to keep only the ticked rows
+- **Search match lines** filter bar narrows the table live as you type; generating while filtered only processes the visible lines. Clearing the filter re-highlights whatever row was selected
+- Rows for VS-lines with missing character data are **highlighted red**; fixing a red line auto-saves it and logs the fix to the console
+- **Import Missing Players** button (enabled only when red rows exist) jumps to the Player Database tab to fill in the missing entries
+- **Generate Thumbnails** is disabled until every VS-line has valid character data
+- Double-clicking a line places the cursor inside the first empty `()` so character names can be typed immediately
+- A character picker (dropdown + ⟳ refresh + **Copy**) lets you copy a character name into the clipboard for pasting into a line
 
 Click **Generate Thumbnails** to run the pipeline. Output goes to `Youtube_Thumbnails/{Event Name}/`. Missing player/character lookups are logged to `Vod_Names/missing.log`.
 
@@ -115,6 +123,7 @@ Edit Top 8 placement data and preview the HTML bracket graphic.
 - Select a series and event number — the matching `Top_8_Texts/` file loads automatically
 - Selecting **Default Top 8.html** in the HTML file dropdown loads `Default Top 8 HTML.txt` instead
 - Edit placements, sponsors, and characters directly in the syntax-highlighted text area
+- A character picker (dropdown + ⟳ refresh + **Copy**) lets you copy a character name for pasting into a placement row
 - Click **Save** to write changes
 
 Data file format:
@@ -173,24 +182,24 @@ Fetch and edit results posts for Twitter/X or Discord from start.gg results.
 
 ---
 
-### 5. Character Renders
-
-Download and organize character render images.
-
-- **Download & Copy** — downloads renders from dragdown.wiki then copies them to the Full Renders folder
-- **Download Renders** — download only
-- **Copy to Full Renders** — copy already-downloaded renders to `Resources/Character_Renders/Rivals_2_Full_Renders/`
-
----
-
-### 6. Player Database
+### 5. Player Database
 
 Add, edit, and search player entries and their character mains/alts.
 
 - Players listed alphabetically; use the search box to filter
 - Click a player to load their data into the editor
 - Add character rows with skin number and live skin previews (requires Pillow)
-- Click **Save Player Database** to persist changes
+- All add/edit/remove/move actions **auto-save immediately** — a `[Auto-saved: player database]` line appears in the console log to confirm. A manual **Save Player Database** button is still available
+
+---
+
+### 6. Character Renders
+
+Download and organize character render images.
+
+- **Download & Copy** — downloads renders from dragdown.wiki then copies them to the Full Renders folder
+- **Download Renders** — download only
+- **Copy to Full Renders** — copy already-downloaded renders to `Resources/Character_Renders/Rivals_2_Full_Renders/`
 
 ---
 
