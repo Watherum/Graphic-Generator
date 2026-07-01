@@ -5,7 +5,8 @@ For each character, queries the MediaWiki API for all images on their wiki page,
 filters down to CSP renders, and saves them to:
   Resources/Character_Renders_Source/{CharacterName}/
 
-Already-downloaded files are skipped.
+Files already present in Character_Renders_Source or already copied to
+Character_Renders/Rivals_2_Full_Renders are skipped.
 
 NOTE: dragdown.wiki HTML pages are behind a Cloudflare JavaScript challenge
 (they return 403 to plain HTTP clients), so we use the MediaWiki API at /w/api.php
@@ -20,7 +21,9 @@ import requests
 
 BASE_URL = "https://dragdown.wiki"
 API_URL = f"{BASE_URL}/w/api.php"
-SOURCE_DIR = Path(__file__).parent.parent / "Resources" / "Character_Renders_Source"
+RESOURCES_DIR = Path(__file__).parent.parent / "Resources"
+SOURCE_DIR = RESOURCES_DIR / "Character_Renders_Source"
+FULL_RENDERS_DIR = RESOURCES_DIR / "Character_Renders" / "Rivals_2_Full_Renders"
 
 # Character name -> wiki page slug (spaces become underscores)
 CHARACTERS = [
@@ -114,7 +117,7 @@ def main() -> None:
         for filename, img_url in sorted(images.items()):
             dest = char_dir / filename
 
-            if dest.exists():
+            if dest.exists() or (FULL_RENDERS_DIR / filename).exists():
                 print(f"  [skip] {filename}")
                 continue
 
