@@ -41,6 +41,13 @@ EXCLUDE_FILES = {
     "missing.log",
 }
 
+# Relative paths (from the generator root) that are always excluded regardless
+# of where they appear — e.g. licensed fonts that can't be redistributed.
+EXCLUDE_RELATIVE_PATHS = {
+    Path("Resources/Fonts/HKModular-Bold.otf"),
+    Path("Resources/Fonts/HKModular-BoldRounded.otf"),
+}
+
 # Directory name fragments that are always excluded wherever they appear.
 EXCLUDE_DIR_NAMES = {
     "__pycache__",
@@ -73,6 +80,10 @@ def should_exclude(rel_path: Path, include_renders: bool) -> bool:
 
     # Skip individually excluded files (top-level of generator folder)
     if len(parts) == 1 and rel_path.name in EXCLUDE_FILES:
+        return True
+
+    # Skip licensed/non-redistributable files by relative path
+    if rel_path in EXCLUDE_RELATIVE_PATHS:
         return True
 
     # Skip .gitkeep placeholder files
