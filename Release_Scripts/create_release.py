@@ -1,10 +1,12 @@
 """
-create_release.py — Build a Rivals 2 Generator release zip.
+create_release.py — Build a generator release zip (Rivals 2, Ultimate, or Melee).
 
 Usage:
-    python create_release.py                   # exclude Character Renders (default)
-    python create_release.py --include-renders # include Character Renders (~100s MB)
-    python create_release.py --out my_name.zip # custom output filename
+    python create_release.py                        # Rivals 2, exclude Character Renders (default)
+    python create_release.py --game melee            # Melee generator
+    python create_release.py --game ultimate         # Ultimate generator
+    python create_release.py --include-renders       # include Character Renders (~100s MB)
+    python create_release.py --out my_name.zip       # custom output filename
 """
 
 import argparse
@@ -12,7 +14,45 @@ import zipfile
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parent.parent
+
+# Per-game settings: generator folder name, user-specific state files to skip,
+# and the default zip filename.
+GAMES = {
+    "rivals": {
+        "dir": "Rivals_2_Generator",
+        "exclude_files": {
+            "rivals_gui_settings.json",
+            "rivals_custom_events.json",
+            "rivals_event_configs.json",
+            "CLAUDE.md",
+            "missing.log",
+        },
+        "default_out": "Rivals2Generator.zip",
+    },
+    "ultimate": {
+        "dir": "Ultimate_Generator",
+        "exclude_files": {
+            "ultimate_gui_settings.json",
+            "ultimate_custom_events.json",
+            "ultimate_event_configs.json",
+            "CLAUDE.md",
+            "missing.log",
+        },
+        "default_out": "UltimateGenerator.zip",
+    },
+    "melee": {
+        "dir": "Melee_Generator",
+        "exclude_files": {
+            "melee_gui_settings.json",
+            "melee_custom_events.json",
+            "melee_event_configs.json",
+            "CLAUDE.md",
+            "missing.log",
+        },
+        "default_out": "MeleeGenerator.zip",
+    },
+}
 
 # Top-level files to bundle (secrets and dev-only files are excluded)
 TOP_LEVEL_FILES = [
@@ -26,19 +66,11 @@ TOP_LEVEL_FILES = [
     "app.example.properties",
 ]
 
-# Folders inside Rivals_2_Generator whose *contents* are excluded.
+# Folders inside the generator whose *contents* are excluded.
 # The folders themselves won't appear in the zip (the app creates them on first run).
 EXCLUDE_OUTPUT_DIRS = {
     "Youtube_Thumbnails",
     "Results_Posts",
-}
-
-# Individual files inside Rivals_2_Generator to skip (user-specific state).
-EXCLUDE_FILES = {
-    "rivals_gui_settings.json",
-    "rivals_custom_events.json",
-    "CLAUDE.md",
-    "missing.log",
 }
 
 # Relative paths (from the generator root) that are always excluded regardless
@@ -55,7 +87,7 @@ EXCLUDE_DIR_NAMES = {
 }
 
 
-def should_exclude(rel_path: Path, include_renders: bool) -> bool:
+def should_exclude(rel_path: Path, include_renders: bool, exclude_files: set) -> bool:
     parts = rel_path.parts
 
     # Skip hidden/cache dirs anywhere in the tree
@@ -79,7 +111,7 @@ def should_exclude(rel_path: Path, include_renders: bool) -> bool:
         return True
 
     # Skip individually excluded files (top-level of generator folder)
-    if len(parts) == 1 and rel_path.name in EXCLUDE_FILES:
+    if len(parts) == 1 and rel_path.name in exclude_files:
         return True
 
     # Skip licensed/non-redistributable files by relative path
@@ -93,8 +125,8 @@ def should_exclude(rel_path: Path, include_renders: bool) -> bool:
     return False
 
 
-def build_zip(output_path: Path, include_renders: bool):
-    rivals_dir = ROOT / "Rivals_2_Generator"
+def build_zip(output_path: Path, include_renders: bool, game: dict):
+    generator_dir = ROOT / game["dir"]
 
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         file_count = 0
@@ -109,14 +141,14 @@ def build_zip(output_path: Path, include_renders: bool):
             else:
                 print(f"  - {name} (not found, skipping)")
 
-        # Rivals_2_Generator tree
-        for path in sorted(rivals_dir.rglob("*")):
+        # Generator tree
+        for path in sorted(generator_dir.rglob("*")):
             if not path.is_file():
                 continue
-            rel = path.relative_to(rivals_dir)
-            if should_exclude(rel, include_renders):
+            rel = path.relative_to(generator_dir)
+            if should_exclude(rel, include_renders, game["exclude_files"]):
                 continue
-            arcname = Path("Rivals_2_Generator") / rel
+            arcname = Path(game["dir"]) / rel
             zf.write(path, arcname)
             print(f"  + {arcname}")
             file_count += 1
@@ -126,24 +158,29 @@ def build_zip(output_path: Path, include_renders: bool):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build Rivals 2 Generator release zip.")
+    parser = argparse.ArgumentParser(description="Build a generator release zip.")
+    parser.add_argument(
+        "--game", choices=sorted(GAMES), default="rivals",
+        help="Which generator to package (default: rivals).",
+    )
     parser.add_argument(
         "--include-renders", action="store_true",
         help="Include Character Renders folder (adds ~100s MB).",
     )
     parser.add_argument(
-        "--out", default="Rivals_2_Generator_Release.zip",
-        help="Output zip filename (default: Rivals_2_Generator_Release.zip).",
+        "--out", default=None,
+        help="Output zip filename (default: per-game, e.g. Rivals2Generator.zip).",
     )
     args = parser.parse_args()
 
-    output_path = ROOT / args.out
+    game = GAMES[args.game]
+    output_path = ROOT / (args.out or game["default_out"])
     if output_path.exists():
         print(f"Overwriting existing {output_path.name}")
 
     renders_note = "including" if args.include_renders else "excluding"
-    print(f"Building release zip ({renders_note} Character Renders)...\n")
-    build_zip(output_path, args.include_renders)
+    print(f"Building {args.game} release zip ({renders_note} Character Renders)...\n")
+    build_zip(output_path, args.include_renders, game)
 
 
 if __name__ == "__main__":
