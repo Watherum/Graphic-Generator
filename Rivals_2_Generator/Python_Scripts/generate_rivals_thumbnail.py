@@ -668,8 +668,9 @@ def main(argv):
     event_title = 'Sample test'
     property_file = ''
     output_file = ''
+    vod_file = ''
     try:
-        opts, args = getopt.getopt(argv, "he:p:o:", ["event=", "number=", "property_file=", "output_file="])
+        opts, args = getopt.getopt(argv, "he:p:o:v:", ["event=", "number=", "property_file=", "output_file=", "vod-file="])
     except getopt.GetoptError:
         print('generate_rivals_thumbnail.py -e <event>, -p <property_file>, -o <output_file>')
         sys.exit(2)
@@ -683,14 +684,17 @@ def main(argv):
             property_file = arg
         elif opt in ("-o", "--output_file"):
             output_file = arg
+        elif opt in ("-v", "--vod-file"):
+            vod_file = arg
     print('Event is', event_title)
-    # print('Property file is ', property_file)
     # End of Command Line Arguments
 
     # 0. Setup information
     # Event
     global _properties
     _properties = setGlobals(event_title, property_file)
+    if vod_file:
+        _properties['event_file'] = vod_file
     # setGlobals('Sample test')
     # setGlobals('Quarantainment 43')
     # setGlobals('Students x Treehouse 8')

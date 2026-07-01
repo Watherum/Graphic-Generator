@@ -71,5 +71,78 @@
     "font_color4": "#FCBA1C",
     "event_round_single_text": false,
     "event_round_text_split": " "
+  },
+  "EVO 2026": {
+    "background_file": "Resources\\Overlays\\Background_EVO.png",
+    "foreground_file": "Resources\\Overlays\\Foreground_EVO.png",
+    "font_location": "Resources\\Fonts\\HKModular-BoldRounded.otf",
+    "char_glow_bool": false,
+    "one_char_flag": false,
+    "resize_1": 0.8,
+    "resize_2": 0.35,
+    "resize_3": 0.35,
+    "font_player1_size": 55,
+    "font_player2_size": 55,
+    "font_event_size": 70,
+    "font_round_size": 50,
+    "text_angle": 0,
+    "center_shift_1": [
+      -0.0,
+      0.0
+    ],
+    "center_shift_2_1": [
+      -0.0,
+      0.0
+    ],
+    "center_shift_2_2": [
+      -0.32,
+      0.0
+    ],
+    "center_shift_3_1": [
+      -0.0,
+      0.0
+    ],
+    "center_shift_3_2": [
+      -0.35,
+      0.05
+    ],
+    "center_shift_3_3": [
+      0.35,
+      0.05
+    ],
+    "text_player1": [
+      0.25,
+      0.076
+    ],
+    "text_player2": [
+      0.75,
+      0.076
+    ],
+    "text_event": [
+      0.25,
+      0.924
+    ],
+    "text_round": [
+      0.75,
+      0.924
+    ],
+    "char_offset1": [
+      0.0,
+      0.0
+    ],
+    "char_offset2": [
+      0.5,
+      0.0
+    ],
+    "char_window": [
+      0.5,
+      1.0
+    ],
+    "font_color1": "#F5F5F5",
+    "font_color2": "#F5F5F5",
+    "font_color3": "#F5F5F5",
+    "font_color4": "#F5F5F5",
+    "event_round_single_text": false,
+    "event_round_text_split": " "
   }
 }

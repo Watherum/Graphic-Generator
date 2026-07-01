@@ -7,7 +7,7 @@
     "Immortal Fight Night": "IFN",
     "Straight Into The Abyss": "SITA"
   },
-  "last_thumb_series": "Straight Into The Abyss",
+  "last_thumb_series": "EVO 2026",
   "last_posts_series": "Straight Into The Abyss",
   "posts_cfg": {
     "Straight Into The Abyss": {
@@ -34,5 +34,9 @@
       "vods": ""
     }
   },
-  "last_update_tree": ""
+  "last_update_tree": "",
+  "fetch_collapsed": {
+    "Straight Into The Abyss": false,
+    "Immortal Fight Night": false
+  }
 }

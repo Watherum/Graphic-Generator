@@ -1,10 +1,12 @@
 [
   {
-    "label": "Last Stock",
-    "slug_template": "tournament/last-stock-151/event/rivals-of-aether-ii",
-    "name_template": "Last Stock",
-    "top8_file": "Last Stock Top 8 HTML.txt",
-    "current_num": "151",
-    "top8_link": ""
+    "label": "EVO 2026",
+    "slug_template": "tournament/evo-2026/event/rivals-of-aether-ii",
+    "name_template": "EVO 2026",
+    "abbrev": "EVO",
+    "top8_file": "EVO 2026 Top 8 HTML.txt",
+    "current_num": "2026",
+    "top8_link": "",
+    "collapsed": false
   }
 ]

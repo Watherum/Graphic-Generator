@@ -113,6 +113,40 @@ _OUTPUT_FOLDERS = ["Vod_Names", "Youtube_Thumbnails", "Top_8_Texts", "Results_Po
 # swapped in for the full tournament name (see fetch_sets.py --abbrev).
 MAX_LINE_LEN = 100
 
+_VOD_VS_RE = re.compile(r'\bVs\b')
+_VOD_PARENS_RE = re.compile(r'\(([^)]*)\)')
+_VOD_PLAYER_RE = re.compile(r'^(.+?)\s*\(([^)]*)\)\s*$')
+_STARTGG_URL_RE = re.compile(r'^https?://(?:www\.)?start\.gg/')
+_EMPTY_PARENS_RE = re.compile(r'\(\s*\)')
+
+
+def _vod_missing_chars(text: str) -> bool:
+    """True when a match line has Vs but is missing or has empty character parens."""
+    if not _VOD_VS_RE.search(text):
+        return False
+    parens = _VOD_PARENS_RE.findall(text)
+    return not parens or any(not p.strip() for p in parens)
+
+
+def _normalize_startgg_slug(value: str) -> str:
+    """Strip a start.gg URL prefix, leaving just the slug path."""
+    return _STARTGG_URL_RE.sub("", value)
+
+
+def _parse_vod_players(line: str) -> list[tuple[str, list[str]]]:
+    """Extract [(player_name, [char, ...]), ...] from a match line."""
+    parts = _VOD_VS_RE.split(line, maxsplit=1)
+    result = []
+    for part in parts:
+        part = part.strip()
+        m = _VOD_PLAYER_RE.match(part)
+        if m:
+            name = m.group(1).strip()
+            chars = [c.strip() for c in m.group(2).split(",") if c.strip()]
+            result.append((name, chars))
+    return result
+
+
 try:
     import populate_melee_globals as _pg
 except ImportError:
@@ -477,6 +511,13 @@ class CollapsibleBox(QtWidgets.QWidget):
         self.content.setVisible(checked)
         self._toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
 
+    def setExpanding(self):
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                           QtWidgets.QSizePolicy.Policy.Expanding)
+        self.content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                   QtWidgets.QSizePolicy.Policy.Expanding)
+        self.layout().setStretchFactor(self.content, 1)
+
     def addWidget(self, w):
         self.content_layout.addWidget(w)
 
@@ -557,6 +598,11 @@ class VodModel(QtCore.QAbstractTableModel):
         col = index.column()
         if col == 2 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             return row["text"]
+        if col == 2 and _vod_missing_chars(row["text"]):
+            if role == Qt.ItemDataRole.ForegroundRole:
+                return QtGui.QColor("#ff6b6b")
+            if role == Qt.ItemDataRole.ToolTipRole:
+                return "Missing character data — add character name(s) inside the parentheses"
         if col == 3:
             length = len(row["text"].strip())
             if role == Qt.ItemDataRole.DisplayRole:
@@ -631,6 +677,15 @@ class VodModel(QtCore.QAbstractTableModel):
 
     def delete_marked(self) -> int:
         keep = [r for r in self._rows if not r["checked"]]
+        removed = len(self._rows) - len(keep)
+        if removed:
+            self.beginResetModel()
+            self._rows = keep
+            self.endResetModel()
+        return removed
+
+    def delete_unmarked(self) -> int:
+        keep = [r for r in self._rows if r["checked"]]
         removed = len(self._rows) - len(keep)
         if removed:
             self.beginResetModel()
@@ -796,6 +851,22 @@ class CopyButtonDelegate(QtWidgets.QStyledItemDelegate):
 
 
 # --------------------------------------------------------------------------- #
+#  VOD line editor delegate                                                    #
+# --------------------------------------------------------------------------- #
+class VodLineDelegate(QtWidgets.QStyledItemDelegate):
+    """On edit start, places the cursor inside the first empty () so the user
+    doesn't have to click precisely between the parentheses."""
+
+    def setEditorData(self, editor, index):
+        super().setEditorData(editor, index)
+        text = editor.text()
+        m = _EMPTY_PARENS_RE.search(text)
+        if m:
+            target = m.start() + 1
+            QtCore.QTimer.singleShot(0, lambda: editor.setCursorPosition(target))
+
+
+# --------------------------------------------------------------------------- #
 #  Main window                                                                 #
 # --------------------------------------------------------------------------- #
 class MeleeWindow(QtWidgets.QMainWindow):
@@ -851,8 +922,8 @@ class MeleeWindow(QtWidgets.QMainWindow):
         self._build_thumbnails_tab()
         self._build_top8_tab()
         self._build_posts_tab()
-        self._build_renders_tab()
         self._build_player_db_tab()
+        self._build_renders_tab()
         self._build_char_db_tab()
         self._build_update_tab()
 
@@ -903,9 +974,20 @@ class MeleeWindow(QtWidgets.QMainWindow):
             "last_posts_series": series,
             "posts_cfg": posts_cfg,
             "last_update_tree": self._settings.get("last_update_tree", ""),
+            "fetch_collapsed": self._settings.get("fetch_collapsed", {}),
         }
         self._settings = data
         SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _on_fetch_collapsed(self, label: str, checked: bool):
+        collapsed = self._settings.get("fetch_collapsed", {})
+        collapsed[label] = not checked
+        self._settings["fetch_collapsed"] = collapsed
+        self._save_settings()
+
+    def _on_custom_fetch_collapsed(self, entry: dict, checked: bool):
+        entry["collapsed"] = not checked
+        self._save_custom_events()
 
     def _save_custom_events(self):
         CUSTOM_EVENTS_PATH.write_text(json.dumps(self._custom_events, indent=2), encoding="utf-8")
@@ -934,10 +1016,12 @@ class MeleeWindow(QtWidgets.QMainWindow):
         lay = self._scroll_tab("Fetch From Start.gg")
         self._fetch_widgets: dict[str, dict] = {}
 
+        fetch_collapsed = self._settings.get("fetch_collapsed", {})
         for cfg in FETCH_EVENTS:
-            box = QtWidgets.QGroupBox(cfg["label"])
-            v = QtWidgets.QVBoxLayout(box)
-            saved_num = self._settings.get("last_event_nums", {}).get(cfg["label"], cfg["default_num"])
+            label = cfg["label"]
+            collapsed = fetch_collapsed.get(label, False)
+            cbox = CollapsibleBox(label, collapsed=collapsed)
+            saved_num = self._settings.get("last_event_nums", {}).get(label, cfg["default_num"])
 
             row1 = QtWidgets.QHBoxLayout()
             row1.addWidget(QtWidgets.QLabel("Event #:"))
@@ -949,12 +1033,12 @@ class MeleeWindow(QtWidgets.QMainWindow):
             link.setMinimumWidth(280)
             row1.addWidget(link)
             row1.addStretch(1)
-            v.addLayout(row1)
+            cbox.addLayout(row1)
 
             rowa = QtWidgets.QHBoxLayout()
             rowa.addWidget(QtWidgets.QLabel("Abbrev:"))
             saved_abbrev = self._settings.get("abbrevs", {}).get(
-                cfg["label"], cfg.get("default_abbrev", ""))
+                label, cfg.get("default_abbrev", ""))
             abbrev = _hline(saved_abbrev, 90)
             abbrev.setToolTip("Short tournament name used for VOD lines over "
                               f"{MAX_LINE_LEN} characters (e.g. IFN). The event "
@@ -962,14 +1046,14 @@ class MeleeWindow(QtWidgets.QMainWindow):
             rowa.addWidget(abbrev)
             rowa.addWidget(_muted(f"used when a match line exceeds {MAX_LINE_LEN} chars"))
             rowa.addStretch(1)
-            v.addLayout(rowa)
+            cbox.addLayout(rowa)
             abbrev.textChanged.connect(lambda _t: self._save_settings())
 
-            def _on_num(text, lk=link, tmpl=cfg["default_link"], label=cfg["label"]):
+            def _on_num(text, lk=link, tmpl=cfg["default_link"], lbl=label):
                 lk.setText(tmpl.replace("{n}", text.strip()))
-                if hasattr(self, "_thumb_series") and self._thumb_series.currentText() == label:
+                if hasattr(self, "_thumb_series") and self._thumb_series.currentText() == lbl:
                     self._thumb_num.setText(text.strip())
-                if hasattr(self, "_posts_series") and self._posts_series.currentText() == label:
+                if hasattr(self, "_posts_series") and self._posts_series.currentText() == lbl:
                     self._posts_num.setText(text.strip())
                 self._save_settings()
             num.textChanged.connect(_on_num)
@@ -982,9 +1066,10 @@ class MeleeWindow(QtWidgets.QMainWindow):
             b2.clicked.connect(lambda _=False, c=cfg, n=num, lk=link: self._fetch_top8(c, n.text().strip(), lk.text().strip()))
             row2.addWidget(b2)
             row2.addStretch(1)
-            v.addLayout(row2)
-            lay.addWidget(box)
-            self._fetch_widgets[cfg["label"]] = {"num": num, "link": link, "abbrev": abbrev}
+            cbox.addLayout(row2)
+            cbox._toggle.clicked.connect(lambda checked, lbl=label: self._on_fetch_collapsed(lbl, checked))
+            lay.addWidget(cbox)
+            self._fetch_widgets[label] = {"num": num, "link": link, "abbrev": abbrev}
 
         self._saved_custom_box = QtWidgets.QGroupBox("Saved Custom Tournaments")
         self._saved_custom_layout = QtWidgets.QVBoxLayout(self._saved_custom_box)
@@ -997,7 +1082,7 @@ class MeleeWindow(QtWidgets.QMainWindow):
         self._custom_slug = QtWidgets.QLineEdit()
         self._custom_slug.setFixedWidth(360)
         form.addWidget(self._custom_slug, 0, 1)
-        form.addWidget(_muted("e.g. tournament/{event}-{n}/event/melee-singles"), 0, 2)
+        form.addWidget(_muted("slug or start.gg URL  ·  use {n} for event number"), 0, 2)
         form.addWidget(QtWidgets.QLabel("Name:"), 1, 0)
         self._custom_name = QtWidgets.QLineEdit()
         self._custom_name.setFixedWidth(250)
@@ -1031,8 +1116,7 @@ class MeleeWindow(QtWidgets.QMainWindow):
             slug_tmpl = entry.get("slug_template", entry.get("slug", ""))
             if not slug_tmpl:
                 continue
-            box = QtWidgets.QGroupBox(entry.get("label", slug_tmpl))
-            v = QtWidgets.QVBoxLayout(box)
+            cbox = CollapsibleBox(entry.get("label", slug_tmpl), collapsed=entry.get("collapsed", False))
             row1 = QtWidgets.QHBoxLayout()
             row1.addWidget(QtWidgets.QLabel("Event #:"))
             num = _hline(entry.get("current_num", ""), 60)
@@ -1043,7 +1127,7 @@ class MeleeWindow(QtWidgets.QMainWindow):
             link.setMinimumWidth(260)
             row1.addWidget(link)
             row1.addStretch(1)
-            v.addLayout(row1)
+            cbox.addLayout(row1)
 
             def _on_num(text, e=entry):
                 e["current_num"] = text
@@ -1062,7 +1146,7 @@ class MeleeWindow(QtWidgets.QMainWindow):
             rowa.addWidget(abbrev)
             rowa.addWidget(_muted(f"used when a match line exceeds {MAX_LINE_LEN} chars"))
             rowa.addStretch(1)
-            v.addLayout(rowa)
+            cbox.addLayout(rowa)
 
             def _on_abbrev(text, e=entry):
                 e["abbrev"] = text
@@ -1083,11 +1167,13 @@ class MeleeWindow(QtWidgets.QMainWindow):
             b3.clicked.connect(lambda _=False, s=slug_tmpl: self._delete_custom_event(s))
             row2.addWidget(b3)
             row2.addStretch(1)
-            v.addLayout(row2)
-            self._saved_custom_layout.addWidget(box)
+            cbox.addLayout(row2)
+            cbox._toggle.clicked.connect(lambda checked, e=entry: self._on_custom_fetch_collapsed(e, checked))
+            self._saved_custom_layout.addWidget(cbox)
 
     def _fetch_custom_sets(self):
-        slug_tmpl = self._custom_slug.text().strip()
+        slug_tmpl = _normalize_startgg_slug(self._custom_slug.text().strip())
+        self._custom_slug.setText(slug_tmpl)
         name_tmpl = self._custom_name.text().strip()
         num = self._custom_num.text().strip()
         if not slug_tmpl:
@@ -1212,10 +1298,12 @@ class MeleeWindow(QtWidgets.QMainWindow):
         self._build_thumbnail_config(lay)
 
         row_gen = QtWidgets.QHBoxLayout()
-        gen = QtWidgets.QPushButton("Generate Thumbnails")
-        gen.setObjectName("accent")
-        gen.clicked.connect(self._generate_thumbnails)
-        row_gen.addWidget(gen)
+        self._gen_thumb_btn = QtWidgets.QPushButton("Generate Thumbnails")
+        self._gen_thumb_btn.setObjectName("accent")
+        self._gen_thumb_btn.setEnabled(False)
+        self._gen_thumb_btn.setToolTip("Fill in character data for all match lines to enable")
+        self._gen_thumb_btn.clicked.connect(self._generate_thumbnails)
+        row_gen.addWidget(self._gen_thumb_btn)
         self._open_thumb_btn = QtWidgets.QPushButton("Open Output Folder")
         self._open_thumb_btn.clicked.connect(self._open_thumbnail_folder)
         row_gen.addWidget(self._open_thumb_btn)
@@ -1223,8 +1311,8 @@ class MeleeWindow(QtWidgets.QMainWindow):
         lay.addLayout(row_gen)
         self._thumb_event_name.textChanged.connect(self._refresh_open_folder_btn)
 
+        # VOD Names editor
         self._build_vod_editor(lay)
-        lay.addStretch(1)
 
         self._refresh_thumbnail_events()
         self._refresh_open_folder_btn()
@@ -1572,9 +1660,37 @@ class MeleeWindow(QtWidgets.QMainWindow):
         if not event_name:
             self._log("[Error: event name is empty]\n")
             return
-        self._run([PYTHON, str(ROOT / "Python_Scripts" / "generate_melee_thumbnails.py"),
-                   "-e", event_name, "-o", str(ROOT / "Vod_Names" / "missing.log")],
-                  on_done=self._refresh_open_folder_btn)
+        filter_text = self._vod_filter.text().strip() if hasattr(self, "_vod_filter") else ""
+        tmp_path = None
+        cleanup = None
+        if filter_text:
+            visible_rows = []
+            for pr in range(self._vod_proxy.rowCount()):
+                src_row = self._vod_proxy.mapToSource(self._vod_proxy.index(pr, 0)).row()
+                text = self._vod_model.text_at(src_row)
+                visible_rows.append(text)
+            all_lines = []
+            for r in range(self._vod_model.rowCount()):
+                t = self._vod_model.text_at(r)
+                if t.startswith("#"):
+                    all_lines.append(t)
+            all_lines.extend(visible_rows)
+            tmp_path = ROOT / "Vod_Names" / "_filter_tmp names.txt"
+            tmp_path.write_text("\n".join(all_lines), encoding="utf-8")
+            def cleanup():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "generate_melee_thumbnails.py"),
+               "-e", event_name, "-o", str(ROOT / "Vod_Names" / "missing.log")]
+        if tmp_path:
+            cmd += ["-v", str(tmp_path)]
+        def _on_done():
+            if cleanup:
+                cleanup()
+            self._refresh_open_folder_btn()
+        self._run(cmd, on_done=_on_done)
 
     def _refresh_open_folder_btn(self):
         event_name = self._thumb_event_name.text().strip()
@@ -1592,9 +1708,11 @@ class MeleeWindow(QtWidgets.QMainWindow):
             self._log(f"[Error opening folder: {exc}]\n")
 
     # --- VOD editor (virtualized table) ---
-    def _build_vod_editor(self, parent_layout):
+    def _build_vod_editor(self, parent_layout, expanding=False):
         cbox = CollapsibleBox("VOD Names", collapsed=False)
-        parent_layout.addWidget(cbox)
+        if expanding:
+            cbox.setExpanding()
+        parent_layout.addWidget(cbox, 1 if expanding else 0)
 
         row = QtWidgets.QHBoxLayout()
         row.addWidget(QtWidgets.QLabel("File:"))
@@ -1623,13 +1741,37 @@ class MeleeWindow(QtWidgets.QMainWindow):
         cc.setToolTip("Copy the selected character name to the clipboard")
         cc.clicked.connect(self._copy_vod_char)
         row.addWidget(cc)
+        row.addSpacing(20)
+        self._import_players_btn = QtWidgets.QPushButton("Import Missing Players")
+        self._import_players_btn.setToolTip(
+            "Add players from these VOD lines who are not yet in the player database")
+        self._import_players_btn.clicked.connect(self._import_missing_players)
+        self._import_players_btn.setEnabled(False)
+        row.addWidget(self._import_players_btn)
         row.addStretch(1)
         cbox.addLayout(row)
 
+        # Filter bar
+        filter_row = QtWidgets.QHBoxLayout()
+        filter_row.addWidget(QtWidgets.QLabel("Filter:"))
+        self._vod_filter = QtWidgets.QLineEdit()
+        self._vod_filter.setPlaceholderText("Search match lines…")
+        self._vod_filter.setClearButtonEnabled(True)
+        filter_row.addWidget(self._vod_filter)
+        cbox.addLayout(filter_row)
+
         self._vod_model = VodModel()
+        self._vod_proxy = QtCore.QSortFilterProxyModel()
+        self._vod_proxy.setSourceModel(self._vod_model)
+        self._vod_proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._vod_proxy.setFilterKeyColumn(2)
+        self._vod_filter.textChanged.connect(self._on_vod_filter_changed)
+
+        self._vod_selected_source_row: int = -1
+
         self._vod_view = QtWidgets.QTableView()
-        self._vod_view.setModel(self._vod_model)
-        self._vod_view.setMinimumHeight(330)
+        self._vod_view.setModel(self._vod_proxy)
+        self._vod_view.setMinimumHeight(400)
         self._vod_view.verticalHeader().setVisible(False)
         self._vod_view.horizontalHeader().setSectionResizeMode(
             2, QtWidgets.QHeaderView.ResizeMode.Stretch)
@@ -1640,11 +1782,19 @@ class MeleeWindow(QtWidgets.QMainWindow):
         self._vod_copy_delegate = CopyButtonDelegate(self._vod_view)
         self._vod_copy_delegate.copyRequested.connect(self._vod_copy_row)
         self._vod_view.setItemDelegateForColumn(1, self._vod_copy_delegate)
+        self._vod_line_delegate = VodLineDelegate(self._vod_view)
+        self._vod_view.setItemDelegateForColumn(2, self._vod_line_delegate)
         self._vod_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._vod_view.customContextMenuRequested.connect(self._vod_context_menu)
         self._vod_model.dataChanged.connect(lambda *_: self._vod_update_delete_btn())
+        self._vod_model.dataChanged.connect(lambda *_: self._update_import_btn())
+        self._vod_model.dataChanged.connect(self._on_vod_data_changed)
         self._vod_model.modelReset.connect(self._vod_update_delete_btn)
+        self._vod_model.modelReset.connect(self._update_import_btn)
+        self._vod_model.modelReset.connect(self._vod_rebuild_red_rows)
+        self._vod_red_rows: set[int] = set()
         cbox.addWidget(self._vod_view)
+        self._vod_view.selectionModel().currentRowChanged.connect(self._on_vod_row_changed)
 
         rb2 = QtWidgets.QHBoxLayout()
         save = QtWidgets.QPushButton("Save")
@@ -1657,6 +1807,10 @@ class MeleeWindow(QtWidgets.QMainWindow):
         self._vod_delete_btn.setEnabled(False)
         self._vod_delete_btn.clicked.connect(self._vod_delete_marked)
         rb2.addWidget(self._vod_delete_btn)
+        self._vod_delete_unmarked_btn = QtWidgets.QPushButton("Delete Unmarked")
+        self._vod_delete_unmarked_btn.setEnabled(False)
+        self._vod_delete_unmarked_btn.clicked.connect(self._vod_delete_unmarked)
+        rb2.addWidget(self._vod_delete_unmarked_btn)
         ca = QtWidgets.QPushButton("Check All")
         ca.clicked.connect(lambda: self._vod_model.set_all(True))
         rb2.addWidget(ca)
@@ -1685,19 +1839,36 @@ class MeleeWindow(QtWidgets.QMainWindow):
         QtWidgets.QApplication.clipboard().setText(name)
         self._log(f"[Copied character to clipboard: {name}]\n")
 
+    def _vod_abbrev_line(self, text: str) -> str:
+        if len(text) <= MAX_LINE_LEN:
+            return text
+        abbrev = getattr(self, "_vod_abbrev", "")
+        if not abbrev:
+            series = self._thumb_series.currentText() if hasattr(self, "_thumb_series") else ""
+            w = self._fetch_widgets.get(series, {}) if hasattr(self, "_fetch_widgets") else {}
+            abbrev = w["abbrev"].text().strip() if "abbrev" in w else ""
+        event_name = getattr(self, "_vod_event_name", "")
+        if abbrev and event_name and text.startswith(event_name):
+            return abbrev + text[len(event_name):]
+        return text
+
     def _vod_context_menu(self, pos):
         idx = self._vod_view.indexAt(pos)
         if not idx.isValid():
             return
+        src_idx = self._vod_proxy.mapToSource(idx)
         menu = QtWidgets.QMenu(self)
         copy_act = menu.addAction("Copy line")
         del_act = menu.addAction("Delete line")
         act = menu.exec(self._vod_view.viewport().mapToGlobal(pos))
         if act == copy_act:
-            QtWidgets.QApplication.clipboard().setText(self._vod_model.text_at(idx.row()))
-            self._log(f"[Copied to clipboard: {self._vod_model.text_at(idx.row())}]\n")
+            text = self._vod_model.text_at(src_idx.row())
+            out = self._vod_abbrev_line(text)
+            QtWidgets.QApplication.clipboard().setText(out)
+            suffix = " (abbreviated)" if out != text else ""
+            self._log(f"[Copied to clipboard{suffix}: {out}]\n")
         elif act == del_act:
-            self._vod_model.delete_row(idx.row())
+            self._vod_model.delete_row(src_idx.row())
             self._vod_update_delete_btn()
 
     def _refresh_vod_files(self):
@@ -1736,22 +1907,37 @@ class MeleeWindow(QtWidgets.QMainWindow):
             content = (ROOT / "Vod_Names" / name).read_text(encoding="utf-8")
         except Exception:
             content = ""
-        lines = [l for l in content.splitlines() if l.strip()]
+        self._vod_abbrev = ""
+        self._vod_event_name = ""
+        all_lines = content.splitlines()
+        for ln in all_lines:
+            stripped = ln.strip()
+            if stripped.startswith("# ABBREV:"):
+                self._vod_abbrev = stripped[len("# ABBREV:"):].strip()
+            elif stripped and not stripped.startswith("#") and not self._vod_event_name:
+                parts = stripped.split(" - ")
+                if len(parts) >= 2:
+                    self._vod_event_name = parts[0]
+        lines = [l for l in all_lines if l.strip()]
         self._vod_model.load(lines)
         self._vod_update_delete_btn()
 
     def _vod_add_new_row(self):
         pos = self._vod_model.add_blank()
-        idx = self._vod_model.index(pos, 2)
-        self._vod_view.scrollTo(idx)
-        self._vod_view.setCurrentIndex(idx)
-        self._vod_view.edit(idx)
+        src_idx = self._vod_model.index(pos, 2)
+        proxy_idx = self._vod_proxy.mapFromSource(src_idx)
+        self._vod_view.scrollTo(proxy_idx)
+        self._vod_view.setCurrentIndex(proxy_idx)
+        self._vod_view.edit(proxy_idx)
 
     def _vod_copy_row(self, r: int):
-        text = self._vod_model.text_at(r)
+        src_row = self._vod_proxy.mapToSource(self._vod_proxy.index(r, 0)).row()
+        text = self._vod_model.text_at(src_row)
         if text:
-            QtWidgets.QApplication.clipboard().setText(text)
-            self._log(f"[Copied to clipboard: {text}]\n")
+            out = self._vod_abbrev_line(text)
+            QtWidgets.QApplication.clipboard().setText(out)
+            suffix = " (abbreviated)" if out != text else ""
+            self._log(f"[Copied to clipboard{suffix}: {out}]\n")
 
     def _vod_delete_marked(self):
         removed = self._vod_model.delete_marked()
@@ -1761,9 +1947,19 @@ class MeleeWindow(QtWidgets.QMainWindow):
             self._log("[No rows marked to delete]\n")
         self._vod_update_delete_btn()
 
+    def _vod_delete_unmarked(self):
+        removed = self._vod_model.delete_unmarked()
+        if removed:
+            self._log(f"[Deleted {removed} unmarked row(s)]\n")
+        else:
+            self._log("[No unmarked rows to delete]\n")
+        self._vod_update_delete_btn()
+
     def _vod_update_delete_btn(self):
         if hasattr(self, "_vod_delete_btn"):
             self._vod_delete_btn.setEnabled(self._vod_model.any_checked())
+        if hasattr(self, "_vod_delete_unmarked_btn"):
+            self._vod_delete_unmarked_btn.setEnabled(self._vod_model.rowCount() > 0)
 
     def _save_vod_file(self):
         name = self._vod_file.currentText()
@@ -1772,6 +1968,79 @@ class MeleeWindow(QtWidgets.QMainWindow):
             return
         (ROOT / "Vod_Names" / name).write_text(self._vod_model.to_text(), encoding="utf-8")
         self._log(f"[Saved {name}]\n")
+
+    def _on_vod_row_changed(self, current, previous):
+        if current.isValid():
+            src = self._vod_proxy.mapToSource(current)
+            self._vod_selected_source_row = src.row()
+
+    def _vod_rebuild_red_rows(self):
+        self._vod_red_rows = set()
+        for r in range(self._vod_model.rowCount()):
+            text = self._vod_model.text_at(r)
+            if _vod_missing_chars(text):
+                self._vod_red_rows.add(r)
+        self._update_import_btn()
+
+    def _on_vod_data_changed(self, top_left, bottom_right, roles):
+        if QtCore.Qt.ItemDataRole.EditRole not in roles and QtCore.Qt.ItemDataRole.DisplayRole not in roles:
+            if roles:
+                return
+        for r in range(top_left.row(), bottom_right.row() + 1):
+            text = self._vod_model.text_at(r)
+            is_red = bool(_vod_missing_chars(text))
+            was_red = r in self._vod_red_rows
+            if is_red:
+                self._vod_red_rows.add(r)
+            else:
+                self._vod_red_rows.discard(r)
+            if was_red and not is_red and text.strip() and not text.strip().startswith("#"):
+                self._save_vod_file()
+                parts = text.split(" - ")
+                name = parts[2].strip() if len(parts) > 2 else text[:40]
+                self._log(f"[Auto-saved: line {r + 1} character data complete — {name}]\n")
+        self._update_import_btn()
+
+    def _on_vod_filter_changed(self, text):
+        self._vod_proxy.setFilterFixedString(text)
+        if not text and self._vod_selected_source_row >= 0:
+            src_idx = self._vod_model.index(self._vod_selected_source_row, 2)
+            proxy_idx = self._vod_proxy.mapFromSource(src_idx)
+            if proxy_idx.isValid():
+                self._vod_view.setCurrentIndex(proxy_idx)
+                self._vod_view.scrollTo(proxy_idx)
+
+    def _update_import_btn(self):
+        has_red = bool(self._vod_red_rows)
+        if hasattr(self, "_import_players_btn"):
+            self._import_players_btn.setEnabled(has_red)
+        if hasattr(self, "_gen_thumb_btn"):
+            self._gen_thumb_btn.setEnabled(not has_red)
+            if has_red:
+                self._gen_thumb_btn.setToolTip("Fix missing character data (red rows) before generating")
+            else:
+                self._gen_thumb_btn.setToolTip("")
+
+    def _import_missing_players(self):
+        players = _parse_vod_players(self._vod_model)
+        db_path = ROOT / "Resources" / "Player_database.csv"
+        existing = load_player_db(db_path)
+        added = []
+        chars = get_characters_from_renders()
+        default_char = chars[0] if chars else ""
+        for tag in players:
+            if tag not in existing:
+                existing[tag] = [(default_char, "1")]
+                added.append(tag)
+        if added:
+            save_player_db(db_path, existing)
+            self._log(f"[Imported {len(added)} missing player(s): {', '.join(added)}]\n")
+            if hasattr(self, "_player_db_data"):
+                self._player_db_data = existing
+                if hasattr(self, "_refresh_player_list"):
+                    self._refresh_player_list()
+        else:
+            self._log("[No new players to import]\n")
 
     # ================================================================== #
     #  Tab: Generate Top 8s                                             #
@@ -1802,6 +2071,25 @@ class MeleeWindow(QtWidgets.QMainWindow):
         lay.addWidget(box)
 
         self._top8_series.currentTextChanged.connect(self._on_top8_change)
+
+        char_row = QtWidgets.QHBoxLayout()
+        char_row.addWidget(QtWidgets.QLabel("Character:"))
+        self._top8_char_picker = QtWidgets.QComboBox()
+        self._top8_char_picker.setMinimumWidth(160)
+        self._top8_char_picker.setToolTip("Pick a character name to copy for pasting into Top 8 text data")
+        self._refresh_top8_char_picker()
+        char_row.addWidget(self._top8_char_picker)
+        t8crb = QtWidgets.QPushButton("⟳")
+        t8crb.setObjectName("tool")
+        t8crb.setToolTip("Refresh character list")
+        t8crb.clicked.connect(self._refresh_top8_char_picker)
+        char_row.addWidget(t8crb)
+        t8cc = QtWidgets.QPushButton("Copy")
+        t8cc.setToolTip("Copy the selected character name to the clipboard")
+        t8cc.clicked.connect(self._copy_top8_char)
+        char_row.addWidget(t8cc)
+        char_row.addStretch(1)
+        lay.addLayout(char_row)
 
         ctxt = CollapsibleBox("Top 8 Text Data", collapsed=False)
         lay.addWidget(ctxt)
@@ -1861,6 +2149,23 @@ class MeleeWindow(QtWidgets.QMainWindow):
         lay.addStretch(1)
 
         self._refresh_top8_series()
+
+    def _refresh_top8_char_picker(self):
+        chars = get_characters_from_renders()
+        cur = self._top8_char_picker.currentText() if hasattr(self, "_top8_char_picker") else ""
+        self._top8_char_picker.blockSignals(True)
+        self._top8_char_picker.clear()
+        self._top8_char_picker.addItems(chars)
+        if cur in chars:
+            self._top8_char_picker.setCurrentText(cur)
+        self._top8_char_picker.blockSignals(False)
+
+    def _copy_top8_char(self):
+        name = self._top8_char_picker.currentText()
+        if not name:
+            return
+        QtWidgets.QApplication.clipboard().setText(name)
+        self._log(f"[Copied character to clipboard: {name}]\n")
 
     def _refresh_top8_series(self):
         names = list(getattr(self, "_thumb_event_map", {}).keys())
@@ -2751,6 +3056,7 @@ class MeleeWindow(QtWidgets.QMainWindow):
     def _autosave_player_db(self):
         try:
             save_player_db(self._db_header, self._db_players)
+            self._log("[Auto-saved: player database]\n")
         except Exception as exc:
             self._log(f"[Error auto-saving player database: {exc}]\n")
 

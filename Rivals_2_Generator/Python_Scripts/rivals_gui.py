@@ -519,6 +519,11 @@ def _muted(text: str) -> QtWidgets.QLabel:
 _VOD_VS_RE = re.compile(r'\bVs\b')
 _VOD_PARENS_RE = re.compile(r'\(([^)]*)\)')
 _VOD_PLAYER_RE = re.compile(r'^(.+?)\s*\(([^)]*)\)\s*$')
+_STARTGG_URL_RE = re.compile(r'^https?://(?:www\.)?start\.gg/')
+
+def _normalize_startgg_slug(value: str) -> str:
+    """Strip a start.gg URL prefix, leaving just the slug path."""
+    return _STARTGG_URL_RE.sub("", value)
 
 def _vod_missing_chars(text: str) -> bool:
     """True when a match line has a Vs but is missing or has empty character parens."""
@@ -546,8 +551,11 @@ def _parse_vod_players(line: str) -> list:
 
 
 def _neutral_skin_for(char: str) -> str:
-    """Return the neutral-skin stem for a character, or '' if none found."""
+    """Return the default-neutral skin stem for a character, or '' if none found."""
     skins = get_skins_for_char(char)
+    for s in skins:
+        if "default" in s.lower() and "neutral" in s.lower():
+            return s
     for s in skins:
         if "neutral" in s.lower():
             return s
@@ -837,6 +845,24 @@ class CopyButtonDelegate(QtWidgets.QStyledItemDelegate):
 
 
 # --------------------------------------------------------------------------- #
+#  VOD line editor delegate                                                    #
+# --------------------------------------------------------------------------- #
+_EMPTY_PARENS_RE = re.compile(r'\(\s*\)')
+
+class VodLineDelegate(QtWidgets.QStyledItemDelegate):
+    """On edit start, places the cursor inside the first empty () so the user
+    doesn't have to click precisely between the parentheses."""
+
+    def setEditorData(self, editor, index):
+        super().setEditorData(editor, index)
+        text = editor.text()
+        m = _EMPTY_PARENS_RE.search(text)
+        if m:
+            target = m.start() + 1  # just inside the opening paren
+            QtCore.QTimer.singleShot(0, lambda: editor.setCursorPosition(target))
+
+
+# --------------------------------------------------------------------------- #
 #  Main window                                                                 #
 # --------------------------------------------------------------------------- #
 class RivalsWindow(QtWidgets.QMainWindow):
@@ -958,9 +984,21 @@ class RivalsWindow(QtWidgets.QMainWindow):
             "last_posts_series": series,
             "posts_cfg": posts_cfg,
             "last_update_tree": self._settings.get("last_update_tree", ""),
+            "fetch_collapsed": self._settings.get("fetch_collapsed", {}),
         }
         self._settings = data
         SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _on_fetch_collapsed(self, label: str, checked: bool):
+        """checked=True means expanded; store the inverse as collapsed."""
+        collapsed = self._settings.get("fetch_collapsed", {})
+        collapsed[label] = not checked
+        self._settings["fetch_collapsed"] = collapsed
+        self._save_settings()
+
+    def _on_custom_fetch_collapsed(self, entry: dict, checked: bool):
+        entry["collapsed"] = not checked
+        self._save_custom_events()
 
     def _save_custom_events(self):
         CUSTOM_EVENTS_PATH.write_text(json.dumps(self._custom_events, indent=2), encoding="utf-8")
@@ -989,10 +1027,12 @@ class RivalsWindow(QtWidgets.QMainWindow):
         lay = self._scroll_tab("Fetch From Start.gg")
         self._fetch_widgets: dict[str, dict] = {}
 
+        fetch_collapsed = self._settings.get("fetch_collapsed", {})
         for cfg in FETCH_EVENTS:
-            box = QtWidgets.QGroupBox(cfg["label"])
-            v = QtWidgets.QVBoxLayout(box)
-            saved_num = self._settings.get("last_event_nums", {}).get(cfg["label"], cfg["default_num"])
+            label = cfg["label"]
+            collapsed = fetch_collapsed.get(label, False)
+            cbox = CollapsibleBox(label, collapsed=collapsed)
+            saved_num = self._settings.get("last_event_nums", {}).get(label, cfg["default_num"])
 
             row1 = QtWidgets.QHBoxLayout()
             row1.addWidget(QtWidgets.QLabel("Event #:"))
@@ -1004,12 +1044,12 @@ class RivalsWindow(QtWidgets.QMainWindow):
             link.setMinimumWidth(280)
             row1.addWidget(link)
             row1.addStretch(1)
-            v.addLayout(row1)
+            cbox.addLayout(row1)
 
             rowa = QtWidgets.QHBoxLayout()
             rowa.addWidget(QtWidgets.QLabel("Abbrev:"))
             saved_abbrev = self._settings.get("abbrevs", {}).get(
-                cfg["label"], cfg.get("default_abbrev", ""))
+                label, cfg.get("default_abbrev", ""))
             abbrev = _hline(saved_abbrev, 90)
             abbrev.setToolTip("Short tournament name used for VOD lines over "
                               f"{MAX_LINE_LEN} characters (e.g. IFN). The event "
@@ -1017,14 +1057,14 @@ class RivalsWindow(QtWidgets.QMainWindow):
             rowa.addWidget(abbrev)
             rowa.addWidget(_muted(f"used when a match line exceeds {MAX_LINE_LEN} chars"))
             rowa.addStretch(1)
-            v.addLayout(rowa)
+            cbox.addLayout(rowa)
             abbrev.textChanged.connect(lambda _t: self._save_settings())
 
-            def _on_num(text, lk=link, tmpl=cfg["default_link"], label=cfg["label"]):
+            def _on_num(text, lk=link, tmpl=cfg["default_link"], lbl=label):
                 lk.setText(tmpl.replace("{n}", text.strip()))
-                if hasattr(self, "_thumb_series") and self._thumb_series.currentText() == label:
+                if hasattr(self, "_thumb_series") and self._thumb_series.currentText() == lbl:
                     self._thumb_num.setText(text.strip())
-                if hasattr(self, "_posts_series") and self._posts_series.currentText() == label:
+                if hasattr(self, "_posts_series") and self._posts_series.currentText() == lbl:
                     self._posts_num.setText(text.strip())
                 self._save_settings()
             num.textChanged.connect(_on_num)
@@ -1037,9 +1077,10 @@ class RivalsWindow(QtWidgets.QMainWindow):
             b2.clicked.connect(lambda _=False, c=cfg, n=num, lk=link: self._fetch_top8(c, n.text().strip(), lk.text().strip()))
             row2.addWidget(b2)
             row2.addStretch(1)
-            v.addLayout(row2)
-            lay.addWidget(box)
-            self._fetch_widgets[cfg["label"]] = {"num": num, "link": link, "abbrev": abbrev}
+            cbox.addLayout(row2)
+            cbox._toggle.clicked.connect(lambda checked, lbl=label: self._on_fetch_collapsed(lbl, checked))
+            lay.addWidget(cbox)
+            self._fetch_widgets[label] = {"num": num, "link": link, "abbrev": abbrev}
 
         # Saved custom tournaments
         self._saved_custom_box = QtWidgets.QGroupBox("Saved Custom Tournaments")
@@ -1054,7 +1095,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._custom_slug = QtWidgets.QLineEdit()
         self._custom_slug.setFixedWidth(360)
         form.addWidget(self._custom_slug, 0, 1)
-        form.addWidget(_muted("e.g. tournament/{event}-{n}/event/rivals-2-singles"), 0, 2)
+        form.addWidget(_muted("slug or start.gg URL  ·  use {n} for event number"), 0, 2)
         form.addWidget(QtWidgets.QLabel("Name:"), 1, 0)
         self._custom_name = QtWidgets.QLineEdit()
         self._custom_name.setFixedWidth(250)
@@ -1089,8 +1130,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
             slug_tmpl = entry.get("slug_template", entry.get("slug", ""))
             if not slug_tmpl:
                 continue
-            box = QtWidgets.QGroupBox(entry.get("label", slug_tmpl))
-            v = QtWidgets.QVBoxLayout(box)
+            cbox = CollapsibleBox(entry.get("label", slug_tmpl), collapsed=entry.get("collapsed", False))
             row1 = QtWidgets.QHBoxLayout()
             row1.addWidget(QtWidgets.QLabel("Event #:"))
             num = _hline(entry.get("current_num", ""), 60)
@@ -1101,7 +1141,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
             link.setMinimumWidth(260)
             row1.addWidget(link)
             row1.addStretch(1)
-            v.addLayout(row1)
+            cbox.addLayout(row1)
 
             def _on_num(text, e=entry):
                 e["current_num"] = text
@@ -1120,7 +1160,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
             rowa.addWidget(abbrev)
             rowa.addWidget(_muted(f"used when a match line exceeds {MAX_LINE_LEN} chars"))
             rowa.addStretch(1)
-            v.addLayout(rowa)
+            cbox.addLayout(rowa)
 
             def _on_abbrev(text, e=entry):
                 e["abbrev"] = text
@@ -1141,11 +1181,13 @@ class RivalsWindow(QtWidgets.QMainWindow):
             b3.clicked.connect(lambda _=False, s=slug_tmpl: self._delete_custom_event(s))
             row2.addWidget(b3)
             row2.addStretch(1)
-            v.addLayout(row2)
-            self._saved_custom_layout.addWidget(box)
+            cbox.addLayout(row2)
+            cbox._toggle.clicked.connect(lambda checked, e=entry: self._on_custom_fetch_collapsed(e, checked))
+            self._saved_custom_layout.addWidget(cbox)
 
     def _fetch_custom_sets(self):
-        slug_tmpl = self._custom_slug.text().strip()
+        slug_tmpl = _normalize_startgg_slug(self._custom_slug.text().strip())
+        self._custom_slug.setText(slug_tmpl)  # normalize URL → slug in place
         name_tmpl = self._custom_name.text().strip()
         num = self._custom_num.text().strip()
         if not slug_tmpl:
@@ -1247,11 +1289,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
     #  Tab: Generate Thumbnails                                          #
     # ================================================================== #
     def _build_thumbnails_tab(self):
-        tab_widget = QtWidgets.QWidget()
-        lay = QtWidgets.QVBoxLayout(tab_widget)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.setSpacing(10)
-        self.tabs.addTab(tab_widget, "Generate Thumbnails")
+        lay = self._scroll_tab("Generate Thumbnails")
 
         box = QtWidgets.QGroupBox("Event")
         v = QtWidgets.QVBoxLayout(box)
@@ -1303,8 +1341,8 @@ class RivalsWindow(QtWidgets.QMainWindow):
         lay.addLayout(row_gen)
         self._thumb_event_name.textChanged.connect(self._refresh_open_folder_btn)
 
-        # VOD Names editor — expands to fill remaining vertical space
-        self._build_vod_editor(lay, expanding=True)
+        # VOD Names editor
+        self._build_vod_editor(lay)
 
         self._refresh_thumbnail_events()
         self._refresh_open_folder_btn()
@@ -1648,9 +1686,41 @@ class RivalsWindow(QtWidgets.QMainWindow):
         if not event_name:
             self._log("[Error: event name is empty]\n")
             return
-        self._run([PYTHON, str(ROOT / "Python_Scripts" / "generate_rivals_thumbnail.py"),
-                   "-e", event_name, "-o", str(ROOT / "Vod_Names" / "missing.log")],
-                  on_done=self._refresh_open_folder_btn)
+        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "generate_rivals_thumbnail.py"),
+               "-e", event_name, "-o", str(ROOT / "Vod_Names" / "missing.log")]
+
+        filter_text = getattr(self, "_vod_filter", None)
+        filter_text = filter_text.text().strip() if filter_text else ""
+        if filter_text and hasattr(self, "_vod_proxy"):
+            # Collect comment/header lines from source (e.g. # ABBREV:) plus filtered match lines
+            src_count = self._vod_model.rowCount()
+            comment_lines = [self._vod_model.text_at(r) for r in range(src_count)
+                             if self._vod_model.text_at(r).strip().startswith("#")]
+            proxy_count = self._vod_proxy.rowCount()
+            match_lines = [
+                self._vod_model.text_at(
+                    self._vod_proxy.mapToSource(self._vod_proxy.index(pr, 0)).row()
+                )
+                for pr in range(proxy_count)
+                if not self._vod_model.text_at(
+                    self._vod_proxy.mapToSource(self._vod_proxy.index(pr, 0)).row()
+                ).strip().startswith("#")
+            ]
+            tmp_path = ROOT / "Vod_Names" / "_filter_tmp names.txt"
+            tmp_path.write_text("\n".join(comment_lines + match_lines), encoding="utf-8")
+            cmd += ["-v", str(tmp_path)]
+            self._log(f"[Filter active: generating {len(match_lines)} line(s) matching \"{filter_text}\"]\n")
+
+            def _cleanup(_):
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                self._refresh_open_folder_btn()
+
+            self._run(cmd, on_done=_cleanup)
+        else:
+            self._run(cmd, on_done=self._refresh_open_folder_btn)
 
     def _refresh_open_folder_btn(self):
         event_name = self._thumb_event_name.text().strip()
@@ -1724,10 +1794,27 @@ class RivalsWindow(QtWidgets.QMainWindow):
         row.addStretch(1)
         cbox.addLayout(row)
 
+        # Filter bar
+        filter_row = QtWidgets.QHBoxLayout()
+        filter_row.addWidget(QtWidgets.QLabel("Filter:"))
+        self._vod_filter = QtWidgets.QLineEdit()
+        self._vod_filter.setPlaceholderText("Search match lines…")
+        self._vod_filter.setClearButtonEnabled(True)
+        filter_row.addWidget(self._vod_filter)
+        cbox.addLayout(filter_row)
+
         self._vod_model = VodModel()
+        self._vod_proxy = QtCore.QSortFilterProxyModel()
+        self._vod_proxy.setSourceModel(self._vod_model)
+        self._vod_proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._vod_proxy.setFilterKeyColumn(2)
+        self._vod_filter.textChanged.connect(self._on_vod_filter_changed)
+
+        self._vod_selected_source_row: int = -1
+
         self._vod_view = QtWidgets.QTableView()
-        self._vod_view.setModel(self._vod_model)
-        self._vod_view.setMinimumHeight(120)
+        self._vod_view.setModel(self._vod_proxy)
+        self._vod_view.setMinimumHeight(400)
         self._vod_view.verticalHeader().setVisible(False)
         self._vod_view.horizontalHeader().setSectionResizeMode(
             2, QtWidgets.QHeaderView.ResizeMode.Stretch)
@@ -1738,13 +1825,19 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._vod_copy_delegate = CopyButtonDelegate(self._vod_view)
         self._vod_copy_delegate.copyRequested.connect(self._vod_copy_row)
         self._vod_view.setItemDelegateForColumn(1, self._vod_copy_delegate)
+        self._vod_line_delegate = VodLineDelegate(self._vod_view)
+        self._vod_view.setItemDelegateForColumn(2, self._vod_line_delegate)
         self._vod_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._vod_view.customContextMenuRequested.connect(self._vod_context_menu)
         self._vod_model.dataChanged.connect(lambda *_: self._vod_update_delete_btn())
         self._vod_model.dataChanged.connect(lambda *_: self._update_import_btn())
+        self._vod_model.dataChanged.connect(self._on_vod_data_changed)
         self._vod_model.modelReset.connect(self._vod_update_delete_btn)
         self._vod_model.modelReset.connect(self._update_import_btn)
+        self._vod_model.modelReset.connect(self._vod_rebuild_red_rows)
+        self._vod_red_rows: set[int] = set()
         cbox.addWidget(self._vod_view)
+        self._vod_view.selectionModel().currentRowChanged.connect(self._on_vod_row_changed)
 
         rb2 = QtWidgets.QHBoxLayout()
         save = QtWidgets.QPushButton("Save")
@@ -1810,19 +1903,57 @@ class RivalsWindow(QtWidgets.QMainWindow):
         idx = self._vod_view.indexAt(pos)
         if not idx.isValid():
             return
+        src_idx = self._vod_proxy.mapToSource(idx)
         menu = QtWidgets.QMenu(self)
         copy_act = menu.addAction("Copy line")
         del_act = menu.addAction("Delete line")
         act = menu.exec(self._vod_view.viewport().mapToGlobal(pos))
         if act == copy_act:
-            text = self._vod_model.text_at(idx.row())
+            text = self._vod_model.text_at(src_idx.row())
             out = self._vod_abbrev_line(text)
             QtWidgets.QApplication.clipboard().setText(out)
             suffix = " (abbreviated)" if out != text else ""
             self._log(f"[Copied to clipboard{suffix}: {out}]\n")
         elif act == del_act:
-            self._vod_model.delete_row(idx.row())
+            self._vod_model.delete_row(src_idx.row())
             self._vod_update_delete_btn()
+
+    def _on_vod_row_changed(self, current, _previous):
+        if current.isValid():
+            src = self._vod_proxy.mapToSource(current)
+            self._vod_selected_source_row = src.row()
+
+    def _vod_rebuild_red_rows(self):
+        self._vod_red_rows = {
+            r for r in range(self._vod_model.rowCount())
+            if _vod_missing_chars(self._vod_model.text_at(r))
+        }
+
+    def _on_vod_data_changed(self, top_left, bottom_right, _roles=None):
+        for row in range(top_left.row(), bottom_right.row() + 1):
+            text = self._vod_model.text_at(row)
+            was_red = row in self._vod_red_rows
+            is_red = _vod_missing_chars(text)
+            if is_red:
+                self._vod_red_rows.add(row)
+            else:
+                self._vod_red_rows.discard(row)
+            if was_red and not is_red:
+                name = self._vod_file.currentText()
+                if name:
+                    (ROOT / "Vod_Names" / name).write_text(
+                        self._vod_model.to_text(), encoding="utf-8")
+                    self._log(f"[Auto-saved: line {row + 1} character data complete — {name}]\n")
+
+    def _on_vod_filter_changed(self, text: str):
+        self._vod_proxy.setFilterFixedString(text)
+        # Re-select the remembered source row if it is still visible after filtering
+        if self._vod_selected_source_row >= 0:
+            src_idx = self._vod_model.index(self._vod_selected_source_row, 0)
+            proxy_idx = self._vod_proxy.mapFromSource(src_idx)
+            if proxy_idx.isValid():
+                self._vod_view.setCurrentIndex(proxy_idx)
+                self._vod_view.scrollTo(proxy_idx)
 
     def _refresh_vod_files(self):
         vod_dir = ROOT / "Vod_Names"
@@ -1934,13 +2065,15 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
     def _vod_add_new_row(self):
         pos = self._vod_model.add_blank()
-        idx = self._vod_model.index(pos, 2)
-        self._vod_view.scrollTo(idx)
-        self._vod_view.setCurrentIndex(idx)
-        self._vod_view.edit(idx)
+        src_idx = self._vod_model.index(pos, 2)
+        proxy_idx = self._vod_proxy.mapFromSource(src_idx)
+        self._vod_view.scrollTo(proxy_idx)
+        self._vod_view.setCurrentIndex(proxy_idx)
+        self._vod_view.edit(proxy_idx)
 
     def _vod_copy_row(self, r: int):
-        text = self._vod_model.text_at(r)
+        src_row = self._vod_proxy.mapToSource(self._vod_proxy.index(r, 0)).row()
+        text = self._vod_model.text_at(src_row)
         if text:
             out = self._vod_abbrev_line(text)
             QtWidgets.QApplication.clipboard().setText(out)
@@ -3217,10 +3350,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
             self._log(f"[Error saving player database: {exc}]\n")
 
     def _autosave_player_db(self):
-        """Persist after each edit. Silent on success to avoid console spam;
-        errors are still logged. The explicit Save button gives loud feedback."""
         try:
             save_player_db(self._db_header, self._db_players)
+            self._log("[Auto-saved: player database]\n")
         except Exception as exc:
             self._log(f"[Error auto-saving player database: {exc}]\n")
 
