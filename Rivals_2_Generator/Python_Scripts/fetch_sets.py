@@ -37,6 +37,7 @@ query FetchSets($slug: String!, $page: Int!) {
         startedAt
         completedAt
         fullRoundText
+        phaseGroup { bracketType }
         station { number }
         slots {
           entrant { name }
@@ -139,14 +140,18 @@ def format_set(set_node: dict, tournament_name: str, game_name: str,
 
     matchup = f"{p1} Vs {p2}"
 
-    round_text = (set_node.get("fullRoundText") or "").strip()
-    round_text = (round_text
-        .replace("Winners", "Wnrs")
-        .replace("Losers", "Lsrs")
-        .replace("Round", "Rd")
-        .replace("Quarter-Final", "Qrts")
-        .replace("Semi-Final", "Semi")
-    )
+    bracket_type = ((set_node.get("phaseGroup") or {}).get("bracketType") or "")
+    if bracket_type == "ROUND_ROBIN":
+        round_text = "Rnd Rbn"
+    else:
+        round_text = (set_node.get("fullRoundText") or "").strip()
+        round_text = (round_text
+            .replace("Winners", "Wnrs")
+            .replace("Losers", "Lsrs")
+            .replace("Round", "Rd")
+            .replace("Quarter-Final", "Qrts")
+            .replace("Semi-Final", "Semi")
+        )
 
     def assemble(event_prefix: str) -> str:
         prefix = " - ".join(p for p in [event_prefix, round_text] if p)
