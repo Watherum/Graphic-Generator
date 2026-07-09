@@ -1870,6 +1870,7 @@ class MeleeWindow(QtWidgets.QMainWindow):
         elif act == del_act:
             self._vod_model.delete_row(src_idx.row())
             self._vod_update_delete_btn()
+            self._auto_save_vod_file()
 
     def _refresh_vod_files(self):
         vod_dir = ROOT / "Vod_Names"
@@ -1943,6 +1944,7 @@ class MeleeWindow(QtWidgets.QMainWindow):
         removed = self._vod_model.delete_marked()
         if removed:
             self._log(f"[Deleted {removed} marked row(s)]\n")
+            self._auto_save_vod_file()
         else:
             self._log("[No rows marked to delete]\n")
         self._vod_update_delete_btn()
@@ -1951,6 +1953,7 @@ class MeleeWindow(QtWidgets.QMainWindow):
         removed = self._vod_model.delete_unmarked()
         if removed:
             self._log(f"[Deleted {removed} unmarked row(s)]\n")
+            self._auto_save_vod_file()
         else:
             self._log("[No unmarked rows to delete]\n")
         self._vod_update_delete_btn()
@@ -1960,6 +1963,13 @@ class MeleeWindow(QtWidgets.QMainWindow):
             self._vod_delete_btn.setEnabled(self._vod_model.any_checked())
         if hasattr(self, "_vod_delete_unmarked_btn"):
             self._vod_delete_unmarked_btn.setEnabled(self._vod_model.rowCount() > 0)
+
+    def _auto_save_vod_file(self):
+        name = self._vod_file.currentText()
+        if not name:
+            return
+        (ROOT / "Vod_Names" / name).write_text(self._vod_model.to_text(), encoding="utf-8")
+        self._log(f"[Auto-saved: {name}]\n")
 
     def _save_vod_file(self):
         name = self._vod_file.currentText()

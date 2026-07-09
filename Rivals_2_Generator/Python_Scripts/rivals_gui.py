@@ -1917,6 +1917,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         elif act == del_act:
             self._vod_model.delete_row(src_idx.row())
             self._vod_update_delete_btn()
+            self._auto_save_vod_file()
 
     def _on_vod_row_changed(self, current, _previous):
         if current.isValid():
@@ -2084,6 +2085,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         removed = self._vod_model.delete_marked()
         if removed:
             self._log(f"[Deleted {removed} marked row(s)]\n")
+            self._auto_save_vod_file()
         else:
             self._log("[No rows marked to delete]\n")
         self._vod_update_delete_btn()
@@ -2092,6 +2094,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         removed = self._vod_model.delete_unmarked()
         if removed:
             self._log(f"[Deleted {removed} unmarked row(s)]\n")
+            self._auto_save_vod_file()
         else:
             self._log("[No unmarked rows to delete]\n")
         self._vod_update_delete_btn()
@@ -2102,6 +2105,13 @@ class RivalsWindow(QtWidgets.QMainWindow):
             self._vod_delete_btn.setEnabled(checked)
         if hasattr(self, "_vod_delete_unmarked_btn"):
             self._vod_delete_unmarked_btn.setEnabled(checked)
+
+    def _auto_save_vod_file(self):
+        name = self._vod_file.currentText()
+        if not name:
+            return
+        (ROOT / "Vod_Names" / name).write_text(self._vod_model.to_text(), encoding="utf-8")
+        self._log(f"[Auto-saved: {name}]\n")
 
     def _save_vod_file(self):
         name = self._vod_file.currentText()
