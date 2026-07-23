@@ -566,7 +566,8 @@ def _neutral_skin_for(char: str) -> str:
 #  VOD list model (virtualized — handles large match lists smoothly)          #
 # --------------------------------------------------------------------------- #
 class VodModel(QtCore.QAbstractTableModel):
-    HEADERS = ["", "", "Match line", "Len"]
+    # cols: 0 checkbox, 1 copy, 2 move-up, 3 move-down, 4 Len, 5 match line
+    HEADERS = ["", "", "", "", "Len", "Match line"]
 
     def __init__(self):
         super().__init__()
@@ -577,21 +578,21 @@ class VodModel(QtCore.QAbstractTableModel):
         return 0 if parent.isValid() else len(self._rows)
 
     def columnCount(self, parent=QtCore.QModelIndex()):
-        return 4
+        return 6
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
         row = self._rows[index.row()]
         col = index.column()
-        if col == 2 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+        if col == 5 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             return row["text"]
-        if col == 2 and _vod_missing_chars(row["text"]):
+        if col == 5 and _vod_missing_chars(row["text"]):
             if role == Qt.ItemDataRole.ForegroundRole:
                 return QtGui.QColor("#ff6b6b")
             if role == Qt.ItemDataRole.ToolTipRole:
                 return "Missing character data — add character name(s) inside the parentheses"
-        if col == 3:
+        if col == 4:
             length = len(row["text"].strip())
             if role == Qt.ItemDataRole.DisplayRole:
                 return f"{length}/{MAX_LINE_LEN}"
@@ -605,6 +606,10 @@ class VodModel(QtCore.QAbstractTableModel):
                         else "Match-line length")
         if col == 1 and role == Qt.ItemDataRole.ToolTipRole:
             return "Copy line"
+        if col == 2 and role == Qt.ItemDataRole.ToolTipRole:
+            return "Move this line up one row"
+        if col == 3 and role == Qt.ItemDataRole.ToolTipRole:
+            return "Move this line down one row"
         if col == 0 and role == Qt.ItemDataRole.CheckStateRole:
             return Qt.CheckState.Checked if row["checked"] else Qt.CheckState.Unchecked
         if role == Qt.ItemDataRole.BackgroundRole and row["checked"]:
@@ -615,15 +620,15 @@ class VodModel(QtCore.QAbstractTableModel):
         if not index.isValid():
             return False
         row = self._rows[index.row()]
-        if index.column() == 2 and role == Qt.ItemDataRole.EditRole:
+        if index.column() == 5 and role == Qt.ItemDataRole.EditRole:
             row["text"] = value
             # Refresh both the edited cell and the length column beside it
-            self.dataChanged.emit(index, self.index(index.row(), 3))
+            self.dataChanged.emit(self.index(index.row(), 4), index)
             return True
         if index.column() == 0 and role == Qt.ItemDataRole.CheckStateRole:
             row["checked"] = (Qt.CheckState(value) == Qt.CheckState.Checked)
             left = self.index(index.row(), 0)
-            right = self.index(index.row(), 3)
+            right = self.index(index.row(), 5)
             self.dataChanged.emit(left, right)
             return True
         return False
@@ -634,7 +639,7 @@ class VodModel(QtCore.QAbstractTableModel):
         f = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         if index.column() == 0:
             f |= Qt.ItemFlag.ItemIsUserCheckable
-        elif index.column() == 2:
+        elif index.column() == 5:
             f |= Qt.ItemFlag.ItemIsEditable
         return f
 
@@ -662,7 +667,7 @@ class VodModel(QtCore.QAbstractTableModel):
         for r in self._rows:
             r["checked"] = checked
         self.dataChanged.emit(self.index(0, 0),
-                              self.index(len(self._rows) - 1, 3))
+                              self.index(len(self._rows) - 1, 5))
 
     def delete_marked(self) -> int:
         keep = [r for r in self._rows if not r["checked"]]
@@ -687,6 +692,22 @@ class VodModel(QtCore.QAbstractTableModel):
             self.beginRemoveRows(QtCore.QModelIndex(), r, r)
             self._rows.pop(r)
             self.endRemoveRows()
+
+    def move_row(self, r: int, delta: int) -> int:
+        """Move row ``r`` by ``delta`` (±1). Returns the new index, or -1 if
+        the move is out of bounds / unsupported."""
+        if delta not in (-1, 1):
+            return -1
+        new = r + delta
+        if not (0 <= r < len(self._rows)) or not (0 <= new < len(self._rows)):
+            return -1
+        # Qt's destination index is expressed in pre-removal coordinates, so a
+        # downward move targets r + 2.
+        dest = r + 2 if delta == 1 else new
+        self.beginMoveRows(QtCore.QModelIndex(), r, r, QtCore.QModelIndex(), dest)
+        self._rows.insert(new, self._rows.pop(r))
+        self.endMoveRows()
+        return new
 
     def any_checked(self) -> bool:
         return any(r["checked"] for r in self._rows)
@@ -840,6 +861,79 @@ class CopyButtonDelegate(QtWidgets.QStyledItemDelegate):
                 and event.button() == Qt.MouseButton.LeftButton
                 and option.rect.contains(event.pos())):
             self.copyRequested.emit(index.row())
+            return True
+        return False
+
+
+# --------------------------------------------------------------------------- #
+#  Move up / move down button delegates (VOD table)                            #
+# --------------------------------------------------------------------------- #
+class MoveButtonDelegate(QtWidgets.QStyledItemDelegate):
+    """Paints a single ▲ or ▼ button per row for reordering that row. One
+    instance handles one direction (``delta`` -1 = up, +1 = down), so up and
+    down are separate buttons in separate columns. Painted rather than a real
+    widget so the virtualized VOD table stays cheap. Emits
+    ``moveRequested(row, delta)``. Disabled on the row where the move would run
+    off the end (first row for up, last row for down)."""
+
+    moveRequested = QtCore.Signal(int, int)
+
+    def __init__(self, delta: int, parent=None):
+        super().__init__(parent)
+        self._delta = delta
+
+    def _enabled_for(self, index) -> bool:
+        if self._delta < 0:
+            return index.row() > 0
+        return index.row() < index.model().rowCount() - 1
+
+    def paint(self, painter, option, index):
+        painter.save()
+        bg = index.data(Qt.ItemDataRole.BackgroundRole)
+        base = QtGui.QColor(bg) if bg is not None else QtGui.QColor(_BG3)
+        painter.fillRect(option.rect, base)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+
+        enabled = self._enabled_for(index)
+        hovered = bool(option.state & QtWidgets.QStyle.StateFlag.State_MouseOver)
+
+        size = 22
+        bx = option.rect.x() + (option.rect.width() - size) // 2
+        by = option.rect.y() + (option.rect.height() - size) // 2
+        btn = QtCore.QRect(bx, by, size, size)
+        if hovered and enabled:
+            painter.setBrush(QtGui.QColor("#474747"))
+            painter.setPen(QtGui.QPen(QtGui.QColor(_HILITE), 1))
+            painter.drawRoundedRect(btn, 5, 5)
+
+        cx, cy = btn.center().x(), btn.center().y()
+        w = 4.5
+        path = QtGui.QPainterPath()
+        if self._delta < 0:  # up arrow
+            path.moveTo(cx, cy - w)
+            path.lineTo(cx - w, cy + w)
+            path.lineTo(cx + w, cy + w)
+        else:                # down arrow
+            path.moveTo(cx, cy + w)
+            path.lineTo(cx - w, cy - w)
+            path.lineTo(cx + w, cy - w)
+        path.closeSubpath()
+        if not enabled:
+            color = QtGui.QColor(_MUTED)
+            color.setAlpha(70)
+        else:
+            color = QtGui.QColor(_FG if hovered else _MUTED)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawPath(path)
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        if (event.type() == QtCore.QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton
+                and option.rect.contains(event.pos())):
+            if self._enabled_for(index):
+                self.moveRequested.emit(index.row(), self._delta)
             return True
         return False
 
@@ -1772,8 +1866,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._vod_char_picker = QtWidgets.QComboBox()
         self._vod_char_picker.setMinimumWidth(160)
         self._vod_char_picker.setToolTip(
-            "Pick a character, then Copy to paste the exact spelling into a VOD line")
+            "Pick a character to copy its exact spelling to the clipboard")
         self._refresh_vod_char_picker()
+        self._vod_char_picker.activated.connect(self._copy_vod_char)
         row.addWidget(self._vod_char_picker)
         crb = QtWidgets.QPushButton("⟳")
         crb.setObjectName("tool")
@@ -1807,7 +1902,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._vod_proxy = QtCore.QSortFilterProxyModel()
         self._vod_proxy.setSourceModel(self._vod_model)
         self._vod_proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self._vod_proxy.setFilterKeyColumn(2)
+        self._vod_proxy.setFilterKeyColumn(5)
         self._vod_filter.textChanged.connect(self._on_vod_filter_changed)
 
         self._vod_selected_source_row: int = -1
@@ -1817,16 +1912,24 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._vod_view.setMinimumHeight(400)
         self._vod_view.verticalHeader().setVisible(False)
         self._vod_view.horizontalHeader().setSectionResizeMode(
-            2, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            5, QtWidgets.QHeaderView.ResizeMode.Stretch)
         self._vod_view.setColumnWidth(0, 30)
         self._vod_view.setColumnWidth(1, 34)
-        self._vod_view.setColumnWidth(3, 64)
+        self._vod_view.setColumnWidth(2, 30)
+        self._vod_view.setColumnWidth(3, 30)
+        self._vod_view.setColumnWidth(4, 64)
         self._vod_view.setMouseTracking(True)  # enables per-cell hover state
         self._vod_copy_delegate = CopyButtonDelegate(self._vod_view)
         self._vod_copy_delegate.copyRequested.connect(self._vod_copy_row)
         self._vod_view.setItemDelegateForColumn(1, self._vod_copy_delegate)
+        self._vod_up_delegate = MoveButtonDelegate(-1, self._vod_view)
+        self._vod_up_delegate.moveRequested.connect(self._vod_move_row)
+        self._vod_view.setItemDelegateForColumn(2, self._vod_up_delegate)
+        self._vod_down_delegate = MoveButtonDelegate(1, self._vod_view)
+        self._vod_down_delegate.moveRequested.connect(self._vod_move_row)
+        self._vod_view.setItemDelegateForColumn(3, self._vod_down_delegate)
         self._vod_line_delegate = VodLineDelegate(self._vod_view)
-        self._vod_view.setItemDelegateForColumn(2, self._vod_line_delegate)
+        self._vod_view.setItemDelegateForColumn(5, self._vod_line_delegate)
         self._vod_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._vod_view.customContextMenuRequested.connect(self._vod_context_menu)
         self._vod_model.dataChanged.connect(lambda *_: self._vod_update_delete_btn())
@@ -1923,6 +2026,19 @@ class RivalsWindow(QtWidgets.QMainWindow):
         if current.isValid():
             src = self._vod_proxy.mapToSource(current)
             self._vod_selected_source_row = src.row()
+
+    def _vod_move_row(self, proxy_row: int, delta: int):
+        if self._vod_filter.text():
+            self._log("[Clear the filter before reordering lines]\n")
+            return
+        src_row = self._vod_proxy.mapToSource(
+            self._vod_proxy.index(proxy_row, 0)).row()
+        new = self._vod_model.move_row(src_row, delta)
+        if new < 0:
+            return
+        self._vod_selected_source_row = new
+        self._vod_rebuild_red_rows()
+        self._auto_save_vod_file()
 
     def _vod_rebuild_red_rows(self):
         self._vod_red_rows = {
@@ -2066,7 +2182,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
     def _vod_add_new_row(self):
         pos = self._vod_model.add_blank()
-        src_idx = self._vod_model.index(pos, 2)
+        src_idx = self._vod_model.index(pos, 5)
         proxy_idx = self._vod_proxy.mapFromSource(src_idx)
         self._vod_view.scrollTo(proxy_idx)
         self._vod_view.setCurrentIndex(proxy_idx)
@@ -2162,8 +2278,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._top8_char_picker = QtWidgets.QComboBox()
         self._top8_char_picker.setMinimumWidth(160)
         self._top8_char_picker.setToolTip(
-            "Pick a character, then Copy to paste the exact spelling into the text data")
+            "Pick a character to copy its exact spelling to the clipboard")
         self._refresh_top8_char_picker()
+        self._top8_char_picker.activated.connect(self._copy_top8_char)
         t8_char_row.addWidget(self._top8_char_picker)
         t8_crb = QtWidgets.QPushButton("⟳")
         t8_crb.setObjectName("tool")
@@ -2183,8 +2300,18 @@ class RivalsWindow(QtWidgets.QMainWindow):
         Top8DataHighlighter(self._top8_text.document())
         ctxt.addWidget(self._top8_text)
         save_txt = QtWidgets.QPushButton("Save")
-        save_txt.clicked.connect(self._save_top8_text)
+        save_txt.clicked.connect(lambda: self._save_top8_text())
         ctxt.addWidget(save_txt)
+
+        # Auto-save the Top 8 text data on edit (debounced). Programmatic loads
+        # are guarded by the shared suppress flag.
+        self._top8_suppress_autosave = False
+        self._top8_text_save_timer = QtCore.QTimer(self)
+        self._top8_text_save_timer.setSingleShot(True)
+        self._top8_text_save_timer.setInterval(800)
+        self._top8_text_save_timer.timeout.connect(
+            lambda: self._save_top8_text(auto=True))
+        self._top8_text.textChanged.connect(self._on_top8_text_edit)
 
         # HTML editor
         chtml = CollapsibleBox("Top 8 HTML Result", collapsed=False)
@@ -2224,8 +2351,17 @@ class RivalsWindow(QtWidgets.QMainWindow):
         HtmlHighlighter(self._top8_html_text.document())
         chtml_src.addWidget(self._top8_html_text)
         save_html = QtWidgets.QPushButton("Save")
-        save_html.clicked.connect(self._save_top8_html)
+        save_html.clicked.connect(lambda: self._save_top8_html())
         chtml_src.addWidget(save_html)
+
+        # Auto-save the HTML source on edit (debounced). Programmatic loads and
+        # the Apply-config rewrite are guarded by the suppress flag.
+        self._top8_html_save_timer = QtCore.QTimer(self)
+        self._top8_html_save_timer.setSingleShot(True)
+        self._top8_html_save_timer.setInterval(800)
+        self._top8_html_save_timer.timeout.connect(
+            lambda: self._save_top8_html(auto=True))
+        self._top8_html_text.textChanged.connect(self._on_top8_html_edit)
 
         self._top8_html_file.currentTextChanged.connect(self._load_top8_html)
         self._d8_last_html_file = None
@@ -2292,18 +2428,28 @@ class RivalsWindow(QtWidgets.QMainWindow):
             path.write_text(content, encoding="utf-8")
             self._log(f"[Auto-created {path.name}]\n")
         content = path.read_text(encoding="utf-8")
-        self._top8_text.setPlainText(content)
+        prev = self._top8_suppress_autosave
+        self._top8_suppress_autosave = True
+        try:
+            self._top8_text.setPlainText(content)
+        finally:
+            self._top8_suppress_autosave = prev
         # Event-name preview reflects the file's own "Event name:" field.
         m = re.search(r'(?m)^Event name:\t*(.*)$', content)
         self._top8_event_name.setText(
             m.group(1).strip() if m and m.group(1).strip()
             else self._top8_series.currentText())
 
-    def _save_top8_text(self):
+    def _on_top8_text_edit(self):
+        if self._top8_suppress_autosave:
+            return
+        self._top8_text_save_timer.start()
+
+    def _save_top8_text(self, auto=False):
         path = self._get_top8_text_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._top8_text.toPlainText(), encoding="utf-8")
-        self._log(f"[Saved {path.name}]\n")
+        self._log(f"[Auto-saved: {path.name}]\n" if auto else f"[Saved {path.name}]\n")
 
     def _refresh_top8_html_files(self):
         results_dir = ROOT / "Top_8_Results"
@@ -2337,6 +2483,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
                 "⚠ No Top 8 HTML file found in Top_8_Results/. "
                 "Create one by copying an existing template.")
 
+    def _on_top8_html_edit(self):
+        if self._top8_suppress_autosave:
+            return
+        self._top8_html_save_timer.start()
+
     def _load_top8_html(self):
         name = self._top8_html_file.currentText()
         if not name:
@@ -2344,25 +2495,39 @@ class RivalsWindow(QtWidgets.QMainWindow):
         path = ROOT / "Top_8_Results" / name
         if not path.exists():
             return
-        self._top8_html_text.setPlainText(path.read_text(encoding="utf-8"))
-        if name != self._d8_last_html_file:
-            self._d8_last_html_file = name
-            self._load_default_top8_config()
-            self._load_top8_text()
+        self._top8_suppress_autosave = True
+        try:
+            self._top8_html_text.setPlainText(path.read_text(encoding="utf-8"))
+            if name != self._d8_last_html_file:
+                self._d8_last_html_file = name
+                self._load_default_top8_config()
+                self._load_top8_text()
+        finally:
+            self._top8_suppress_autosave = False
 
-    def _save_top8_html(self):
+    def _save_top8_html(self, auto=False):
         name = self._top8_html_file.currentText()
         if not name:
-            self._log("[Error: no HTML file selected]\n")
+            if not auto:
+                self._log("[Error: no HTML file selected]\n")
             return
         path = ROOT / "Top_8_Results" / name
         path.write_text(self._top8_html_text.toPlainText(), encoding="utf-8")
-        self._log(f"[Saved {name}]\n")
+        self._log(f"[Auto-saved: {name}]\n" if auto else f"[Saved {name}]\n")
 
     # --- Default Top 8 layout config ---
     def _build_default_top8_config(self, parent_box):
         cbox = CollapsibleBox("Layout Config", collapsed=True)
         parent_box.addWidget(cbox)
+
+        # Guards programmatic field/text updates (file load, apply) from
+        # re-triggering the auto-save timers.
+        self._top8_suppress_autosave = False
+        self._top8_config_save_timer = QtCore.QTimer(self)
+        self._top8_config_save_timer.setSingleShot(True)
+        self._top8_config_save_timer.setInterval(700)
+        self._top8_config_save_timer.timeout.connect(
+            lambda: self._apply_default_top8_config(auto=True))
 
         self._d8_label_color = ColorField("#ffffff")
         self._d8_sponsor_color = ColorField("#FFD700")
@@ -2374,7 +2539,12 @@ class RivalsWindow(QtWidgets.QMainWindow):
             self._d8_event.append(d)
         self._d8_renders = [{"top": _hline("", 60), "left": _hline("", 60), "height": _hline("", 60)} for _ in range(8)]
         self._d8_nums = [{"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60)} for _ in range(8)]
-        self._d8_names = [{"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60)} for _ in range(8)]
+        self._d8_names = [{"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60),
+                           "wrap": QtWidgets.QCheckBox()} for _ in range(8)]
+        for f in self._d8_names:
+            f["wrap"].setToolTip(
+                "When on, this player's name wraps onto multiple lines at spaces "
+                "instead of staying on a single line.")
         self._d8_sponsors = [{"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60)} for _ in range(8)]
 
         # Colors
@@ -2405,9 +2575,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
         cbox.addWidget(evbox)
 
         def slot_section(title, vars_list, col3_lbl):
+            has_wrap = any("wrap" in f for f in vars_list)
             gb = QtWidgets.QGroupBox(title)
             g = QtWidgets.QGridLayout(gb)
-            for ci, txt in enumerate(["Place", "Top %", "Left %", col3_lbl]):
+            headers = ["Place", "Top %", "Left %", col3_lbl] + (["Wrap"] if has_wrap else [])
+            for ci, txt in enumerate(headers):
                 g.addWidget(_muted(txt), 0, ci)
             for i, f in enumerate(vars_list):
                 g.addWidget(QtWidgets.QLabel(str(i + 1)), i + 1, 0)
@@ -2415,7 +2587,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
                 g.addWidget(f["left"], i + 1, 2)
                 third = "height" if "height" in f else "size"
                 g.addWidget(f[third], i + 1, 3)
-            g.setColumnStretch(4, 1)  # absorb slack so fields stay left-packed
+                if "wrap" in f:
+                    g.addWidget(f["wrap"], i + 1, 4)
+            g.setColumnStretch(len(headers), 1)  # absorb slack so fields stay left-packed
             cbox.addWidget(gb)
 
         slot_section("Character Renders", self._d8_renders, "Height %")
@@ -2425,8 +2599,32 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
         apply_btn = QtWidgets.QPushButton("Apply Config && Save")
         apply_btn.setObjectName("accent")
-        apply_btn.clicked.connect(self._apply_default_top8_config)
+        apply_btn.clicked.connect(lambda: self._apply_default_top8_config())
         cbox.addWidget(apply_btn)
+
+        # Auto-save layout config: any field edit (debounced) re-applies to the
+        # HTML and writes it. Programmatic loads are guarded by the suppress flag.
+        color_fields = [self._d8_label_color, self._d8_sponsor_color]
+        line_fields = []
+        for f in self._d8_event:
+            line_fields += [f["top"], f["left"], f["size"]]
+            if "color" in f:
+                color_fields.append(f["color"])
+        for group in (self._d8_renders, self._d8_nums, self._d8_names, self._d8_sponsors):
+            for f in group:
+                line_fields += [f["top"], f["left"], f[next(
+                    k for k in ("height", "size") if k in f)]]
+        for e in line_fields:
+            e.textChanged.connect(self._on_top8_config_edit)
+        for cf in color_fields:
+            cf.edit.textChanged.connect(self._on_top8_config_edit)
+        for f in self._d8_names:
+            f["wrap"].toggled.connect(self._on_top8_config_edit)
+
+    def _on_top8_config_edit(self, *_):
+        if self._top8_suppress_autosave:
+            return
+        self._top8_config_save_timer.start()
 
     def _load_default_top8_config(self):
         html = self._top8_html_text.toPlainText()
@@ -2442,6 +2640,12 @@ class RivalsWindow(QtWidgets.QMainWindow):
         def color_prop(style):
             m = re.search(r'color:\s*(#[0-9a-fA-F]+)', style)
             return m.group(1) if m else ""
+
+        def wraps(style):
+            # Per-element wrap = inline white-space:normal overriding the
+            # .label rule's nowrap. No inline declaration → inherits nowrap.
+            m = re.search(r'white-space:\s*(nowrap|normal)', style)
+            return bool(m) and m.group(1) == "normal"
 
         m = re.search(r'#canvas \.label \{[^}]*color:\s*(#[0-9a-fA-F]+)', html, re.DOTALL)
         self._d8_label_color.setValue(m.group(1) if m else "#ffffff")
@@ -2471,12 +2675,13 @@ class RivalsWindow(QtWidgets.QMainWindow):
             self._d8_names[i]["top"].setText(num_prop(s, "top"))
             self._d8_names[i]["left"].setText(num_prop(s, "left"))
             self._d8_names[i]["size"].setText(num_prop(s, "font-size"))
+            self._d8_names[i]["wrap"].setChecked(wraps(s))
             s = get_style(f"place-{n}-sponsor")
             self._d8_sponsors[i]["top"].setText(num_prop(s, "top"))
             self._d8_sponsors[i]["left"].setText(num_prop(s, "left"))
             self._d8_sponsors[i]["size"].setText(num_prop(s, "font-size"))
 
-    def _apply_default_top8_config(self):
+    def _apply_default_top8_config(self, auto=False):
         html = self._top8_html_text.toPlainText()
 
         def patch_style(h, elem_id, props):
@@ -2487,6 +2692,15 @@ class RivalsWindow(QtWidgets.QMainWindow):
                         style = re.sub(r'(color:\s*)#[0-9a-fA-F]+', rf'\g<1>{val}', style)
                     elif unit in ("%", "px"):
                         style = re.sub(rf'({re.escape(prop)}:\s*)[\d.]+({re.escape(unit)})', rf'\g<1>{val}\2', style)
+                    elif unit == "keyword":
+                        # Drop any existing declaration, then re-add unless val is
+                        # None (None = inherit the class default, e.g. nowrap).
+                        style = re.sub(rf'\s*{re.escape(prop)}:\s*[^;]*;?', '', style)
+                        if val is not None:
+                            style = style.rstrip()
+                            if style and not style.endswith(';'):
+                                style += ';'
+                            style = (style + f' {prop}: {val};').strip()
                 return m.group(1) + style + '"'
             return re.sub(rf'(id="{re.escape(elem_id)}"[^>]*?style=")([^"]*)"', repl, h)
 
@@ -2518,14 +2732,27 @@ class RivalsWindow(QtWidgets.QMainWindow):
             f = self._d8_names[i]
             html = patch_style(html, f"place-{n}-name", [
                 ("top", f["top"].text(), "%"), ("left", f["left"].text(), "%"),
-                ("font-size", f["size"].text(), "px")])
+                ("font-size", f["size"].text(), "px"),
+                ("white-space", "normal" if f["wrap"].isChecked() else None, "keyword")])
             f = self._d8_sponsors[i]
             html = patch_style(html, f"place-{n}-sponsor", [
                 ("top", f["top"].text(), "%"), ("left", f["left"].text(), "%"),
                 ("font-size", f["size"].text(), "px")])
 
-        self._top8_html_text.setPlainText(html)
-        self._save_top8_html()
+        self._top8_suppress_autosave = True
+        try:
+            self._top8_html_text.setPlainText(html)
+        finally:
+            self._top8_suppress_autosave = False
+        name = self._top8_html_file.currentText()
+        if not name:
+            if not auto:
+                self._log("[Error: no HTML file selected]\n")
+            return
+        path = ROOT / "Top_8_Results" / name
+        path.write_text(html, encoding="utf-8")
+        self._log(f"[Auto-saved layout config: {name}]\n" if auto
+                  else f"[Saved {name}]\n")
 
     def _open_top8_html_in_browser(self):
         name = self._top8_html_file.currentText()
