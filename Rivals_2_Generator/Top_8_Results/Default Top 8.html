@@ -147,12 +147,21 @@
                 const playerName = parts[0];
                 if (!playerName) continue;
                 const chars = {};
+                const pinned = {};
                 for (let i = 1; i + 1 < parts.length; i += 2) {
                     const charName = parts[i];
-                    const alt      = parts[i + 1];
+                    let alt        = parts[i + 1];
                     if (!charName) continue;
+                    // A character may be listed more than once to give the player
+                    // several skins. A leading '*' marks the preferred one; with no
+                    // star the first listed wins. The marker must never reach a path.
+                    const isPreferred = alt.startsWith('*');
+                    if (isPreferred) alt = alt.slice(1).trim();
                     const charKey = charName.toLowerCase();
-                    chars[charKey] = alt;
+                    if (!(charKey in chars) || (isPreferred && !pinned[charKey])) {
+                        chars[charKey] = alt;
+                        if (isPreferred) pinned[charKey] = true;
+                    }
                     if (alt && alt.startsWith('T_') && !(charKey in charDefaults)) {
                         const m = prefixRe.exec(alt);
                         if (m) charDefaults[charKey] = m[1] + '_Default_Neutral_CSP';

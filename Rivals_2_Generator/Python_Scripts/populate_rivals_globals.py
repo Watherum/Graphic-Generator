@@ -5,6 +5,8 @@ Also populated player and character databases
 import io
 import os
 
+import skin_utils
+
 
 def readCharDatabase(filename, deliminator=','):
     """
@@ -91,7 +93,11 @@ def readPlayerDatabase(filename, deliminator=',', char_database=None):
             # check character mapping (to uppercase)
             if a_char.upper() in char_database.keys():
                 a_char = char_database[a_char.upper()]
-            char_skin_dict[a_char.upper()] = a_alt
+            # A character may be listed more than once to give the player several
+            # skins for it; keep every one, in CSV order. A leading '*' marks the
+            # preferred skin (used when a VOD line doesn't name one).
+            a_alt, a_pref = skin_utils.split_pref(a_alt)
+            char_skin_dict.setdefault(a_char.upper(), []).append((a_alt, a_pref))
         # Add to player database dictionary (to uppercase)
         play_database[player_name.upper()] = char_skin_dict
     # end loop

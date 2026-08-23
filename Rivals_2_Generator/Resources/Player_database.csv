@@ -1,7 +1,10 @@
 ## These are comments,,,,,,,,,,,,,,,,,,
 # Expecting the following format for each row,,,,,,,,,,,,,,,,,,
 # Player,character,alt,character,alt,character,alt,character,alt,character,alt,character,alt,,,,,,
-Watherum,Ranno,T_Ran_Tuxedo_Neutral_CSP,Clairen,T_Cla_Default_Black_CSP,Kragg,T_Kra_Default_Abyssal_CSP,Zetterburn,T_Zet_Champion_Red_CSP,Galvan,T_Gal_Genesis_Red_CSP,Loxodont,T_Lox_DarkFuture_Neutral_CSP
+# List a character more than once to give that player several skins for it.,,,,,,,,,,,,,,,,,,
+# Prefix an alt with * to mark it preferred (used when a VOD line names no skin).,,,,,,,,,,,,,,,,,,
+# With no * the first listed skin wins. Name a skin per set in the VOD line: Ranno:Abyss Midnight,,,,,,,,,,,,,,,,,,
+Watherum,Clairen,T_Cla_Default_Black_CSP,Galvan,T_Gal_Genesis_Red_CSP,Kragg,T_Kra_Default_Abyssal_CSP,Loxodont,T_Lox_DarkFuture_Neutral_CSP,Ranno,*T_Ran_Tuxedo_Neutral_CSP,Ranno,T_Ran_Abyss_Red_CSP,Ranno,T_Ran_Goo_Red_CSP,Zetterburn,T_Zet_Champion_Red_CSP
 Monocle Gentlesir,Maypul,T_May_Creator_Neutral_CSP,Clairen,T_Cla_Abyss_Green_CSP,La Reina,T_Lar_Hornet_Green_CSP
 Average Alex,Clairen,T_Cla_Leopard_Pink_CSP,Forsburn,T_For_Default_Neutral_CSP,Random,T_Ran_Blue,Maypul,T_May_Primal_Orange_CSP,Wrastor,T_Wra_Default_Neutral_CSP,Kragg,T_Kra_Default_Neutral_CSP,Orcane,T_Orc_Prehistoric_CoolBlue_CSP,Loxodont,T_Lox_Summer_Blue_CSP,Zetterburn,T_Zet_Default_Neutral_CSP,Etalus,T_Eta_Default_Green_CSP,Olympia,T_Oly_Default_Neutral_CSP,Fleet,T_Fle_Ranger_Green_CSP,Ranno,T_Ran_Lovers_CoolBlue_CSP,Absa,T_Abs_Summer_Green_CSP,Galvan,T_Gal_Champion_Green_CSP,La Reina,T_Lar_Lucha_Green_CSP,Slade,T_Sla_Default_Neutral_CSP,Gouie,T_Gou_Louie_Neutral_CSP
 ZeeBee,Kragg,T_Kra_Default_Blue_CSP,Random,T_Ran_Blue,Etalus,T_Eta_Default_Green_CSP,Clairen,T_Cla_Default_Blue_CSP,Zetterburn,T_Zet_Default_Red_CSP,Orcane,T_Orc_Default_Red_CSP,Slade,T_Sla_Abyss_Midnight_CSP
@@ -50,7 +53,7 @@ Mkok,Zetterburn,T_Zet_Default_Black_CSP
 Virgo,Orcane,T_Orc_Clownfish_Green_CSP,Olympia,T_Oly_Lovers_Green_CSP
 Spyker,Zetterburn,T_Zet_Lovers_Neutral_CSP
 JuanSolo,Loxodont,T_Lox_Lovers_Mint_CSP
-BGunn,Olympia,T_Oly_Opossum_Blue_CSP,Clairen,T_Cla_Champion_Blue_CSP
+BGunn,Olympia,T_Oly_Opossum_Blue_CSP,Clairen,T_Cla_Champion_Blue_CSP,Olympia,*T_Oly_Evo_Blue_CSP
 Sourkroutt,Clairen,T_Cla_Ranger_Neutral_CSP
 leggy145,Kragg,T_Kra_Rockstar_Neutral_CSP
 Godly,Ranno,T_Ran_Champion_Blue_CSP

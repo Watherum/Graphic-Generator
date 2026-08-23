@@ -28,6 +28,19 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt, QProcess, Signal
 
+from skin_utils import (
+    RENDERS_DIR,
+    char_abbrev,
+    get_skins_for_char,
+    join_pref,
+    neutral_skin_for,
+    skin_label,
+    split_char_skin,
+    split_pref,
+    stem_for_label,
+    strip_skins,
+)
+
 # --------------------------------------------------------------------------- #
 #  Paths & constants                                                          #
 # --------------------------------------------------------------------------- #
@@ -36,20 +49,11 @@ REPO_ROOT = ROOT.parent            # git repo root (contains all generators)
 GENERATOR_DIR = ROOT.name          # this generator's folder name (update pathspec)
 PYTHON = sys.executable
 THUMBNAIL_SCRIPT = ROOT / "Python_Scripts" / "generate_rivals_thumbnail.py"
-RENDERS_DIR = ROOT / "Resources" / "Character_Renders" / "Rivals_2_Full_Renders"
 PLAYER_DB_PATH = ROOT / "Resources" / "Player_database.csv"
 CHAR_DB_PATH = ROOT / "Resources" / "Character_database.csv"
 SETTINGS_PATH = ROOT / "rivals_gui_settings.json"
 CUSTOM_EVENTS_PATH = ROOT / "rivals_custom_events.json"
 EVENT_CONFIGS_PATH = ROOT / "rivals_event_configs.json"
-
-def char_abbrev(char_name: str) -> str:
-    """The 3-letter prefix the devs use in render filenames (T_<Abbrev>_..._CSP.png).
-
-    By convention the prefix is the first three letters of the character name with
-    spaces removed (Absa->Abs, La Reina->Lar). Deriving it here means new characters
-    work with no code changes as long as their CSPs follow that naming."""
-    return char_name.replace(" ", "")[:3]
 
 
 # Dark palette
@@ -107,32 +111,6 @@ except ImportError:
 # --------------------------------------------------------------------------- #
 #  Pure helpers (database parsing, skin/render lookups, dispatcher reflection) #
 # --------------------------------------------------------------------------- #
-def get_skins_for_char(char_name: str) -> list[str]:
-    if not RENDERS_DIR.exists():
-        return []
-    if char_name == "Random":
-        return sorted(
-            f.stem for f in RENDERS_DIR.glob("T_Ran_*.png")
-            if not f.stem.endswith("_CSP")
-        )
-    prefix = f"t_{char_abbrev(char_name)}_".lower()
-    return sorted(
-        f.stem for f in RENDERS_DIR.glob("T_*_CSP.png")
-        if f.stem.lower().startswith(prefix)
-    )
-
-
-def skin_label(stem: str) -> str:
-    """T_Abs_Default_Blue_CSP -> Default Blue"""
-    parts = stem.split("_", 2)
-    if len(parts) < 3:
-        return stem
-    inner = parts[2]
-    if inner.endswith("_CSP"):
-        inner = inner[:-4]
-    return inner.replace("_", " ")
-
-
 def _ordinal_date(date) -> str:
     if not isinstance(date, _dt.date):
         return ""
@@ -534,8 +512,11 @@ def _vod_missing_chars(text: str) -> bool:
     return not parens or any(not p.strip() for p in parens)
 
 
-def _parse_vod_players(line: str) -> list:
-    """Return [(player_name, [char, ...]), ...] for a match line."""
+def _parse_vod_player_skins(line: str) -> list:
+    """Return [(player_name, [(char, skin_or_None), ...]), ...] for a match line.
+
+    A character may carry a per-set skin after a colon ("Ranno:Abyss Midnight").
+    """
     parts = line.split(" - ")
     if len(parts) < 4:
         return []
@@ -545,21 +526,45 @@ def _parse_vod_players(line: str) -> list:
         m = _VOD_PLAYER_RE.match(player_str.strip())
         if m:
             name = m.group(1).strip()
-            chars = [c.strip() for c in m.group(2).split(',') if c.strip()]
+            chars = [split_char_skin(c) for c in m.group(2).split(',') if c.strip()]
             results.append((name, chars))
     return results
 
 
-def _neutral_skin_for(char: str) -> str:
-    """Return the default-neutral skin stem for a character, or '' if none found."""
-    skins = get_skins_for_char(char)
-    for s in skins:
-        if "default" in s.lower() and "neutral" in s.lower():
-            return s
-    for s in skins:
-        if "neutral" in s.lower():
-            return s
-    return skins[0] if skins else ""
+def _parse_vod_players(line: str) -> list:
+    """Return [(player_name, [char, ...]), ...] for a match line, skins stripped."""
+    return [(name, [c for c, _ in chars])
+            for name, chars in _parse_vod_player_skins(line)]
+
+
+def _rewrite_vod_players(line: str, per_player: list) -> str:
+    """Rebuild a match line with new character lists.
+
+    ``per_player`` is [[(char, skin_or_None), ...], ...] in the same order
+    :func:`_parse_vod_player_skins` returned them. Everything outside the
+    parentheses (event, round, player names, game suffix) is left untouched.
+    """
+    parts = line.split(" - ")
+    if len(parts) < 4:
+        return line
+    players_section = " - ".join(parts[2:-1])
+    # Keep the 'Vs' separator exactly as written by splitting on a capture group
+    chunks = re.split(r'(\s+Vs\s+)', players_section)
+    out = []
+    slot = 0
+    for chunk in chunks:
+        m = _VOD_PLAYER_RE.match(chunk.strip())
+        if m and slot < len(per_player):
+            name = m.group(1).strip()
+            chars = ", ".join(f"{c}:{sk}" if sk else c for c, sk in per_player[slot])
+            out.append(f"{name} ({chars})")
+            slot += 1
+        else:
+            out.append(chunk)
+    return " - ".join(parts[:2] + ["".join(out), parts[-1]])
+
+
+_neutral_skin_for = neutral_skin_for
 
 
 # --------------------------------------------------------------------------- #
@@ -576,6 +581,23 @@ class VodModel(QtCore.QAbstractTableModel):
     def __init__(self):
         super().__init__()
         self._rows: list[dict] = []  # {"checked": bool, "text": str}
+        # Set by the window to its _vod_abbrev_line, so the Len column and the
+        # Copy button can never disagree about what a line becomes.
+        self.copy_text_fn = None
+
+    def copy_text(self, text: str) -> str:
+        """The line as it would land on the clipboard."""
+        if self.copy_text_fn is not None:
+            return self.copy_text_fn(text)
+        return strip_skins(text)
+
+    def refresh_len_column(self):
+        """Repaint Len after something outside a row changed the copy result.
+
+        The abbreviation lives outside the model, so editing it changes every
+        row's copied length without any row's text changing."""
+        if self._rows:
+            self.dataChanged.emit(self.index(0, 4), self.index(len(self._rows) - 1, 4))
 
     # -- Qt model API --
     def rowCount(self, parent=QtCore.QModelIndex()):
@@ -597,7 +619,11 @@ class VodModel(QtCore.QAbstractTableModel):
             if role == Qt.ItemDataRole.ToolTipRole:
                 return "Missing character data — add character name(s) inside the parentheses"
         if col == 4:
-            length = len(row["text"].strip())
+            # Measure exactly what the Copy button puts on the clipboard: skins
+            # stripped and the series abbreviation already applied. Red therefore
+            # means "still too long after abbreviation", which is the only case
+            # that needs the user to do something.
+            length = len(self.copy_text(row["text"]).strip())
             if role == Qt.ItemDataRole.DisplayRole:
                 return f"{length}/{MAX_LINE_LEN}"
             if role == Qt.ItemDataRole.TextAlignmentRole:
@@ -605,9 +631,11 @@ class VodModel(QtCore.QAbstractTableModel):
             if role == Qt.ItemDataRole.ForegroundRole and length > MAX_LINE_LEN:
                 return QtGui.QColor("#ff6b6b")
             if role == Qt.ItemDataRole.ToolTipRole:
-                return ("Over the 100-character limit — set an Abbreviation for this "
-                        "series in the Fetch tab and re-fetch" if length > MAX_LINE_LEN
-                        else "Match-line length")
+                return ("Over the 100-character limit even after abbreviating — set or "
+                        "shorten the Abbreviation for this series in the Fetch tab"
+                        if length > MAX_LINE_LEN
+                        else "Length of the line as copied (skins stripped, "
+                             "abbreviation applied)")
         if col == 1 and role == Qt.ItemDataRole.ToolTipRole:
             return "Copy line"
         if col == 2 and role == Qt.ItemDataRole.ToolTipRole:
@@ -1161,7 +1189,8 @@ class RivalsWindow(QtWidgets.QMainWindow):
             rowa.addWidget(_muted(f"used when a match line exceeds {MAX_LINE_LEN} chars"))
             rowa.addStretch(1)
             cbox.addLayout(rowa)
-            abbrev.textChanged.connect(lambda _t: self._save_settings())
+            abbrev.textChanged.connect(
+                lambda _t: (self._save_settings(), self._refresh_vod_len()))
 
             def _on_num(text, lk=link, tmpl=cfg["default_link"], lbl=label):
                 lk.setText(tmpl.replace("{n}", text.strip()))
@@ -1268,6 +1297,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
             def _on_abbrev(text, e=entry):
                 e["abbrev"] = text
                 self._save_custom_events()
+                self._refresh_vod_len()
 
             num.textChanged.connect(_on_num)
             link.textChanged.connect(_on_link)
@@ -1776,6 +1806,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
                     self._thumb_num.setText(saved)
         self._update_thumb_name()
         self._load_config_into_form(series)
+        self._refresh_vod_len()
         self._refresh_vod_files()
         self._save_settings()
 
@@ -1878,14 +1909,26 @@ class RivalsWindow(QtWidgets.QMainWindow):
             "Pick a character to copy its exact spelling to the clipboard")
         self._refresh_vod_char_picker()
         self._vod_char_picker.activated.connect(self._copy_vod_char)
+        self._vod_char_picker.currentTextChanged.connect(self._refresh_vod_skin_picker)
         row.addWidget(self._vod_char_picker)
         crb = QtWidgets.QPushButton("⟳")
         crb.setObjectName("tool")
         crb.setToolTip("Refresh character list")
         crb.clicked.connect(self._refresh_vod_char_picker)
         row.addWidget(crb)
+        row.addWidget(QtWidgets.QLabel("Skin:"))
+        self._vod_skin_picker = QtWidgets.QComboBox()
+        self._vod_skin_picker.setMinimumWidth(170)
+        self._vod_skin_picker.setToolTip(
+            "Optional per-set skin — picking one copies Character:Skin to the clipboard.\n"
+            "Leave blank to use the player's preferred skin.")
+        self._refresh_vod_skin_picker()
+        # Same auto-copy as the character picker: choosing a skin puts the whole
+        # "Character:Skin" token on the clipboard, ready to paste into a line.
+        self._vod_skin_picker.activated.connect(self._copy_vod_char)
+        row.addWidget(self._vod_skin_picker)
         cc = QtWidgets.QPushButton("Copy")
-        cc.setToolTip("Copy the selected character name to the clipboard")
+        cc.setToolTip("Copy the selected character (with skin, if chosen) to the clipboard")
         cc.clicked.connect(self._copy_vod_char)
         row.addWidget(cc)
         row.addSpacing(20)
@@ -1908,6 +1951,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         cbox.addLayout(filter_row)
 
         self._vod_model = VodModel()
+        self._vod_model.copy_text_fn = self._vod_abbrev_line
         # Auto-save: every content change restarts a short debounce timer, so a
         # burst of typing results in a single write.
         self._vod_loaded_name = ""
@@ -1995,13 +2039,34 @@ class RivalsWindow(QtWidgets.QMainWindow):
         if cur in chars:
             self._vod_char_picker.setCurrentText(cur)
         self._vod_char_picker.blockSignals(False)
+        self._refresh_vod_skin_picker()
+
+    def _refresh_vod_skin_picker(self, *_args):
+        """List the selected character's skins; blank means 'use the preferred one'."""
+        picker = getattr(self, "_vod_skin_picker", None)
+        if picker is None:
+            return
+        char = self._vod_char_picker.currentText().strip()
+        cur = picker.currentText()
+        labels = [skin_label(st) for st in get_skins_for_char(char)] if char else []
+        picker.blockSignals(True)
+        picker.clear()
+        picker.addItem("")          # no skin -> player's preferred
+        picker.addItems(labels)
+        if cur in labels:
+            picker.setCurrentText(cur)
+        picker.blockSignals(False)
 
     def _copy_vod_char(self):
         name = self._vod_char_picker.currentText().strip()
         if not name:
             return
-        QtWidgets.QApplication.clipboard().setText(name)
-        self._log(f"[Copied character to clipboard: {name}]\n")
+        skin = ""
+        if getattr(self, "_vod_skin_picker", None) is not None:
+            skin = self._vod_skin_picker.currentText().strip()
+        text = f"{name}:{skin}" if skin else name
+        QtWidgets.QApplication.clipboard().setText(text)
+        self._log(f"[Copied character to clipboard: {text}]\n")
 
     def _refresh_top8_char_picker(self):
         cur = self._top8_char_picker.currentText()
@@ -2027,9 +2092,12 @@ class RivalsWindow(QtWidgets.QMainWindow):
         src_idx = self._vod_proxy.mapToSource(idx)
         menu = QtWidgets.QMenu(self)
         copy_act = menu.addAction("Copy line")
+        skins_act = menu.addAction("Set skins…")
         del_act = menu.addAction("Delete line")
         act = menu.exec(self._vod_view.viewport().mapToGlobal(pos))
-        if act == copy_act:
+        if act == skins_act:
+            self._vod_set_skins(src_idx.row())
+        elif act == copy_act:
             text = self._vod_model.text_at(src_idx.row())
             out = self._vod_abbrev_line(text)
             QtWidgets.QApplication.clipboard().setText(out)
@@ -2038,6 +2106,77 @@ class RivalsWindow(QtWidgets.QMainWindow):
         elif act == del_act:
             self._vod_model.delete_row(src_idx.row())
             self._vod_update_delete_btn()
+
+    def _vod_set_skins(self, src_row: int):
+        """Pick a per-set skin for each character in one match line.
+
+        A row can hold up to four characters across two players, which is why
+        this is a dialog rather than a column in the table. Leaving a skin on
+        "(preferred)" writes no ``:Skin`` into the line, keeping it short.
+        """
+        line = self._vod_model.text_at(src_row)
+        parsed = _parse_vod_player_skins(line)
+        if not parsed:
+            self._log("[Set skins: could not parse that line]\n")
+            return
+
+        _, players = load_player_db()
+        db = {name.lower(): entries for name, entries in players.items()}
+
+        def preferred_label(player: str, char: str) -> str:
+            """The skin this character renders as today, for the placeholder text."""
+            entries = db.get(player.lower().removesuffix(" [l]"), [])
+            matches = [split_pref(sk) for c, sk in entries if c.upper() == char.upper()]
+            if not matches:
+                return ""
+            stem = next((st for st, pref in matches if pref), matches[0][0])
+            return skin_label(stem) if stem else ""
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Set skins for this set")
+        lay = QtWidgets.QVBoxLayout(dlg)
+        lay.addWidget(_muted("Leave a skin on “(preferred)” to use the "
+                             "player's default from the player database."))
+        form = QtWidgets.QFormLayout()
+        combos = []          # (player_slot, char, combo)
+        for slot, (name, chars) in enumerate(parsed):
+            for char, skin in chars:
+                combo = QtWidgets.QComboBox()
+                combo.setMinimumWidth(220)
+                pref = preferred_label(name, char)
+                combo.addItem(f"(preferred{': ' + pref if pref else ''})", "")
+                labels = [skin_label(st) for st in get_skins_for_char(char)]
+                for lbl in labels:
+                    combo.addItem(lbl, lbl)
+                if skin:
+                    # Accept whatever the line already says, even a stale label
+                    hit = stem_for_label(char, skin)
+                    want = skin_label(hit) if hit else skin
+                    if want not in labels:
+                        combo.addItem(want, want)
+                    combo.setCurrentText(want)
+                form.addRow(f"{name} — {char}", combo)
+                combos.append((slot, char, combo))
+        lay.addLayout(form)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        lay.addWidget(buttons)
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+
+        per_player = [[] for _ in parsed]
+        for slot, char, combo in combos:
+            per_player[slot].append((char, combo.currentData() or None))
+        new_line = _rewrite_vod_players(line, per_player)
+        if new_line == line:
+            return
+        self._vod_model.setData(self._vod_model.index(src_row, 5), new_line,
+                                Qt.ItemDataRole.EditRole)
+        self._log(f"[Set skins: {new_line}]\n")
 
     def _on_vod_row_changed(self, current, _previous):
         if current.isValid():
@@ -2142,8 +2281,19 @@ class RivalsWindow(QtWidgets.QMainWindow):
             self._vod_suppress_autosave = False
         self._vod_update_delete_btn()
 
+    def _refresh_vod_len(self):
+        """Len depends on the abbreviation, which lives outside the model."""
+        if hasattr(self, "_vod_model"):
+            self._vod_model.refresh_len_column()
+
     def _vod_abbrev_line(self, text: str) -> str:
-        """Return text with abbreviation applied when over the length limit."""
+        """Prepare a match line for the clipboard: the YouTube title for this set.
+
+        Per-set skins are a rendering detail, so they come off first -- both
+        because they don't belong in the title and because the length limit is
+        about the title, not about what we wrote to steer the generator.
+        """
+        text = strip_skins(text)
         if len(text) <= MAX_LINE_LEN:
             return text
         abbrev = getattr(self, "_vod_abbrev", "")
@@ -2178,19 +2328,29 @@ class RivalsWindow(QtWidgets.QMainWindow):
         new_players: dict = {}  # lower_name -> (canonical_name, set_of_chars)
         for r in range(self._vod_model.rowCount()):
             text = self._vod_model.text_at(r)
-            for name, chars in _parse_vod_players(text):
+            for name, chars in _parse_vod_player_skins(text):
                 key = name.lower()
                 if key not in db_lower:
                     if key not in new_players:
-                        new_players[key] = (name, set())
-                    new_players[key][1].update(chars)
+                        new_players[key] = (name, {})
+                    for char, skin in chars:
+                        # A skin named in the line beats the neutral default, and
+                        # the first line that names one for a character wins.
+                        if skin and not new_players[key][1].get(char):
+                            new_players[key][1][char] = skin
+                        else:
+                            new_players[key][1].setdefault(char, None)
 
         if not new_players:
             self._log("[Import: all players already in database]\n")
             return
 
         for key, (name, chars) in new_players.items():
-            entries = [(char, _neutral_skin_for(char)) for char in sorted(chars)]
+            entries = []
+            for char in sorted(chars):
+                requested = chars[char]
+                stem = (stem_for_label(char, requested) if requested else None)
+                entries.append((char, stem or _neutral_skin_for(char)))
             db[name] = entries
             char_list = ", ".join(f"{c} ({s})" if s else c for c, s in entries)
             self._log(f"[Import: added '{name}' — {char_list}]\n")
@@ -3345,11 +3505,18 @@ class RivalsWindow(QtWidgets.QMainWindow):
         rv.addWidget(self._editing_label)
 
         self._char_tree = QtWidgets.QTreeWidget()
-        self._char_tree.setColumnCount(2)
-        self._char_tree.setHeaderLabels(["Character", "Skin"])
+        self._char_tree.setColumnCount(3)
+        self._char_tree.setHeaderLabels(["Character", "Skin", "Preferred"])
         self._char_tree.setColumnWidth(0, 130)
+        # Skin names run long ("Basketball NoTimetoTilt"), so give that column
+        # room and push Preferred well clear of it.
+        self._char_tree.setColumnWidth(1, 260)
+        self._char_tree.setColumnWidth(2, 80)
         self._char_tree.setRootIsDecorated(False)
+        # Guards the itemChanged handler while we rebuild rows ourselves.
+        self._char_tree_updating = False
         self._char_tree.currentItemChanged.connect(self._on_char_tree_select)
+        self._char_tree.itemChanged.connect(self._on_char_tree_check)
         rv.addWidget(self._char_tree)
 
         tb = QtWidgets.QHBoxLayout()
@@ -3359,6 +3526,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
         rmb = QtWidgets.QPushButton("Remove Selected")
         rmb.clicked.connect(self._remove_char_entry)
         tb.addWidget(rmb)
+        prefb = QtWidgets.QPushButton("Set Preferred")
+        prefb.setToolTip("Use this skin whenever a VOD line doesn't name one for this "
+                         "character (same as ticking its Preferred box)")
+        prefb.clicked.connect(self._set_preferred_entry)
+        tb.addWidget(prefb)
         tb.addStretch(1)
         up = QtWidgets.QPushButton("Move Up")
         up.clicked.connect(lambda: self._move_char_entry(-1))
@@ -3460,11 +3632,65 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._populate_char_tree(name)
         self._clear_form()
 
+    def _sort_char_entries(self, name: str):
+        """Group a player's rows by character, in place.
+
+        The sort is stable, so a character's own skins keep their relative
+        order -- which matters, because the first of them is the fallback
+        default when none is marked preferred. Sorting the model rather than
+        just the view keeps tree row indexes usable as model indexes."""
+        entries = self._db_players.get(name)
+        if entries:
+            entries.sort(key=lambda e: e[0].casefold())
+
     def _populate_char_tree(self, name: str):
+        """List a player's character/skin rows, checking the preferred skin.
+
+        A character listed more than once has several skins available for
+        per-set use; the checked row (or the first, if none is checked) is the
+        one used when a VOD line doesn't name a skin."""
+        self._sort_char_entries(name)
         self._char_tree.clear()
-        for char, skin in self._db_players.get(name, []):
-            lbl = skin_label(skin) if skin else "(none)"
-            QtWidgets.QTreeWidgetItem(self._char_tree, [char, lbl])
+        entries = self._db_players.get(name, [])
+        # Which row wins for each character, mirroring skin_utils.preferred_stem
+        winner: dict[str, int] = {}
+        for idx, (char, skin) in enumerate(entries):
+            stem, is_pref = split_pref(skin)
+            key = char.upper()
+            if is_pref and key not in winner:
+                winner[key] = idx
+        for idx, (char, skin) in enumerate(entries):
+            key = char.upper()
+            if key not in winner:
+                winner[key] = idx
+        counts: dict[str, int] = {}
+        for char, _ in entries:
+            counts[char.upper()] = counts.get(char.upper(), 0) + 1
+        # Rebuilding rows fires itemChanged for every setCheckState; ignore those.
+        self._char_tree_updating = True
+        try:
+            for idx, (char, skin) in enumerate(entries):
+                stem, _ = split_pref(skin)
+                lbl = skin_label(stem) if stem else "(none)"
+                key = char.upper()
+                item = QtWidgets.QTreeWidgetItem(self._char_tree, [char, lbl])
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                # Exactly one row per character is checked: the explicitly
+                # preferred one, else the first listed. Something always wins,
+                # so the box shows which skin is actually in use.
+                chosen = winner.get(key) == idx
+                item.setCheckState(
+                    2, Qt.CheckState.Checked if chosen else Qt.CheckState.Unchecked)
+                item.setToolTip(2, (
+                    "This skin is used when a VOD line doesn't name one"
+                    if chosen else
+                    f"Tick to make this {char}'s default skin"))
+                if chosen and counts[key] > 1:
+                    font = item.font(1)
+                    font.setBold(True)
+                    item.setFont(1, font)
+        finally:
+            self._char_tree_updating = False
 
     def _confirm_add_player(self):
         name = self._new_player.text().strip()
@@ -3557,7 +3783,17 @@ class RivalsWindow(QtWidgets.QMainWindow):
             self._log("[Select a character]\n")
             return
         stem = self._skin_stem_from_label(self._form_skin.currentText())
-        self._db_players[self._db_selected_player].append((char, stem))
+        entries = self._db_players[self._db_selected_player]
+        # Adding a second skin for a character makes the default ambiguous, so
+        # pin the skin that was already winning. Behaviour is then unchanged
+        # until the user explicitly stars a different one.
+        same = [i for i, (c, _) in enumerate(entries) if c.upper() == char.upper()]
+        if same and not any(split_pref(entries[i][1])[1] for i in same):
+            c0, s0 = entries[same[0]]
+            entries[same[0]] = (c0, join_pref(split_pref(s0)[0], True))
+            self._log(f"[{char} now has {len(same) + 1} skins - "
+                      f"{skin_label(split_pref(s0)[0])} kept as preferred]\n")
+        entries.append((char, stem))
         self._populate_char_tree(self._db_selected_player)
         self._autosave_player_db()
 
@@ -3569,6 +3805,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         if idx >= len(chars):
             return
         char, stem = chars[idx]
+        stem, _ = split_pref(stem)
         self._form_char.setCurrentText(char)
         self._form_skin.setCurrentText(skin_label(stem) if stem else "")
         self._db_selected_char_idx = idx
@@ -3582,7 +3819,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         stem = self._skin_stem_from_label(self._form_skin.currentText())
         chars = self._db_players[self._db_selected_player]
         if self._db_selected_char_idx < len(chars):
-            chars[self._db_selected_char_idx] = (char, stem)
+            # Editing a row keeps whatever preferred marker it already had.
+            was_pref = split_pref(chars[self._db_selected_char_idx][1])[1]
+            chars[self._db_selected_char_idx] = (char, join_pref(stem, was_pref))
         self._populate_char_tree(self._db_selected_player)
         self._clear_form()
         self._autosave_player_db()
@@ -3603,11 +3842,63 @@ class RivalsWindow(QtWidgets.QMainWindow):
             return
         chars = self._db_players[self._db_selected_player]
         new_idx = idx + direction
-        if 0 <= new_idx < len(chars):
-            chars[idx], chars[new_idx] = chars[new_idx], chars[idx]
+        if not (0 <= new_idx < len(chars)):
+            return
+        # Rows are grouped by character now, so only a swap within one
+        # character's own skins survives the sort -- and that is the useful
+        # one, since it decides which skin is the fallback default.
+        if chars[idx][0].upper() != chars[new_idx][0].upper():
+            self._log("[Rows are sorted by character — reorder only moves a "
+                      "character's own skins]\n")
+            return
+        chars[idx], chars[new_idx] = chars[new_idx], chars[idx]
+        self._populate_char_tree(self._db_selected_player)
+        self._char_tree.setCurrentItem(self._char_tree.topLevelItem(new_idx))
+        self._autosave_player_db()
+
+    def _on_char_tree_check(self, item, column):
+        """Tick a Preferred box to make that skin the character's default."""
+        if column != 2 or self._char_tree_updating:
+            return
+        idx = self._char_tree.indexOfTopLevelItem(item)
+        if idx < 0:
+            return
+        if item.checkState(2) != Qt.CheckState.Checked:
+            # Every character always has a default, so a box can't simply be
+            # cleared -- pick a different row instead. Restore what we drew.
             self._populate_char_tree(self._db_selected_player)
-            self._char_tree.setCurrentItem(self._char_tree.topLevelItem(new_idx))
-            self._autosave_player_db()
+            return
+        self._set_preferred_index(idx)
+
+    def _set_preferred_entry(self):
+        """Button path: make the selected row its character's default skin."""
+        idx = self._char_tree.indexOfTopLevelItem(self._char_tree.currentItem())
+        if idx < 0 or not self._db_selected_player:
+            self._log("[Select a skin row first]\n")
+            return
+        self._set_preferred_index(idx)
+
+    def _set_preferred_index(self, idx: int):
+        """Mark entry ``idx`` preferred, clearing the character's other rows.
+
+        Shared by the Preferred checkbox and the Set Preferred button so the two
+        can't drift apart."""
+        if not self._db_selected_player:
+            return
+        entries = self._db_players[self._db_selected_player]
+        if idx >= len(entries):
+            return
+        char = entries[idx][0]
+        for i, (c, skin) in enumerate(entries):
+            if c.upper() != char.upper():
+                continue
+            stem, _ = split_pref(skin)
+            entries[i] = (c, join_pref(stem, i == idx))
+        self._populate_char_tree(self._db_selected_player)
+        self._char_tree.setCurrentItem(self._char_tree.topLevelItem(idx))
+        self._autosave_player_db()
+        self._log(f"[Preferred skin for {char}: "
+                  f"{skin_label(split_pref(entries[idx][1])[0])}]\n")
 
     def _clear_form(self):
         self._form_char.setCurrentText("")

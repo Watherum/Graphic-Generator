@@ -17,6 +17,7 @@ import os
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import populate_rivals_globals as populate_globals
+import skin_utils
 from helper import *
 
 import sys
@@ -32,15 +33,20 @@ _properties = dict()
 
 
 class Match:
-    def __init__(self, _title, _event, _round, _player1, _char1, _player2, _char2):
+    def __init__(self, _title, _event, _round, _player1, _char1, _player2, _char2,
+                 _skin1=None, _skin2=None):
         self.t = _title
         self.e = _event
         self.r = _round
         self.p1 = _player1
         self.c1 = _char1
+        # Per-set skin requested in the VOD line ("Ranno:Abyss Midnight"), parallel
+        # to c1/c2. None in a slot means "use the player's preferred skin".
+        self.c1_skins = _skin1 if _skin1 is not None else [None] * len(_char1)
         self.c1_renders = []
         self.p2 = _player2
         self.c2 = _char2
+        self.c2_skins = _skin2 if _skin2 is not None else [None] * len(_char2)
         self.c2_renders = []
         self.Images = []
 
@@ -85,6 +91,33 @@ def setGlobals(weekly_event, property_settings=None):
     except Exception:
         pass
     return global_properties
+
+
+def stripSkinsFromTitle(title):
+    """Remove any ':Skin' parts from a match title.
+
+    The title becomes the output filename (and so the YouTube VOD name), where a
+    per-set skin has no business appearing -- and ':' is not even legal in a
+    Windows filename. Only text inside the character parentheses is touched, and
+    only when a colon is actually present, so titles without skins are returned
+    byte-for-byte unchanged.
+    """
+    return skin_utils.strip_skins(title)
+
+
+def splitCharSkins(char_tokens):
+    """Split a parsed character list into parallel character and skin lists.
+
+    A VOD line may name a per-set skin after a colon ("Ranno:Abyss Midnight").
+    Returns (chars, skins) where a skin entry is None when none was given.
+    """
+    chars = []
+    skins = []
+    for token in char_tokens:
+        a_char, a_skin = skin_utils.split_char_skin(token)
+        chars.append(a_char)
+        skins.append(a_skin)
+    return chars, skins
 
 
 def readMatchLines(filename, event_name=None):
@@ -211,14 +244,18 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
         player1_chars = player1_info[1]
         player1_chars = player1_chars.split(')')[0]  # trim off ')'
         player1_chars = [x.strip() for x in player1_chars.split(',')]  # create a list for characters
+        # Split off any per-set skin: "Ranno:Abyss Midnight" -> ("Ranno", "Abyss Midnight")
+        player1_chars, player1_skins = splitCharSkins(player1_chars)
         # Grab player 2 name and characters {player_2} ({char_2})
         player2_info = player2_info.split('(')
         player2_name = player2_info[0].strip()
         player2_chars = player2_info[1]
         player2_chars = player2_chars.split(')')[0]  # trim off ')'
         player2_chars = [x.strip() for x in player2_chars.split(',')]  # create a list for characters (strip whitespace)
+        player2_chars, player2_skins = splitCharSkins(player2_chars)
         # Have all the information, create a match
-        a_match = Match(a_title, event_short_name, a_round, player1_name, player1_chars, player2_name, player2_chars)
+        a_match = Match(stripSkinsFromTitle(a_title), event_short_name, a_round, player1_name, player1_chars, player2_name, player2_chars,
+                        player1_skins, player2_skins)
         match_list.append(a_match)
     # end of match creation
 
@@ -227,15 +264,16 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
     # Dictionaries for players and characters not found
     player_not_found = {}
     char_not_found = {}
+    skin_not_found = {}
     for a_match in match_list:
         # Loop through character lists and grab character render
         #  Add them to the new lists
         player1_char_files = []
         player2_char_files = []
         p1_flag = True  # used in loop
-        for a_list in [a_match.c1, a_match.c2]:
+        for a_list, a_skin_list in [(a_match.c1, a_match.c1_skins), (a_match.c2, a_match.c2_skins)]:
             # Loop through all characters and find their file locations
-            for a_char in a_list:
+            for a_char, a_skin_request in zip(a_list, a_skin_list):
                 # Search for character in char database
                 if a_char.upper() in _character_database.keys():
                     a_char = _character_database[a_char.upper()]
@@ -259,8 +297,11 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
                 else:  # Player found, now look for characters
                     player_chars_lookup = _player_database[player_name.upper()]
                     char_found = False
-                    if a_char.upper() in player_chars_lookup:
-                        char_file = player_chars_lookup[a_char.upper()]
+                    # A character may have several skins on file; entries are
+                    # (stem, is_preferred) in CSV order.
+                    char_entries = player_chars_lookup.get(a_char.upper(), [])
+                    if char_entries:
+                        char_file = skin_utils.preferred_stem(char_entries) or char_file
                         char_found = True
                     # Char not found case and character is not random
                     if not char_found and a_char.upper() != 'RANDOM':
@@ -268,6 +309,23 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
                             char_not_found[player_name] = []
                         if a_char not in char_not_found[player_name]:
                             char_not_found[player_name].append(a_char)
+                # A skin named in the VOD line wins over the player's preferred
+                # skin, so the same player can use different skins across sets.
+                if a_skin_request:
+                    requested = skin_utils.stem_for_label(
+                        a_char, a_skin_request,
+                        candidates=_player_database.get(player_name.upper(), {}).get(a_char.upper()))
+                    if requested:
+                        char_file = requested
+                    else:
+                        # Unknown skin: fall back to the preferred one rather than
+                        # failing the whole run, and report it in the log file.
+                        key = player_name + ' (' + a_char + ')'
+                        if key not in skin_not_found:
+                            skin_not_found[key] = []
+                        if a_skin_request not in skin_not_found[key]:
+                            skin_not_found[key].append(a_skin_request)
+
                 # Check if char file exists at render location
                 #  Render type must be specified, Render type 2 & 3 need not be
                 if _properties['render_type'] is None:
@@ -306,6 +364,12 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
         out_text += "{s}".format(s=a_player)
         for a_char in char_not_found[a_player]:
             out_text += "\t{s}\t1".format(s=a_char)
+        out_text += "\n"
+    out_text += "** List of skins not found (fell back to preferred skin) **\n"
+    for a_key in skin_not_found.keys():
+        out_text += "{s}".format(s=a_key)
+        for a_skin in skin_not_found[a_key]:
+            out_text += "\t{s}".format(s=a_skin)
         out_text += "\n"
     # Print information to screen or to file
     if log_file == '':
@@ -713,11 +777,16 @@ def main(argv):
     import re as _re
     _wiki_prefix = _re.compile(r'^(T_[A-Za-z]+)_')
     for _player_skins in _player_database.values():
-        for _char_upper, _skin_file in _player_skins.items():
-            if _skin_file.startswith('T_') and _char_upper not in _char_default_skin:
+        for _char_upper, _skin_entries in _player_skins.items():
+            if _char_upper in _char_default_skin:
+                continue
+            for _skin_file, _ in _skin_entries:
+                if not _skin_file.startswith('T_'):
+                    continue
                 _m = _wiki_prefix.match(_skin_file)
                 if _m:
                     _char_default_skin[_char_upper] = _m.group(1) + '_Default_Neutral_CSP'
+                    break
     # 1. Read in the names file to get event, round, names, characters information
     print("Reading event information from \"{s}\"".format(s=_properties['event_file']))
     event_match_lines = readMatchLines(_properties['event_file'])
