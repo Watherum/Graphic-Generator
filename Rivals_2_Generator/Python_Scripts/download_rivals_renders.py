@@ -30,6 +30,7 @@ CHARACTERS = [
     "Ranno", "Clairen", "Fleet", "Kragg", "Loxodont", "Maypul",
     "Wrastor", "Zetterburn", "Orcane", "Forsburn", "Etalus",
     "Olympia", "Absa", "Galvan", "La_Reina", "Armando", "Slade",
+    "Gouie",
 ]
 
 SESSION = requests.Session()

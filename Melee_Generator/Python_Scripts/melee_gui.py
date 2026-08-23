@@ -581,6 +581,10 @@ def _muted(text: str) -> QtWidgets.QLabel:
 class VodModel(QtCore.QAbstractTableModel):
     HEADERS = ["", "", "Match line", "Len"]
 
+    # Emitted whenever the content written to disk changes (line text, added
+    # or deleted rows). Check-marks are UI-only and never emit.
+    contentChanged = Signal()
+
     def __init__(self):
         super().__init__()
         self._rows: list[dict] = []  # {"checked": bool, "text": str}
@@ -631,6 +635,7 @@ class VodModel(QtCore.QAbstractTableModel):
             row["text"] = value
             # Refresh both the edited cell and the length column beside it
             self.dataChanged.emit(index, self.index(index.row(), 3))
+            self.contentChanged.emit()
             return True
         if index.column() == 0 and role == Qt.ItemDataRole.CheckStateRole:
             row["checked"] = (Qt.CheckState(value) == Qt.CheckState.Checked)
@@ -682,6 +687,7 @@ class VodModel(QtCore.QAbstractTableModel):
             self.beginResetModel()
             self._rows = keep
             self.endResetModel()
+            self.contentChanged.emit()
         return removed
 
     def delete_unmarked(self) -> int:
@@ -691,6 +697,7 @@ class VodModel(QtCore.QAbstractTableModel):
             self.beginResetModel()
             self._rows = keep
             self.endResetModel()
+            self.contentChanged.emit()
         return removed
 
     def delete_row(self, r: int):
@@ -698,6 +705,7 @@ class VodModel(QtCore.QAbstractTableModel):
             self.beginRemoveRows(QtCore.QModelIndex(), r, r)
             self._rows.pop(r)
             self.endRemoveRows()
+            self.contentChanged.emit()
 
     def any_checked(self) -> bool:
         return any(r["checked"] for r in self._rows)
@@ -1761,6 +1769,15 @@ class MeleeWindow(QtWidgets.QMainWindow):
         cbox.addLayout(filter_row)
 
         self._vod_model = VodModel()
+        # Auto-save: every content change restarts a short debounce timer, so a
+        # burst of typing results in a single write.
+        self._vod_loaded_name = ""
+        self._vod_suppress_autosave = False
+        self._vod_save_timer = QtCore.QTimer(self)
+        self._vod_save_timer.setSingleShot(True)
+        self._vod_save_timer.setInterval(600)
+        self._vod_save_timer.timeout.connect(self._auto_save_vod_file)
+        self._vod_model.contentChanged.connect(self._schedule_vod_autosave)
         self._vod_proxy = QtCore.QSortFilterProxyModel()
         self._vod_proxy.setSourceModel(self._vod_model)
         self._vod_proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -1870,7 +1887,6 @@ class MeleeWindow(QtWidgets.QMainWindow):
         elif act == del_act:
             self._vod_model.delete_row(src_idx.row())
             self._vod_update_delete_btn()
-            self._auto_save_vod_file()
 
     def _refresh_vod_files(self):
         vod_dir = ROOT / "Vod_Names"
@@ -1897,10 +1913,15 @@ class MeleeWindow(QtWidgets.QMainWindow):
         if names:
             self._load_vod_file()
         else:
+            self._flush_vod_autosave()
+            self._vod_loaded_name = ""
             self._vod_model.load([])
 
     def _load_vod_file(self):
+        # Commit pending edits to the file they belong to before switching
+        self._flush_vod_autosave()
         name = self._vod_file.currentText()
+        self._vod_loaded_name = name
         if not name:
             self._vod_model.load([])
             return
@@ -1920,7 +1941,11 @@ class MeleeWindow(QtWidgets.QMainWindow):
                 if len(parts) >= 2:
                     self._vod_event_name = parts[0]
         lines = [l for l in all_lines if l.strip()]
-        self._vod_model.load(lines)
+        self._vod_suppress_autosave = True
+        try:
+            self._vod_model.load(lines)
+        finally:
+            self._vod_suppress_autosave = False
         self._vod_update_delete_btn()
 
     def _vod_add_new_row(self):
@@ -1944,7 +1969,6 @@ class MeleeWindow(QtWidgets.QMainWindow):
         removed = self._vod_model.delete_marked()
         if removed:
             self._log(f"[Deleted {removed} marked row(s)]\n")
-            self._auto_save_vod_file()
         else:
             self._log("[No rows marked to delete]\n")
         self._vod_update_delete_btn()
@@ -1953,7 +1977,6 @@ class MeleeWindow(QtWidgets.QMainWindow):
         removed = self._vod_model.delete_unmarked()
         if removed:
             self._log(f"[Deleted {removed} unmarked row(s)]\n")
-            self._auto_save_vod_file()
         else:
             self._log("[No unmarked rows to delete]\n")
         self._vod_update_delete_btn()
@@ -1964,15 +1987,33 @@ class MeleeWindow(QtWidgets.QMainWindow):
         if hasattr(self, "_vod_delete_unmarked_btn"):
             self._vod_delete_unmarked_btn.setEnabled(self._vod_model.rowCount() > 0)
 
+    def _schedule_vod_autosave(self):
+        """Restart the debounce timer after a content change."""
+        if self._vod_suppress_autosave:
+            return
+        if not (self._vod_loaded_name or self._vod_file.currentText()):
+            return
+        self._vod_save_timer.start()
+
+    def _flush_vod_autosave(self):
+        """Write immediately if a debounced save is still pending."""
+        timer = getattr(self, "_vod_save_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+            self._auto_save_vod_file()
+
     def _auto_save_vod_file(self):
-        name = self._vod_file.currentText()
+        # Write back to the file the rows were loaded from, not whatever the
+        # combo happens to show now.
+        name = self._vod_loaded_name or self._vod_file.currentText()
         if not name:
             return
         (ROOT / "Vod_Names" / name).write_text(self._vod_model.to_text(), encoding="utf-8")
         self._log(f"[Auto-saved: {name}]\n")
 
     def _save_vod_file(self):
-        name = self._vod_file.currentText()
+        self._vod_save_timer.stop()
+        name = self._vod_loaded_name or self._vod_file.currentText()
         if not name:
             self._log("[Error: no VOD names file selected]\n")
             return
@@ -2005,10 +2046,7 @@ class MeleeWindow(QtWidgets.QMainWindow):
             else:
                 self._vod_red_rows.discard(r)
             if was_red and not is_red and text.strip() and not text.strip().startswith("#"):
-                self._save_vod_file()
-                parts = text.split(" - ")
-                name = parts[2].strip() if len(parts) > 2 else text[:40]
-                self._log(f"[Auto-saved: line {r + 1} character data complete — {name}]\n")
+                self._log(f"[Line {r + 1} character data complete]\n")
         self._update_import_btn()
 
     def _on_vod_filter_changed(self, text):
@@ -3432,6 +3470,10 @@ class MeleeWindow(QtWidgets.QMainWindow):
 
     def _clear_console(self):
         self.console.clear()
+
+    def closeEvent(self, event):
+        self._flush_vod_autosave()
+        super().closeEvent(event)
 
 
 def main():
