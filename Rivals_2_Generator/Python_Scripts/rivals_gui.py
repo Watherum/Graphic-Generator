@@ -3211,11 +3211,19 @@ class RivalsWindow(QtWidgets.QMainWindow):
         outer.setContentsMargins(12, 12, 12, 12)
         box = QtWidgets.QGroupBox("Manage Renders")
         v = QtWidgets.QVBoxLayout(box)
-        v.addWidget(_muted("Download render images from dragdown.wiki and copy them into the Full Renders folder."))
-        b = QtWidgets.QPushButton("Download & Copy")
+        v.addWidget(_muted(
+            "The roster is discovered from dragdown.wiki, so newly released characters "
+            "are picked up automatically — any that are missing get added to "
+            "Character_database.csv when you download."))
+        brow = QtWidgets.QHBoxLayout()
+        b = QtWidgets.QPushButton("Download Renders")
         b.clicked.connect(self._download_and_copy)
-        b.setMaximumWidth(220)
-        v.addWidget(b)
+        brow.addWidget(b)
+        check = QtWidgets.QPushButton("Check for New Characters")
+        check.clicked.connect(self._check_new_characters)
+        brow.addWidget(check)
+        brow.addStretch(1)
+        v.addLayout(brow)
         outer.addWidget(box)
 
         folders = QtWidgets.QGroupBox("Open Folders")
@@ -3253,11 +3261,22 @@ class RivalsWindow(QtWidgets.QMainWindow):
     def _copy_renders(self):
         self._run([PYTHON, str(ROOT / "Python_Scripts" / "copy_rivals_renders_to_full.py")])
 
+    def _check_new_characters(self):
+        self._run([PYTHON, str(ROOT / "Python_Scripts" / "download_rivals_renders.py"),
+                   "--list-characters"])
+
     def _download_and_copy(self):
         self._run_sequential(
             [PYTHON, str(ROOT / "Python_Scripts" / "download_rivals_renders.py")],
             [PYTHON, str(ROOT / "Python_Scripts" / "copy_rivals_renders_to_full.py")],
+            on_done=self._after_renders_sync,
         )
+
+    def _after_renders_sync(self):
+        """The downloader may have appended newly discovered characters to the
+        CSV, so pull them into the Character Database tab and every dropdown."""
+        self._cdb_reload()
+        self._reload_char_dropdowns()
 
     # ================================================================== #
     #  Tab: Update                                                      #
@@ -4080,12 +4099,14 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._procs.add(proc)
         proc.start(str(cmd[0]), [str(c) for c in cmd[1:]])
 
-    def _run_sequential(self, *cmds: list):
+    def _run_sequential(self, *cmds: list, on_done=None):
         queue = list(cmds)
 
         def _next():
             if not queue:
                 self._log("[Done]\n\n")
+                if on_done:
+                    on_done()
                 return
             cmd = queue.pop(0)
             proc = QProcess(self)

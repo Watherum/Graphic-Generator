@@ -197,7 +197,7 @@ Add, edit, and search player entries and their character mains/alts.
 
 Download and organize character render images.
 
-- **Download & Copy** — downloads renders from dragdown.wiki then copies them to the Full Renders folder
+- **Download Renders** — downloads renders from dragdown.wiki then copies them to the Full Renders folder
 - **Download Renders** — download only
 - **Copy to Full Renders** — copy already-downloaded renders to `Resources/Character_Renders/Rivals_2_Full_Renders/`
 
@@ -288,7 +288,7 @@ if weekly_event.startswith("My Event"):
 | Add new characters | GUI → Character Database tab, or edit `Resources/Character_database.csv` directly |
 | Add/update players | GUI → Player Database tab |
 | Add overlay images | Place in `Resources/Overlays/` or use Browse in Thumbnail Config |
-| Sync renders from dragdown.wiki | GUI → Character Renders tab → Download & Copy |
+| Sync renders from dragdown.wiki | GUI → Character Renders tab → Download Renders |
 
 ---
 
