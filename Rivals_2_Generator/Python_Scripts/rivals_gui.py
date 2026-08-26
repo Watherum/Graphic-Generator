@@ -4109,7 +4109,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         box.addWidget(self._notes_path_label)
 
         self._notes_text = QtWidgets.QPlainTextEdit()
-        self._notes_text.setMinimumHeight(200)
+        self._notes_text.setMinimumHeight(500)
         self._notes_text.setPlaceholderText(
             "Notes for this series — saved automatically, one file per series, "
             "kept across event numbers.")
