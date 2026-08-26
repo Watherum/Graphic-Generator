@@ -295,7 +295,9 @@ def setGlobalsIFN(weekly_event):
     properties['center_shift_2_2'] = (-0.35, +0.1)
     properties['center_shift_3_1'] = (-0.00, +0.00)  # Three character shift
     properties['center_shift_3_2'] = (-0.35, +0.1)
-    properties['center_shift_3_3'] = (+0.35, +0.1)
+    # Slot 3 sits to the right of the big slot-1 render; nearer than this and
+    # it disappears behind it, further and it runs off the half-canvas edge.
+    properties['center_shift_3_3'] = (+0.28, +0.1)
     # Single character flag on overlay
     properties['one_char_flag'] = False
     # Scaler Variables for characters in window

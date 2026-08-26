@@ -574,12 +574,15 @@ def createCharacterWindow(char_list, win_size, right_bool=False, single_bool=Fal
     return canvas_list
 
 
-def createRoundImages(match_list, background, foreground):
+def createRoundImages(match_list, background, foreground, only_one=False):
     """
     Creates images based off of the content in match list and applies it to the Background and Foreground images
     :param match_list:
     :param background:
     :param foreground:
+    :param only_one: stop after the first character arrangement instead of every
+        permutation -- used by the GUI's config preview, where one image is enough
+        and six would make editing a field feel sluggish
     :return:
     """
     # Loop through the matches and add the images
@@ -595,8 +598,10 @@ def createRoundImages(match_list, background, foreground):
         char_window = _properties['char_window']
         one_char_flag = _properties['one_char_flag']
         char_canvas = (int(background.size[0] * char_window[0]), int(background.size[1] * char_window[1]))
-        c1_image_list = createCharacterWindow(c1_char_list, char_canvas, single_bool=one_char_flag)
-        c2_image_list = createCharacterWindow(c2_char_list, char_canvas, right_bool=True, single_bool=one_char_flag)
+        c1_image_list = createCharacterWindow(c1_char_list, char_canvas, single_bool=one_char_flag,
+                                              only_one=only_one)
+        c2_image_list = createCharacterWindow(c2_char_list, char_canvas, right_bool=True,
+                                              single_bool=one_char_flag, only_one=only_one)
         # Grab offsets for placing the character windows
         char_offset1 = _properties['char_offset1']
         offset1 = (int(background.size[0] * char_offset1[0]), int(background.size[1] * char_offset1[1]))
