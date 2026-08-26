@@ -1,6 +1,9 @@
 ## These are comments,,,,,,,,,,,,,,,,,,
 # Expecting the following format for each row,,,,,,,,,,,,,,,,,,
 # Player,character,alt,character,alt,character,alt,character,alt,character,alt,character,alt,,,,,,
+# List a character more than once to give that player several costumes for it.
+# Prefix an alt with * to mark it preferred (used when a VOD line names no costume).
+# With no * the first listed costume wins. Name a costume per set in the VOD line: Mario:5
 Watherum,Falco,2,,,,,,,,,,,,,,,,
 Spades,Pikachu,3,,,,,,,,,,,,,,,,
 Billz,Marth,5,,,,,,,,,,,,,,,,

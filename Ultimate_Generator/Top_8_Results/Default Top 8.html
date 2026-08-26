@@ -1,8 +1,8 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Clip It Top 8</title>
+    <title>Default Top 8</title>
     <style>
         body {
             margin: 0;
@@ -34,15 +34,9 @@
             position: relative;
         }
 
-        @font-face {
-            font-family: 'HKModular';
-            src: url('../Resources/Fonts/HKModular-Bold.otf') format('opentype');
-            font-weight: bold;
-        }
-
         #canvas .label {
             position: absolute;
-            font-family: 'HKModular', sans-serif;
+            font-family: Arial, Helvetica, sans-serif;
             font-weight: bold;
             color: #fff;
             white-space: nowrap;
@@ -63,7 +57,7 @@
         #canvas.loading {
             visibility: hidden;
         }
-
+    
         /* Fit-to-window preview scaling.
            The layout is a fixed 1920-wide canvas: positions are %, but font sizes
            and the artwork are absolute px. Shrinking the *window* would therefore
@@ -87,65 +81,65 @@
 
     <div id="canvas" class="loading">
         <!-- Background first so it renders behind everything -->
-        <img src="../Resources/Top_8_Images/Clip It/Clip It Background.png" alt=""/>
-        <img src="../Resources/Top_8_Images/Clip It/Clip It Player Boxes.png" alt=""/>
+        <img src="../Resources/Top_8_Images/Default/Default Background.png" alt=""/>
+        <img src="../Resources/Top_8_Images/Default/Default Player Boxes.png" alt=""/>
 
         <!-- Character renders (sit between the box layers and the text overlay) -->
         <img id="place-1-render" class="render" style="top: 32%;  left: 3%;    height: 55%;" alt=""/>
         <img id="place-2-render" class="render" style="top: 27%;  left: 33%;   height: 37%;" alt=""/>
-        <img id="place-3-render" class="render" style="top: 27%;  left: 54%;   height: 37%;" alt=""/>
-        <img id="place-4-render" class="render" style="top: 27%;  left: 76%;   height: 37%;" alt=""/>
-        <img id="place-5-render" class="render" style="top: 65%;  left: 33%;   height: 26%;" alt=""/>
+        <img id="place-3-render" class="render" style="top: 28%;  left: 56.5%;   height: 36%;" alt=""/>
+        <img id="place-4-render" class="render" style="top: 27%;  left: 77%;   height: 37%;" alt=""/>
+        <img id="place-5-render" class="render" style="top: 66%;  left: 34%;   height: 26%;" alt=""/>
         <img id="place-6-render" class="render" style="top: 65%;  left: 50%;   height: 26%;" alt=""/>
-        <img id="place-7-render" class="render" style="top: 65%;  left: 66%;   height: 26%;" alt=""/>
-        <img id="place-8-render" class="render" style="top: 65%;  left: 83%;   height: 26%;" alt=""/>
+        <img id="place-7-render" class="render" style="top: 66%;  left: 67%;   height: 27%;" alt=""/>
+        <img id="place-8-render" class="render" style="top: 67%;  left: 83%;   height: 26%;" alt=""/>
 
-        <img src="../Resources/Top_8_Images/Clip It/Clip It Text Boxes.png" alt=""/>
-        <img src="../Resources/Top_8_Images/Clip It/Clip It Number Boxes.png" alt=""/>
-        <img src="../Resources/Top_8_Images/Clip It/Clip It Logos.png" alt=""/>
+        <img src="../Resources/Top_8_Images/Default/Default Text Boxes.png" alt=""/>
+        <img src="../Resources/Top_8_Images/Default/Default Number Boxes.png" alt=""/>
 
         <!-- Event info -->
-        <span id="event-name"    class="label" style="top: 4%;    left: 50%;   font-size: 50px; color: yellow;"></span>
-        <span id="event-link"    class="label" style="top: 11%;   left: 50%;   font-size: 40px; color: yellow;"></span>
-        <span id="event-entrants"class="label" style="top: 16.5%; left: 50%;   font-size: 40px; color: yellow;"></span>
-        <span id="event-date"    class="label" style="top: 22%;   left: 50%;   font-size: 40px; color: yellow;"></span>
+        <span id="event-name"    class="label" style="top: 4%;    left: 50%;   font-size: 50px; color: #000;"></span>
+        <span id="event-link"    class="label" style="top: 11%;   left: 50%;   font-size: 40px;"></span>
+        <span id="event-entrants"class="label" style="top: 16.5%; left: 50%;   font-size: 40px;"></span>
+        <span id="event-date"    class="label" style="top: 22%;   left: 50%;   font-size: 40px;"></span>
 
         <!-- Placement numbers -->
         <span id="place-1-num" class="label" style="top: 29.5%; left: 6.5%;    font-size: 100px;"></span>
-        <span id="place-2-num" class="label" style="top: 30.4%; left: 37%;     font-size: 75px;"></span>
-        <span id="place-3-num" class="label" style="top: 30.4%; left: 58.9%;   font-size: 75px;"></span>
-        <span id="place-4-num" class="label" style="top: 30.4%; left: 80.5%;   font-size: 75px;"></span>
-        <span id="place-5-num" class="label" style="top: 67%;   left: 36.1%;   font-size: 50px;"></span>
-        <span id="place-6-num" class="label" style="top: 67%;   left: 52.6%;   font-size: 50px;"></span>
-        <span id="place-7-num" class="label" style="top: 67%;   left: 69.3%;   font-size: 50px;"></span>
-        <span id="place-8-num" class="label" style="top: 67%;   left: 85.8%;   font-size: 50px;"></span>
+        <span id="place-2-num" class="label" style="top: 30.4%; left: 37%; font-size: 75px;"></span>
+        <span id="place-3-num" class="label" style="top: 30.4%; left: 58.9%; font-size: 75px;"></span>
+        <span id="place-4-num" class="label" style="top: 30.4%; left: 80.5%; font-size: 75px;"></span>
+        <span id="place-5-num" class="label" style="top: 67%;   left: 36.1%; font-size: 50px;"></span>
+        <span id="place-6-num" class="label" style="top: 67%;   left: 52.6%; font-size: 50px;"></span>
+        <span id="place-7-num" class="label" style="top: 67%;   left: 69.3%; font-size: 50px;"></span>
+        <span id="place-8-num" class="label" style="top: 67%;   left: 85.8%; font-size: 50px;"></span>
 
         <!-- Player names -->
         <span id="place-1-name" class="label" style="top: 88%;   left: 17%;    font-size: 60px;"></span>
-        <span id="place-2-name" class="label" style="top: 55.8%; left: 43.5%;  font-size: 40px;"></span>
-        <span id="place-3-name" class="label" style="top: 55.8%; left: 65.6%;  font-size: 40px;"></span>
-        <span id="place-4-name" class="label" style="top: 55.8%; left: 87%;    font-size: 40px;"></span>
-        <span id="place-5-name" class="label" style="top: 89%;   left: 41%;    font-size: 30px;"></span>
-        <span id="place-6-name" class="label" style="top: 89%;   left: 57.5%;  font-size: 30px;"></span>
-        <span id="place-7-name" class="label" style="top: 89%;   left: 74%;    font-size: 30px;"></span>
-        <span id="place-8-name" class="label" style="top: 89%;   left: 90.5%;  font-size: 30px;"></span>
+        <span id="place-2-name" class="label" style="top: 55.8%; left: 43.5%; font-size: 40px;"></span>
+        <span id="place-3-name" class="label" style="top: 55.8%; left: 65.6%; font-size: 40px;"></span>
+        <span id="place-4-name" class="label" style="top: 55.8%; left: 87%; font-size: 40px;"></span>
+        <span id="place-5-name" class="label" style="top: 89%;   left: 40.8%; font-size: 26px;"></span>
+        <span id="place-6-name" class="label" style="top: 89%;   left: 57.5%; font-size: 30px;"></span>
+        <span id="place-7-name" class="label" style="top: 89%;   left: 74%; font-size: 30px;"></span>
+        <span id="place-8-name" class="label" style="top: 89%;   left: 90.5%; font-size: 30px;"></span>
 
         <!-- Sponsors -->
         <span id="place-1-sponsor" class="label sponsor" style="top: 84%;   left: 17%;    font-size: 30px;"></span>
-        <span id="place-2-sponsor" class="label sponsor" style="top: 53.4%; left: 36.1%;  font-size: 25px;"></span>
-        <span id="place-3-sponsor" class="label sponsor" style="top: 53.4%; left: 58.9%;  font-size: 25px;"></span>
-        <span id="place-4-sponsor" class="label sponsor" style="top: 53.4%; left: 81.6%;  font-size: 25px;"></span>
-        <span id="place-5-sponsor" class="label sponsor" style="top: 86.3%; left: 37.1%;  font-size: 22px;"></span>
-        <span id="place-6-sponsor" class="label sponsor" style="top: 86.3%; left: 55.5%;  font-size: 22px;"></span>
-        <span id="place-7-sponsor" class="label sponsor" style="top: 86.3%; left: 71.3%;  font-size: 22px;"></span>
-        <span id="place-8-sponsor" class="label sponsor" style="top: 86.3%; left: 86.6%;  font-size: 22px;"></span>
+        <span id="place-2-sponsor" class="label sponsor" style="top: 53.4%; left: 38%; font-size: 25px;"></span>
+        <span id="place-3-sponsor" class="label sponsor" style="top: 53.4%; left: 60%; font-size: 25px;"></span>
+        <span id="place-4-sponsor" class="label sponsor" style="top: 53.4%; left: 81.6%; font-size: 25px;"></span>
+        <span id="place-5-sponsor" class="label sponsor" style="top: 86.3%; left: 37.1%; font-size: 22px;"></span>
+        <span id="place-6-sponsor" class="label sponsor" style="top: 86.3%; left: 57%; font-size: 22px;"></span>
+        <span id="place-7-sponsor" class="label sponsor" style="top: 86.3%; left: 71.3%; font-size: 22px;"></span>
+        <span id="place-8-sponsor" class="label sponsor" style="top: 86.3%; left: 87%; font-size: 22px;"></span>
     </div>
 
     <script>
-        const DATA_FILE       = '../Top_8_Texts/Clip It Top 8 HTML.txt';
+        const DATA_FILE       = '../Top_8_Texts/Default Top 8 HTML.txt';
         const PLAYER_DB_FILE  = '../Resources/Player_database.csv';
-        const RENDER_DIR      = '../Resources/Character_Renders/Melee_Full_Renders';
+        const RENDER_DIR      = '../Resources/Character_Renders/Ultimate_Full_render';
 
+        // Parse Top_8_Images.txt → { info: {}, placements: [] }
         function parseDataFile(text) {
             const info = {};
             const placements = [];
@@ -159,10 +153,8 @@
                     continue;
                 }
                 if (/^\d/.test(line)) {
-                    const [place, name, sponsor, charField] = line.split(',').map(s => s.trim());
-                    // The character field takes the same per-set costume override
-                    // the thumbnail VOD lines do: "Mario:5".
-                    const [character, skin] = splitCharSkin(charField);
+                    const [place, name, sponsor, charToken] = line.split(',').map(s => s.trim());
+                    const [character, skin] = splitCharSkin(charToken);
                     placements.push({ place, name, sponsor, character, skin });
                 }
             }
@@ -231,17 +223,18 @@
             return { src: `${RENDER_DIR}/${characterName} (${alt}).png`, fallback };
         }
 
-        const SLOT_MAX_WIDTHS     = [0.165, 0.11, 0.11, 0.11, 0.9,  0.9,  0.9,  0.08];
-        const SLOT_MAX_HEIGHTS    = [0.07,  0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05];
-        const SLOT_ALLOW_WRAPPING = [false,  true, true, true, true, true, true, true];
+        // Fits text within maxWidthPct/maxHeightPct of canvas: splits at last space first, then shrinks font.
+        const SLOT_MAX_WIDTHS    = [0.165, 0.11, 0.11, 0.11, 0.09,  0.09,  0.09,  0.08];
+        const SLOT_MAX_HEIGHTS   = [0.07,  0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05];
+        const SLOT_ALLOW_WRAPPING = [true,  true, true, true, true, true, true, true];
         function fitText(el, maxWidthPct, allowWrap = true, maxHeightPct = 1) {
             if (!el || !el.textContent) return;
-            const canvas    = document.getElementById('canvas');
+            const canvas     = document.getElementById('canvas');
             // Never measure against a canvas that has no width yet: the shrink
             // loop below would drive every label to its 8px floor.
             if (!canvas || !canvas.offsetWidth) return;
-            const maxWidth  = canvas.offsetWidth  * maxWidthPct;
-            const maxHeight = canvas.offsetHeight * maxHeightPct;
+            const maxWidth   = canvas.offsetWidth  * maxWidthPct;
+            const maxHeight  = canvas.offsetHeight * maxHeightPct;
 
             if (allowWrap && el.scrollWidth > maxWidth) {
                 const spaceIdx = el.textContent.lastIndexOf(' ');
@@ -272,9 +265,9 @@
 
             placements.forEach(({ place, name, sponsor, character, skin }, i) => {
                 const slot = i + 1;
-                const maxW = SLOT_MAX_WIDTHS[i];
-                const maxH = SLOT_MAX_HEIGHTS[i];
-                const wrap = SLOT_ALLOW_WRAPPING[i];
+                const maxW  = SLOT_MAX_WIDTHS[i];
+                const maxH  = SLOT_MAX_HEIGHTS[i];
+                const wrap  = SLOT_ALLOW_WRAPPING[i];
                 set(`place-${slot}-num`,     place);
                 set(`place-${slot}-name`,    name);
                 fitText(document.getElementById(`place-${slot}-name`), maxW, wrap, maxH);
@@ -282,22 +275,21 @@
                 fitText(document.getElementById(`place-${slot}-sponsor`), maxW, wrap, maxH);
 
                 const renderEl = document.getElementById(`place-${slot}-render`);
-                if (renderEl) {
+                if (renderEl && character) {
                     const { src, fallback } = resolveRenderPath(name, character, playerDB, skin);
-                    // A mistyped costume would otherwise leave the slot empty with
-                    // no hint why. One retry only -- the handler clears itself, so
-                    // a fallback that is also missing cannot loop.
-                    if (src) {
-                        renderEl.onerror = () => {
-                            renderEl.onerror = null;
-                            if (fallback && fallback !== src) renderEl.src = fallback;
-                        };
-                        renderEl.src = src;
-                    }
+                    // A mistyped skin would otherwise leave the slot empty with no
+                    // hint why. One retry only -- the handler clears itself, so a
+                    // fallback that is also missing cannot loop.
+                    renderEl.onerror = () => {
+                        renderEl.onerror = null;
+                        if (fallback && fallback !== src) renderEl.src = fallback;
+                    };
+                    renderEl.src = src;
                 }
             });
         }
 
+        // Image load gate — waits for the 4 static overlay images only
         const canvas = document.getElementById('canvas');
         const overlayImgs = canvas.querySelectorAll('img[src]');
         // Resolves once every image has settled; also the "safe to measure" gate below.
@@ -327,6 +319,8 @@
             document.fonts ? document.fonts.ready : Promise.resolve()
         ]);
 
+        // Fetch both files in parallel, then populate
+        // Note: requires a local HTTP server (e.g. `python -m http.server`) — fetch() is blocked on file://
         Promise.all([
             fetch(DATA_FILE).then(r => r.text()),
             fetch(PLAYER_DB_FILE).then(r => r.text()),
@@ -339,6 +333,7 @@
         })
         .catch(err => console.error('Could not load data files:', err));
     </script>
+
 
     <!-- fit-to-window: scale the canvas down so the whole graphic fits the window -->
     <script>

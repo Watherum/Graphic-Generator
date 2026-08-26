@@ -27,15 +27,17 @@ Ultimate_Generator\Launch_Ultimate_GUI.vbs
 Melee_Generator\Launch_Melee_GUI.vbs
 ```
 
-The **Ultimate** and **Melee** generators now have the same Qt GUI with the same tabs. The main game-specific differences:
+The **Ultimate** and **Melee** generators have the same Qt GUI, the same tabs and the
+same features — including per-set costume overrides, the preferred-costume marker, the
+live thumbnail preview in Thumbnail Config, and the embedded Top 8 preview with its PNG
+export. The remaining game-specific differences:
 
-- Costume **skins are numbered 1–8** (rather than Rivals' named skins) in the Player Database, with the same live preview
+- Costumes are **numbered 1–8** (rather than Rivals' named skins) everywhere they appear:
+  in the Player Database, the costume pickers, and the `Character:Alt` override syntax
 - The **Character Database** is a two-column `alias → render filename` mapping rather than a single-column name list
 - The **Character Renders** tab simply opens the full render folder (the dragdown.wiki downloader is Rivals-only)
 - Per-event thumbnail overrides save to `ultimate_event_configs.json` / `melee_event_configs.json` respectively
-- **Rivals-only for now:** per-set `Character:Skin` overrides and the preferred-skin marker,
-  the live thumbnail preview in Thumbnail Config, and the embedded Top 8 preview with its
-  PNG export
+- **Rivals-only:** the dragdown.wiki render downloader and the parry.gg fetchers
 
 The Rivals 2 GUI has eight tabs:
 
@@ -157,7 +159,7 @@ View and edit match data files without leaving the GUI.
 
 Click **Generate Thumbnails** to run the pipeline. Output goes to `Youtube_Thumbnails/{Event Name}/`. Missing player/character lookups are logged to `Vod_Names/missing.log`.
 
-#### Per-set skins *(Rivals 2 only)*
+#### Per-set skins
 
 A player's row in the database gives their usual skin for each character, but players
 change skins between sets. Any character in a match line may carry a skin for that set
@@ -314,7 +316,10 @@ Average Alex,Ranno,T_Ran_Default_Neutral_CSP,Ranno,*T_Ran_Abyss_Midnight_CSP,Cla
 Skin resolution order: **the `:Skin` on the match line** → **the `*` preferred skin** →
 **first listed** → the character's neutral default.
 
-*(In the Ultimate and Melee GUIs skins are numbered 1–8 instead of named.)*
+*(In the Ultimate and Melee GUIs costumes are numbered 1–8 instead of named, so the
+same feature reads `Mario:5` in a match line and `*5` in the database. Those generators
+also still accept the older inline form, `Mario 5`; both are stripped from the YouTube
+title. Their neutral default is alt 1.)*
 
 ---
 

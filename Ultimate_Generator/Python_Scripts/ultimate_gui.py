@@ -20,17 +20,32 @@ import json
 import os
 import re
 import shutil
-import socket
-import socketserver
 import subprocess
 import sys
+import tempfile
 import threading
+import urllib.parse
 import webbrowser
 import datetime as _dt
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt, QProcess, Signal
+
+import skin_utils
+from skin_utils import (
+    RENDERS_DIR,
+    get_skins_for_char,
+    join_pref,
+    neutral_skin_for,
+    preferred_stem,
+    render_stem,
+    skin_label,
+    split_char_skin,
+    split_pref,
+    stem_for_label,
+    strip_skins,
+)
 
 # --------------------------------------------------------------------------- #
 #  Paths & constants                                                          #
@@ -40,9 +55,11 @@ REPO_ROOT = ROOT.parent            # git repo root (contains all generators)
 GENERATOR_DIR = ROOT.name          # this generator's folder name (update pathspec)
 PYTHON = sys.executable
 THUMBNAIL_SCRIPT = ROOT / "Python_Scripts" / "generate_ultimate_thumbnails.py"
-RENDERS_DIR = ROOT / "Resources" / "Character_Renders" / "Ultimate_Body_render"
 FULL_RENDERS_DIR = ROOT / "Resources" / "Character_Renders" / "Ultimate_Full_render"
 PLAYER_DB_PATH = ROOT / "Resources" / "Player_database.csv"
+
+#: Filled in by _thumbnail_generator on first use (see there).
+_gen_module = None
 CHAR_DB_PATH = ROOT / "Resources" / "Character_database.csv"
 SETTINGS_PATH = ROOT / "ultimate_gui_settings.json"
 CUSTOM_EVENTS_PATH = ROOT / "ultimate_custom_events.json"
@@ -84,7 +101,13 @@ _OUTPUT_FOLDERS = ["Vod_Names", "Youtube_Thumbnails", "Top_8_Texts", "Results_Po
 # swapped in for the full tournament name (see fetch_sets.py --abbrev).
 MAX_LINE_LEN = 100
 
-_VOD_VS_RE = re.compile(r'\bVs\b')
+#: The Vs separator, matched case-insensitively: the fetch script writes "Vs",
+#: but plenty of existing files (most of Melee's) use "vs". Word boundaries stop
+#: it matching inside a player tag.
+_VOD_VS_RE = re.compile(r'\bvs\b', re.IGNORECASE)
+#: Capturing twin of _VOD_VS_RE, so _rewrite_vod_players puts the separator
+#: back exactly as the file had it.
+_VOD_VS_SPLIT_RE = re.compile(r"(\s+vs\s+)", re.IGNORECASE)
 _VOD_PARENS_RE = re.compile(r'\(([^)]*)\)')
 _VOD_PLAYER_RE = re.compile(r'^(.+?)\s*\(([^)]*)\)\s*$')
 _STARTGG_URL_RE = re.compile(r'^https?://(?:www\.)?start\.gg/')
@@ -104,18 +127,77 @@ def _normalize_startgg_slug(value: str) -> str:
     return _STARTGG_URL_RE.sub("", value)
 
 
-def _parse_vod_players(line: str) -> list[tuple[str, list[str]]]:
-    """Extract [(player_name, [char, ...]), ...] from a match line."""
-    parts = _VOD_VS_RE.split(line, maxsplit=1)
-    result = []
-    for part in parts:
-        part = part.strip()
-        m = _VOD_PLAYER_RE.match(part)
+def _split_vod_line(line: str):
+    """Split a match line into (prefix, players_section, suffix).
+
+    The players section is what sits between the event/round and the trailing
+    game tag. Both line formats put " - " immediately before player one, so the
+    last such separator before the "Vs" is the boundary -- which is what makes
+    this work for the older "{Event} {Round} - ..." files as well as the current
+    "{Event} - {Round} - ..." ones. Returns None when there is no "Vs".
+    """
+    tag_idx = line.rfind(" - ")
+    body = line[:tag_idx] if tag_idx != -1 else line
+    suffix = line[tag_idx:] if tag_idx != -1 else ""
+    m = _VOD_VS_RE.search(body)
+    if not m:
+        return None
+    idx = body.rfind(" - ", 0, m.start())
+    if idx == -1:
+        return "", body, suffix
+    return body[:idx + 3], body[idx + 3:], suffix
+
+
+def _parse_vod_player_skins(line: str) -> list:
+    """Return [(player_name, [(char, costume_or_None), ...]), ...] for a match line.
+
+    A character may carry a per-set costume after a colon ("Mario:5").
+    """
+    split = _split_vod_line(line)
+    if split is None:
+        return []
+    _prefix, section, _suffix = split
+    results = []
+    for player_str in _VOD_VS_RE.split(section):
+        m = _VOD_PLAYER_RE.match(player_str.strip())
         if m:
             name = m.group(1).strip()
-            chars = [c.strip() for c in m.group(2).split(",") if c.strip()]
-            result.append((name, chars))
-    return result
+            chars = [split_char_skin(c) for c in m.group(2).split(",") if c.strip()]
+            results.append((name, chars))
+    return results
+
+
+def _parse_vod_players(line: str) -> list[tuple[str, list[str]]]:
+    """Extract [(player_name, [char, ...]), ...] from a match line, costumes stripped."""
+    return [(name, [c for c, _ in chars])
+            for name, chars in _parse_vod_player_skins(line)]
+
+
+def _rewrite_vod_players(line: str, per_player: list) -> str:
+    """Rebuild a match line with new character lists.
+
+    ``per_player`` is [[(char, costume_or_None), ...], ...] in the same order
+    :func:`_parse_vod_player_skins` returned them. Everything outside the
+    parentheses (event, round, player names, game suffix) is left untouched.
+    """
+    split = _split_vod_line(line)
+    if split is None:
+        return line
+    prefix, section, suffix = split
+    # Keep the "Vs" separator exactly as written by splitting on a capture group.
+    chunks = _VOD_VS_SPLIT_RE.split(section)
+    out = []
+    slot = 0
+    for chunk in chunks:
+        m = _VOD_PLAYER_RE.match(chunk.strip())
+        if m and slot < len(per_player):
+            name = m.group(1).strip()
+            chars = ", ".join(f"{c}:{sk}" if sk else c for c, sk in per_player[slot])
+            out.append(f"{name} ({chars})")
+            slot += 1
+        else:
+            out.append(chunk)
+    return prefix + "".join(out) + suffix
 
 
 try:
@@ -183,19 +265,10 @@ def get_characters_from_renders() -> list[str]:
 def get_alts_for_char(char_name: str) -> list[str]:
     """Available costume numbers for a character, read from the renders folder.
 
-    Falls back to 1-8 when the character has no render files yet so the user can
-    still assign a costume number."""
-    if not char_name:
-        return []
-    alts: list[int] = []
-    if RENDERS_DIR.exists():
-        for f in RENDERS_DIR.glob(f"{char_name} (*).png"):
-            m = re.search(r"\((\d+)\)$", f.stem)
-            if m:
-                alts.append(int(m.group(1)))
-    if not alts:
-        return [str(i) for i in range(1, 9)]
-    return [str(n) for n in sorted(set(alts))]
+    Kept as a name because the GUI uses it throughout; the implementation lives
+    in skin_utils so the generator resolves costumes from the same list.
+    """
+    return get_skins_for_char(char_name)
 
 
 def load_player_db() -> tuple[list[str], dict[str, list[tuple[str, str]]]]:
@@ -453,6 +526,198 @@ QToolButton:hover {{ color: {_SEL}; }}
 # --------------------------------------------------------------------------- #
 #  Reusable widgets                                                            #
 # --------------------------------------------------------------------------- #
+class _NoWheelSlider(QtWidgets.QSlider):
+    """A slider that lets the wheel scroll the page instead of moving the handle.
+
+    These sit inside a QScrollArea, where a widget that consumes the wheel makes
+    the section unscrollable and silently edits values as the user scrolls past.
+    Ignoring the event propagates it to the scroll area; the handle still responds
+    to dragging, arrow keys and the box beside it.
+    """
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class _NoWheelComboBox(QtWidgets.QComboBox):
+    """A combo box with the same wheel behaviour as :class:`_NoWheelSlider`."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+def _fmt_norm(value: float) -> str:
+    """Trim a normalized value to something short and exact: 0.280 -> 0.28."""
+    text = f"{value:.3f}".rstrip("0").rstrip(".")
+    return "0" if text in ("", "-", "-0") else text
+
+
+class NormalizedField(QtWidgets.QWidget):
+    """A drag slider paired with the exact numeric box it drives.
+
+    Used only for the config values that live on a normalized scale -- positions
+    and shifts in [-1, 1], scales and offsets in [0, 1] -- where a number is hard
+    to picture but a drag is not. Font sizes, angles and colours keep their plain
+    boxes.
+
+    The box stays authoritative: a value typed beyond the slider's range is kept
+    verbatim (the generator accepts it; only the slider has ends) and the handle
+    simply parks at the nearest end. Callers keep using ``.edit`` as the field, so
+    load/save/clear paths are unchanged.
+    """
+
+    STEPS = 1000
+
+    def __init__(self, lo: float = -1.0, hi: float = 1.0, width: int = 60, parent=None):
+        super().__init__(parent)
+        self._lo, self._hi = lo, hi
+        # Guards the two-way sync so neither half echoes the other back.
+        self._syncing = False
+
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self.edit = QtWidgets.QLineEdit()
+        self.edit.setFixedWidth(width)
+        self.slider = _NoWheelSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(int(lo * self.STEPS), int(hi * self.STEPS))
+        self.slider.setSingleStep(5)     # arrow key -> 0.005
+        self.slider.setPageStep(50)      # page up/down -> 0.05
+        self.slider.setMinimumWidth(60)
+        self.slider.setToolTip(
+            f"Drag to set ({_fmt_norm(lo)} to {_fmt_norm(hi)}), arrow keys for fine "
+            "steps — or type an exact value in the box")
+        lay.addWidget(self.edit)
+        lay.addWidget(self.slider, 1)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                           QtWidgets.QSizePolicy.Policy.Fixed)
+
+        self.edit.textChanged.connect(self._edit_to_slider)
+        self.slider.valueChanged.connect(self._slider_to_edit)
+
+    def _home(self) -> float:
+        """Where the handle sits when the box is empty: zero if the range spans it."""
+        return 0.0 if self._lo <= 0.0 <= self._hi else self._lo
+
+    def _edit_to_slider(self, text: str):
+        if self._syncing:
+            return
+        if not text.strip():
+            # Cleared (Clear Config, or a key the config doesn't set): park the
+            # handle rather than leaving it pointing at a value that is gone.
+            value = self._home()
+        else:
+            try:
+                value = float(text)
+            except ValueError:
+                return  # half-typed ("-", "0.") — leave the handle where it is
+        self._syncing = True
+        clamped = max(self._lo, min(self._hi, value))
+        self.slider.setValue(int(round(clamped * self.STEPS)))
+        self._syncing = False
+
+    def _slider_to_edit(self, raw: int):
+        if self._syncing:
+            return
+        self._syncing = True
+        self.edit.setText(_fmt_norm(raw / self.STEPS))
+        self._syncing = False
+
+
+class FlowLayout(QtWidgets.QLayout):
+    """Lays items left to right, wrapping to a new row when the width runs out.
+
+    Qt has no such layout built in; this is the standard implementation from its
+    own examples. Used for the Top 8 layout-config sections, which are
+    fixed-width blocks that waste a screenful of vertical space when stacked one
+    per row -- side by side they reflow to however many fit.
+
+    Every item is placed at its size hint, so children want to be fixed-size.
+    """
+
+    def __init__(self, parent=None, margin: int = 0, spacing: int = 10):
+        super().__init__(parent)
+        self._items: list = []
+        self.setContentsMargins(margin, margin, margin, margin)
+        self.setSpacing(spacing)
+
+    # -- QLayout plumbing -------------------------------------------------- #
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    # -- height depends on width, which is the whole point ------------------ #
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._do_layout(QtCore.QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QtCore.QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        return size + QtCore.QSize(margins.left() + margins.right(),
+                                   margins.top() + margins.bottom())
+
+    def _do_layout(self, rect, test_only: bool) -> int:
+        margins = self.contentsMargins()
+        area = rect.adjusted(margins.left(), margins.top(),
+                             -margins.right(), -margins.bottom())
+        x, y, line_height = area.x(), area.y(), 0
+        space = self.spacing()
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + space
+            if next_x - space > area.right() and line_height > 0:
+                x = area.x()
+                y = y + line_height + space
+                next_x = x + hint.width() + space
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QtCore.QRect(QtCore.QPoint(x, y), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + margins.bottom()
+
+
+class _PreviewHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
+    """Serves the generator folder for the previews, with caching switched off.
+
+    The Top 8 pages fetch() their data file and the player CSV, and the GUI
+    rewrites both as you type. The stock handler sends Last-Modified but no
+    Cache-Control, which lets Chromium apply heuristic caching and answer a
+    reload with the copy from before the edit -- the preview then shows names or
+    placements that are no longer in the file.
+    """
+
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        super().end_headers()
+
+    def log_message(self, *args):
+        pass  # the GUI has its own console; this would only go to stderr
+
+
 class CollapsibleBox(QtWidgets.QWidget):
     """A header button that shows/hides a content area below it."""
 
@@ -469,7 +734,7 @@ class CollapsibleBox(QtWidgets.QWidget):
 
         self.content = QtWidgets.QWidget(self)
         self.content_layout = QtWidgets.QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(4, 6, 0, 6)
+        self.content_layout.setContentsMargins(4, 6, 4, 6)
         self.content.setVisible(not collapsed)
 
         lay = QtWidgets.QVBoxLayout(self)
@@ -539,6 +804,33 @@ def _hline(text: str = "", w: int = 70) -> QtWidgets.QLineEdit:
     return e
 
 
+def _thumbnail_generator():
+    """Import the thumbnail generator on demand.
+
+    The config preview renders through the same functions the batch run calls,
+    so it can never drift from the real output. Imported lazily because it pulls
+    in Pillow, which the GUI otherwise never needs.
+    """
+    global _gen_module
+    if _gen_module is None:
+        import generate_ultimate_thumbnails as _m
+        _gen_module = _m
+    return _gen_module
+
+
+def _preview_sample_chars(count: int, skip: int = 0) -> list:
+    """Characters with renders on disk, for the synthetic preview matches.
+
+    One without a render would abort the whole render with "Character not
+    found", so the roster is read from the renders folder rather than from the
+    character CSV, which holds only alias rows.
+    """
+    names = [c for c in get_characters_from_renders() if get_skins_for_char(c)]
+    if not names:
+        return []
+    return [names[(skip + i) % len(names)] for i in range(count)]
+
+
 def _muted(text: str) -> QtWidgets.QLabel:
     lbl = QtWidgets.QLabel(text)
     lbl.setObjectName("muted")
@@ -550,36 +842,59 @@ def _muted(text: str) -> QtWidgets.QLabel:
 #  VOD list model (virtualized — handles large match lists smoothly)          #
 # --------------------------------------------------------------------------- #
 class VodModel(QtCore.QAbstractTableModel):
-    HEADERS = ["", "", "Match line", "Len"]
+    # cols: 0 checkbox, 1 copy, 2 move-up, 3 move-down, 4 Len, 5 match line
+    HEADERS = ["", "", "", "", "Len", "Match line"]
 
-    # Emitted whenever the content written to disk changes (line text, added
-    # or deleted rows). Check-marks are UI-only and never emit.
+    # Emitted whenever the content written to disk changes (line text, added,
+    # deleted or reordered rows). Check-marks are UI-only and never emit.
     contentChanged = Signal()
 
     def __init__(self):
         super().__init__()
         self._rows: list[dict] = []  # {"checked": bool, "text": str}
+        # Set by the window to its _vod_abbrev_line, so the Len column and the
+        # Copy button can never disagree about what a line becomes.
+        self.copy_text_fn = None
 
+    def copy_text(self, text: str) -> str:
+        """The line as it would land on the clipboard."""
+        if self.copy_text_fn is not None:
+            return self.copy_text_fn(text)
+        return strip_skins(text)
+
+    def refresh_len_column(self):
+        """Repaint Len after something outside a row changed the copy result.
+
+        The abbreviation lives outside the model, so editing it changes every
+        row's copied length without any row's text changing."""
+        if self._rows:
+            self.dataChanged.emit(self.index(0, 4), self.index(len(self._rows) - 1, 4))
+
+    # -- Qt model API --
     def rowCount(self, parent=QtCore.QModelIndex()):
         return 0 if parent.isValid() else len(self._rows)
 
     def columnCount(self, parent=QtCore.QModelIndex()):
-        return 4
+        return 6
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
         row = self._rows[index.row()]
         col = index.column()
-        if col == 2 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+        if col == 5 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             return row["text"]
-        if col == 2 and _vod_missing_chars(row["text"]):
+        if col == 5 and _vod_missing_chars(row["text"]):
             if role == Qt.ItemDataRole.ForegroundRole:
                 return QtGui.QColor("#ff6b6b")
             if role == Qt.ItemDataRole.ToolTipRole:
                 return "Missing character data — add character name(s) inside the parentheses"
-        if col == 3:
-            length = len(row["text"].strip())
+        if col == 4:
+            # Measure exactly what the Copy button puts on the clipboard: skins
+            # stripped and the series abbreviation already applied. Red therefore
+            # means "still too long after abbreviation", which is the only case
+            # that needs the user to do something.
+            length = len(self.copy_text(row["text"]).strip())
             if role == Qt.ItemDataRole.DisplayRole:
                 return f"{length}/{MAX_LINE_LEN}"
             if role == Qt.ItemDataRole.TextAlignmentRole:
@@ -587,11 +902,17 @@ class VodModel(QtCore.QAbstractTableModel):
             if role == Qt.ItemDataRole.ForegroundRole and length > MAX_LINE_LEN:
                 return QtGui.QColor("#ff6b6b")
             if role == Qt.ItemDataRole.ToolTipRole:
-                return ("Over the 100-character limit — set an Abbreviation for this "
-                        "series in the Fetch tab and re-fetch" if length > MAX_LINE_LEN
-                        else "Match-line length")
+                return ("Over the 100-character limit even after abbreviating — set or "
+                        "shorten the Abbreviation for this series in the Fetch tab"
+                        if length > MAX_LINE_LEN
+                        else "Length of the line as copied (skins stripped, "
+                             "abbreviation applied)")
         if col == 1 and role == Qt.ItemDataRole.ToolTipRole:
             return "Copy line"
+        if col == 2 and role == Qt.ItemDataRole.ToolTipRole:
+            return "Move this line up one row"
+        if col == 3 and role == Qt.ItemDataRole.ToolTipRole:
+            return "Move this line down one row"
         if col == 0 and role == Qt.ItemDataRole.CheckStateRole:
             return Qt.CheckState.Checked if row["checked"] else Qt.CheckState.Unchecked
         if role == Qt.ItemDataRole.BackgroundRole and row["checked"]:
@@ -602,16 +923,16 @@ class VodModel(QtCore.QAbstractTableModel):
         if not index.isValid():
             return False
         row = self._rows[index.row()]
-        if index.column() == 2 and role == Qt.ItemDataRole.EditRole:
+        if index.column() == 5 and role == Qt.ItemDataRole.EditRole:
             row["text"] = value
             # Refresh both the edited cell and the length column beside it
-            self.dataChanged.emit(index, self.index(index.row(), 3))
+            self.dataChanged.emit(self.index(index.row(), 4), index)
             self.contentChanged.emit()
             return True
         if index.column() == 0 and role == Qt.ItemDataRole.CheckStateRole:
             row["checked"] = (Qt.CheckState(value) == Qt.CheckState.Checked)
             left = self.index(index.row(), 0)
-            right = self.index(index.row(), 3)
+            right = self.index(index.row(), 5)
             self.dataChanged.emit(left, right)
             return True
         return False
@@ -622,7 +943,7 @@ class VodModel(QtCore.QAbstractTableModel):
         f = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         if index.column() == 0:
             f |= Qt.ItemFlag.ItemIsUserCheckable
-        elif index.column() == 2:
+        elif index.column() == 5:
             f |= Qt.ItemFlag.ItemIsEditable
         return f
 
@@ -631,6 +952,7 @@ class VodModel(QtCore.QAbstractTableModel):
             return self.HEADERS[section]
         return None
 
+    # -- convenience --
     def load(self, lines: list[str]):
         self.beginResetModel()
         self._rows = [{"checked": False, "text": ln} for ln in lines]
@@ -649,7 +971,7 @@ class VodModel(QtCore.QAbstractTableModel):
         for r in self._rows:
             r["checked"] = checked
         self.dataChanged.emit(self.index(0, 0),
-                              self.index(len(self._rows) - 1, 3))
+                              self.index(len(self._rows) - 1, 5))
 
     def delete_marked(self) -> int:
         keep = [r for r in self._rows if not r["checked"]]
@@ -678,6 +1000,23 @@ class VodModel(QtCore.QAbstractTableModel):
             self.endRemoveRows()
             self.contentChanged.emit()
 
+    def move_row(self, r: int, delta: int) -> int:
+        """Move row ``r`` by ``delta`` (±1). Returns the new index, or -1 if
+        the move is out of bounds / unsupported."""
+        if delta not in (-1, 1):
+            return -1
+        new = r + delta
+        if not (0 <= r < len(self._rows)) or not (0 <= new < len(self._rows)):
+            return -1
+        # Qt's destination index is expressed in pre-removal coordinates, so a
+        # downward move targets r + 2.
+        dest = r + 2 if delta == 1 else new
+        self.beginMoveRows(QtCore.QModelIndex(), r, r, QtCore.QModelIndex(), dest)
+        self._rows.insert(new, self._rows.pop(r))
+        self.endMoveRows()
+        self.contentChanged.emit()
+        return new
+
     def any_checked(self) -> bool:
         return any(r["checked"] for r in self._rows)
 
@@ -701,17 +1040,26 @@ class Top8DataHighlighter(QtGui.QSyntaxHighlighter):
     KEY = _fmt(_SYN_KEY)
     NUMBER = _fmt(_SYN_NUMBER)
     COMMENT = _fmt(_SYN_COMMENT)
+    SKIN = _fmt(_SYN_STRING)
 
     def highlightBlock(self, text: str):
         if re.match(r"^[ \t]*#", text):
             self.setFormat(0, len(text), self.COMMENT)
             return
-        m = re.match(r"^[^#\n][^:\t\n]*:", text)
+        # A placement line starts with its place number; anything else with a
+        # colon is an "Event name:" style key. The page parses them apart the same
+        # way, and without the digit check a placement line carrying a costume
+        # override would colour everything up to that colon as if it were a key.
+        if not re.match(r"^\d", text):
+            m = re.match(r"^[^#\n][^:\t\n]*:", text)
+            if m:
+                self.setFormat(m.start(), m.end() - m.start(), self.KEY)
+            return
+        self.setFormat(0, re.match(r"^\d+", text).end(), self.NUMBER)
+        # The optional costume override on the character field.
+        m = re.search(r":[^,\n]*$", text)
         if m:
-            self.setFormat(m.start(), m.end() - m.start(), self.KEY)
-        m = re.match(r"^\d+", text)
-        if m:
-            self.setFormat(0, m.end(), self.NUMBER)
+            self.setFormat(m.start(), m.end() - m.start(), self.SKIN)
 
 
 class HtmlHighlighter(QtGui.QSyntaxHighlighter):
@@ -825,6 +1173,76 @@ class CopyButtonDelegate(QtWidgets.QStyledItemDelegate):
                 and event.button() == Qt.MouseButton.LeftButton
                 and option.rect.contains(event.pos())):
             self.copyRequested.emit(index.row())
+            return True
+        return False
+
+
+class MoveButtonDelegate(QtWidgets.QStyledItemDelegate):
+    """Paints a single ▲ or ▼ button per row for reordering that row. One
+    instance handles one direction (``delta`` -1 = up, +1 = down), so up and
+    down are separate buttons in separate columns. Painted rather than a real
+    widget so the virtualized VOD table stays cheap. Emits
+    ``moveRequested(row, delta)``. Disabled on the row where the move would run
+    off the end (first row for up, last row for down)."""
+
+    moveRequested = QtCore.Signal(int, int)
+
+    def __init__(self, delta: int, parent=None):
+        super().__init__(parent)
+        self._delta = delta
+
+    def _enabled_for(self, index) -> bool:
+        if self._delta < 0:
+            return index.row() > 0
+        return index.row() < index.model().rowCount() - 1
+
+    def paint(self, painter, option, index):
+        painter.save()
+        bg = index.data(Qt.ItemDataRole.BackgroundRole)
+        base = QtGui.QColor(bg) if bg is not None else QtGui.QColor(_BG3)
+        painter.fillRect(option.rect, base)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+
+        enabled = self._enabled_for(index)
+        hovered = bool(option.state & QtWidgets.QStyle.StateFlag.State_MouseOver)
+
+        size = 22
+        bx = option.rect.x() + (option.rect.width() - size) // 2
+        by = option.rect.y() + (option.rect.height() - size) // 2
+        btn = QtCore.QRect(bx, by, size, size)
+        if hovered and enabled:
+            painter.setBrush(QtGui.QColor("#474747"))
+            painter.setPen(QtGui.QPen(QtGui.QColor(_HILITE), 1))
+            painter.drawRoundedRect(btn, 5, 5)
+
+        cx, cy = btn.center().x(), btn.center().y()
+        w = 4.5
+        path = QtGui.QPainterPath()
+        if self._delta < 0:  # up arrow
+            path.moveTo(cx, cy - w)
+            path.lineTo(cx - w, cy + w)
+            path.lineTo(cx + w, cy + w)
+        else:                # down arrow
+            path.moveTo(cx, cy + w)
+            path.lineTo(cx - w, cy - w)
+            path.lineTo(cx + w, cy - w)
+        path.closeSubpath()
+        if not enabled:
+            color = QtGui.QColor(_MUTED)
+            color.setAlpha(70)
+        else:
+            color = QtGui.QColor(_FG if hovered else _MUTED)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawPath(path)
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        if (event.type() == QtCore.QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton
+                and option.rect.contains(event.pos())):
+            if self._enabled_for(index):
+                self.moveRequested.emit(index.row(), self._delta)
             return True
         return False
 
@@ -1026,7 +1444,8 @@ class UltimateWindow(QtWidgets.QMainWindow):
             rowa.addWidget(_muted(f"used when a match line exceeds {MAX_LINE_LEN} chars"))
             rowa.addStretch(1)
             cbox.addLayout(rowa)
-            abbrev.textChanged.connect(lambda _t: self._save_settings())
+            abbrev.textChanged.connect(
+                lambda _t: (self._save_settings(), self._refresh_vod_len()))
 
             def _on_num(text, lk=link, tmpl=cfg["default_link"], lbl=label):
                 lk.setText(tmpl.replace("{n}", text.strip()))
@@ -1130,6 +1549,7 @@ class UltimateWindow(QtWidgets.QMainWindow):
             def _on_abbrev(text, e=entry):
                 e["abbrev"] = text
                 self._save_custom_events()
+                self._refresh_vod_len()
 
             num.textChanged.connect(_on_num)
             link.textChanged.connect(_on_link)
@@ -1204,7 +1624,14 @@ class UltimateWindow(QtWidgets.QMainWindow):
         cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_startgg_top8.py"), slug, "--name", name, "--out", str(out_path)]
         if link:
             cmd += ["--link", link]
-        self._run(cmd, on_done=lambda e=entry: self._select_top8_event(e["label"]))
+        def _done():
+            # Keep the generic Default template showing the most recent event.
+            try:
+                shutil.copy2(out_path, ROOT / "Top_8_Texts" / "Default Top 8 HTML.txt")
+            except Exception:
+                pass
+            self._select_top8_event(entry["label"])
+        self._run(cmd, on_done=_done)
 
     def _delete_custom_event(self, slug_tmpl: str):
         self._custom_events = [e for e in self._custom_events
@@ -1226,9 +1653,17 @@ class UltimateWindow(QtWidgets.QMainWindow):
         name = cfg["name_template"].format(n=n)
         slug = cfg["slug_template"].format(n=n)
         out = ROOT / "Top_8_Texts" / cfg["top8_file"]
+
+        def _done():
+            # Keep the generic Default template showing the most recent event.
+            try:
+                shutil.copy2(out, ROOT / "Top_8_Texts" / "Default Top 8 HTML.txt")
+            except Exception:
+                pass
+            self._select_top8_event(cfg["label"])
         self._run([PYTHON, str(ROOT / "Python_Scripts" / "fetch_startgg_top8.py"),
                    slug, "--name", name, "--link", link, "--out", str(out)],
-                  on_done=lambda c=cfg: self._select_top8_event(c["label"]))
+                  on_done=_done)
 
     def _select_top8_event(self, label: str):
         if label in [self._top8_series.itemText(i) for i in range(self._top8_series.count())]:
@@ -1245,7 +1680,7 @@ class UltimateWindow(QtWidgets.QMainWindow):
         v = QtWidgets.QVBoxLayout(box)
         row1 = QtWidgets.QHBoxLayout()
         row1.addWidget(QtWidgets.QLabel("Series:"))
-        self._thumb_series = QtWidgets.QComboBox()
+        self._thumb_series = _NoWheelComboBox()
         self._thumb_series.setMinimumWidth(220)
         row1.addWidget(self._thumb_series)
         refresh = QtWidgets.QPushButton("⟳")
@@ -1338,6 +1773,7 @@ class UltimateWindow(QtWidgets.QMainWindow):
                     self._thumb_num.setText(saved)
         self._update_thumb_name()
         self._load_config_into_form(series)
+        self._refresh_vod_len()
         self._refresh_vod_files()
         self._save_settings()
 
@@ -1388,7 +1824,7 @@ class UltimateWindow(QtWidgets.QMainWindow):
         fg_btn.clicked.connect(lambda: self._browse_overlay(self._cfg_foreground))
         g.addWidget(fg_btn, 1, 2)
         g.addWidget(QtWidgets.QLabel("Font:"), 2, 0)
-        self._cfg_font = QtWidgets.QComboBox()
+        self._cfg_font = _NoWheelComboBox()
         font_files = sorted(f.name for f in (ROOT / "Resources" / "Fonts").glob("*")
                             if f.suffix.lower() in (".ttf", ".otf"))
         self._cfg_font.addItems([""] + font_files)
@@ -1409,26 +1845,26 @@ class UltimateWindow(QtWidgets.QMainWindow):
         for lbl, key in [("1-char", "resize_1"), ("2-char", "resize_2"), ("3-char", "resize_3")]:
             rs.addSpacing(8)
             rs.addWidget(QtWidgets.QLabel(lbl))
-            e = _hline("", 60)
-            self._cfg_line[key] = e
-            rs.addWidget(e)
-        rs.addStretch(1)
+            f = NormalizedField(0.0, 1.0)
+            self._cfg_line[key] = f.edit
+            rs.addWidget(f, 1)
         cbox.addLayout(rs)
 
-        def pos_row(label, *keys):
+        def pos_row(label, *keys, lo=-1.0, hi=1.0):
             r = QtWidgets.QHBoxLayout()
             lab = QtWidgets.QLabel(label)
             lab.setFixedWidth(90)
             r.addWidget(lab)
             for k in keys:
-                xe, ye = _hline("", 60), _hline("", 60)
-                self._cfg_pos[k] = (xe, ye)
+                fx, fy = NormalizedField(lo, hi), NormalizedField(lo, hi)
+                # Store the boxes, not the wrappers: every load/save/clear path
+                # already speaks QLineEdit, and the sliders follow them.
+                self._cfg_pos[k] = (fx.edit, fy.edit)
                 r.addWidget(QtWidgets.QLabel("x"))
-                r.addWidget(xe)
+                r.addWidget(fx, 1)
                 r.addWidget(QtWidgets.QLabel("y"))
-                r.addWidget(ye)
+                r.addWidget(fy, 1)
                 r.addSpacing(8)
-            r.addStretch(1)
             cbox.addLayout(r)
 
         cbox.addWidget(_muted("Character Positions  (x, y — normalized -1 to 1):"))
@@ -1466,28 +1902,27 @@ class UltimateWindow(QtWidgets.QMainWindow):
         cbox.addLayout(rc)
 
         cbox.addWidget(_muted("Text Label Positions  (x, y — normalized 0 to 1):"))
-        pos_row("Player 1:", "text_player1")
-        pos_row("Player 2:", "text_player2")
-        pos_row("Event:", "text_event")
-        pos_row("Round:", "text_round")
+        pos_row("Player 1:", "text_player1", lo=0.0, hi=1.0)
+        pos_row("Player 2:", "text_player2", lo=0.0, hi=1.0)
+        pos_row("Event:", "text_event", lo=0.0, hi=1.0)
+        pos_row("Round:", "text_round", lo=0.0, hi=1.0)
 
         rcw = QtWidgets.QHBoxLayout()
         lab = QtWidgets.QLabel("Char Window:")
         lab.setFixedWidth(90)
         rcw.addWidget(lab)
         rcw.addWidget(QtWidgets.QLabel("w"))
-        cw_w = _hline("", 60)
-        rcw.addWidget(cw_w)
+        cw_w = NormalizedField(0.0, 1.0)
+        rcw.addWidget(cw_w, 1)
         rcw.addWidget(QtWidgets.QLabel("h"))
-        cw_h = _hline("", 60)
-        rcw.addWidget(cw_h)
-        rcw.addStretch(1)
-        self._cfg_pos["char_window"] = (cw_w, cw_h)
+        cw_h = NormalizedField(0.0, 1.0)
+        rcw.addWidget(cw_h, 1)
+        self._cfg_pos["char_window"] = (cw_w.edit, cw_h.edit)
         cbox.addLayout(rcw)
 
-        cbox.addWidget(_muted("Character Offsets  (x, y — normalized):"))
-        pos_row("P1 Offset:", "char_offset1")
-        pos_row("P2 Offset:", "char_offset2")
+        cbox.addWidget(_muted("Character Offsets  (x, y — normalized 0 to 1):"))
+        pos_row("P1 Offset:", "char_offset1", lo=0.0, hi=1.0)
+        pos_row("P2 Offset:", "char_offset2", lo=0.0, hi=1.0)
 
         rer = QtWidgets.QHBoxLayout()
         self._cfg_single_text = QtWidgets.QCheckBox("Single Text Block")
@@ -1511,6 +1946,8 @@ class UltimateWindow(QtWidgets.QMainWindow):
         rcb.addWidget(clear)
         rcb.addStretch(1)
         cbox.addLayout(rcb)
+
+        self._build_config_preview(cbox)
 
     def _load_config_into_form(self, series: str):
         if not hasattr(self, "_cfg_series_label"):
@@ -1545,12 +1982,482 @@ class UltimateWindow(QtWidgets.QMainWindow):
 
         self._cfg_single_text.setChecked(bool(cfg.get("event_round_single_text", False)))
         self._cfg_text_split.setText(cfg.get("event_round_text_split", ""))
+        self._schedule_config_preview()
 
-    def _save_thumbnail_config(self):
-        series = self._thumb_series.currentText().strip()
-        if not series:
-            self._log("[Error: no series selected]\n")
+    #: Reports the canvas box so the capture can be cropped to the graphic.
+    #: Stringified deliberately -- a bare JS array comes back from
+    #: runJavaScript() as an empty string, so only JSON survives the bridge.
+    _EXPORT_BOX_JS = """(function () {
+        const c = document.getElementById('canvas');
+        return JSON.stringify(c ? [c.offsetWidth, c.offsetHeight] : null);
+    })()"""
+
+    def _export_top8_image(self):
+        """Render the selected Top 8 HTML to a PNG, wherever the user wants it.
+
+        Rendering goes through the QtWebEngine already bundled with the GUI rather
+        than a browser on the machine: the capture then works no matter what the
+        default browser is (Brave, for one, hangs in headless mode), and needs
+        nothing added to the HTML -- any page whose graphic starts at the top-left
+        corner exports correctly, including one the user supplied themselves.
+        """
+        name = self._top8_html_file.currentText()
+        if not name:
+            self._log("[Error: no HTML file selected]\n")
             return
+        try:
+            from PySide6.QtWebEngineWidgets import QWebEngineView
+        except ImportError as exc:
+            self._log(f"[Export needs QtWebEngine: {exc}]\n")
+            return
+
+        start_dir = getattr(self, "_top8_export_dir", "") or str(ROOT / "Top_8_Results")
+        suggested = str(Path(start_dir) / (Path(name).stem + ".png"))
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Top 8 image", suggested, "PNG image (*.png)")
+        if not path:
+            return
+        if not path.lower().endswith(".png"):
+            path += ".png"
+        self._top8_export_dir = str(Path(path).parent)
+        self._top8_export_btn.setEnabled(False)
+        self._log(f"[Rendering {name}…]\n")
+
+        view = QWebEngineView()
+        # Larger than the 1920-wide canvas in both directions, so the page's own
+        # fit script leaves it at 1:1 anchored in the corner and the capture is
+        # just a crop from (0, 0).
+        view.resize(2100, 1250)
+        # Lays out and renders without ever appearing on screen -- verified to
+        # produce a byte-identical capture to a shown window.
+        view.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        view.show()
+        self._top8_export_view = view  # must outlive this function
+
+        def on_load(ok):
+            if not ok:
+                self._finish_top8_export(None, path, "page failed to load")
+                return
+            # Give the images, the webfont and fitText a moment to settle; the
+            # page only sizes its text correctly once all three have landed.
+            QtCore.QTimer.singleShot(1500, lambda: self._capture_top8_export(path))
+
+        view.loadFinished.connect(on_load)
+        view.load(QtCore.QUrl(self._top8_preview_url(name)))
+
+    def _capture_top8_export(self, path: str):
+        view = getattr(self, "_top8_export_view", None)
+        if view is None:
+            return
+        pixmap = view.grab()
+        view.page().runJavaScript(
+            self._EXPORT_BOX_JS,
+            lambda box: self._finish_top8_export(pixmap, path, None, box))
+
+    def _finish_top8_export(self, pixmap, path: str, error=None, box=None):
+        view = getattr(self, "_top8_export_view", None)
+        self._top8_export_view = None
+        if view is not None:
+            view.deleteLater()
+        self._top8_export_btn.setEnabled(True)
+        if error or pixmap is None or pixmap.isNull():
+            self._log(f"[Export failed: {error or 'nothing was rendered'}]\n")
+            return
+
+        try:
+            box = json.loads(box) if isinstance(box, str) else box
+        except ValueError:
+            box = None
+        if box and len(box) >= 2:
+            width, height = int(box[0]), int(box[1])
+        else:
+            # No #canvas element (someone else's HTML): keep the whole capture.
+            width, height = pixmap.width(), pixmap.height()
+        width = max(1, min(width, pixmap.width()))
+        height = max(1, min(height, pixmap.height()))
+        # The canvas picks up a few pixels of baseline gap under its first image,
+        # so a graphic a hair taller than 16:9 is snapped back to it. One that is
+        # genuinely a different shape keeps its own height.
+        wide = round(width * 9 / 16)
+        if wide <= height <= wide * 1.02:
+            height = wide
+        if pixmap.copy(0, 0, width, height).save(path, "PNG"):
+            self._log(f"[Saved {width}x{height} image: {path}]\n")
+        else:
+            self._log(f"[Export failed: could not write {path}]\n")
+
+    #: Preview size. The page scales its 1920-wide canvas to whatever view it
+    #: is given, so this is purely how much room the preview gets on screen.
+    _TOP8_PREVIEW_SIZE = (1200, 675)
+
+    def _build_top8_preview_section(self, parent_layout):
+        """The Top 8 Preview section: a live render plus the PNG export.
+
+        Its own section rather than a corner of Layout Config, so the render gets
+        real room and sits next to the data and the HTML it is built from.
+        """
+        box = CollapsibleBox("Top 8 Preview", collapsed=False)
+        parent_layout.addWidget(box)
+
+        self._top8_preview_view = None
+        self._top8_preview_url_loaded = ""
+        self._top8_preview_holder = QtWidgets.QWidget()
+        holder = QtWidgets.QVBoxLayout(self._top8_preview_holder)
+        holder.setContentsMargins(0, 0, 0, 0)
+        self._top8_preview_placeholder = _muted("Preview starting…")
+        self._top8_preview_placeholder.setFixedSize(*self._TOP8_PREVIEW_SIZE)
+        self._top8_preview_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._top8_preview_placeholder.setStyleSheet(
+            f"background-color: {_BG3}; border-radius: 4px;")
+        holder.addWidget(self._top8_preview_placeholder)
+
+        # Buttons, render and hint share one column the width of the preview, and
+        # the column is centred in the section -- so the controls line up with the
+        # render's left edge instead of drifting away from it.
+        column = QtWidgets.QWidget()
+        column.setFixedWidth(self._TOP8_PREVIEW_SIZE[0])
+        col = QtWidgets.QVBoxLayout(column)
+        col.setContentsMargins(0, 0, 0, 0)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        self._top8_export_btn = QtWidgets.QPushButton("Save Image…")
+        self._top8_export_btn.setToolTip(
+            "Render this graphic to a full-size PNG and choose where to save it")
+        self._top8_export_btn.clicked.connect(self._export_top8_image)
+        btn_row.addWidget(self._top8_export_btn)
+        refresh = QtWidgets.QPushButton("⟳ Refresh")
+        refresh.setToolTip("Reload the preview from the files on disk")
+        refresh.clicked.connect(self._force_refresh_top8_preview)
+        btn_row.addWidget(refresh)
+        btn_row.addStretch(1)
+        col.addLayout(btn_row)
+        col.addWidget(_muted(
+            "Renders the selected HTML file. It reloads itself whenever Layout "
+            "Config or the Top 8 text data saves; Save Image writes it out at "
+            "full size."))
+        col.addWidget(self._top8_preview_holder)
+
+        row = QtWidgets.QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(column)
+        row.addStretch(1)
+        box.addLayout(row)
+
+    def prewarm_top8_preview(self):
+        """Build the web view while the main window is still hidden.
+
+        Bringing QtWebEngine up reconfigures the top-level window's surface, and
+        on Windows that repaints the entire window - a white flash wherever it
+        happens. Doing it before the window is ever shown means nobody sees it.
+        The cost is a Chromium process at startup rather than on first use.
+        """
+        self._build_top8_preview()
+
+    def _build_top8_preview(self):
+        if self._top8_preview_view is not None:
+            return
+        try:
+            from PySide6.QtWebEngineWidgets import QWebEngineView
+        except ImportError as exc:
+            self._top8_preview_placeholder.setText(
+                "Preview needs QtWebEngine:" + NL + f"{exc}")
+            return
+        view = QWebEngineView()
+        view.setFixedSize(*self._TOP8_PREVIEW_SIZE)
+        # Chromium paints its viewport white until the document's own background
+        # arrives, which on a dark GUI reads as a flash. Paint both the page and
+        # the widget behind it in the panel colour so there is never a white
+        # frame to see.
+        dark = QtGui.QColor(_BG3)
+        view.page().setBackgroundColor(dark)
+        palette = view.palette()
+        for role in (QtGui.QPalette.ColorRole.Window, QtGui.QPalette.ColorRole.Base):
+            palette.setColor(role, dark)
+        view.setPalette(palette)
+        view.setAutoFillBackground(True)
+        # The page scales its 1920-wide canvas to the window it is given, so a
+        # small view shows the whole graphic without any zoom handling here.
+        # It stays hidden behind the placeholder until it has something to show;
+        # the page re-fits itself on becoming visible (it watches the viewport).
+        view.hide()
+        view.loadFinished.connect(self._on_top8_preview_loaded)
+        self._top8_preview_view = view
+        # Index 0, so the view takes the placeholder's slot rather than stacking
+        # below it and growing the section.
+        self._top8_preview_holder.layout().insertWidget(0, view)
+        self._refresh_top8_preview()
+
+    def _on_top8_preview_loaded(self, ok: bool):
+        """Swap the placeholder for the view once there is a painted page behind it."""
+        view = self._top8_preview_view
+        if view is None:
+            return
+        if not ok:
+            self._top8_preview_placeholder.setText("Preview failed to load")
+            return
+        if not view.isVisible():
+            self._top8_preview_placeholder.hide()
+            view.show()
+
+    def _force_refresh_top8_preview(self):
+        """Reload from scratch, whatever state the view thinks it is in."""
+        self._top8_preview_url_loaded = ""   # force a fresh load(), not a reload
+        self._refresh_top8_preview()
+
+    def _refresh_top8_preview(self):
+        """Point the preview at the selected file, or reload it in place."""
+        view = getattr(self, "_top8_preview_view", None)
+        if view is None:
+            return
+        name = self._top8_html_file.currentText()
+        if not name:
+            return
+        url = self._top8_preview_url(name)
+        if url != self._top8_preview_url_loaded:
+            self._top8_preview_url_loaded = url
+            view.load(QtCore.QUrl(url))
+            return
+        # Same file, new contents: bypass the cache so the edit actually shows.
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        view.page().triggerAction(QWebEnginePage.WebAction.ReloadAndBypassCache)
+
+    #: Preview size. 16:9, so it matches the canvas the generator draws.
+    _CFG_PREVIEW_SIZE = (864, 486)
+
+    def _build_config_preview(self, cbox):
+        """Live thumbnail preview of whatever the config form currently says.
+
+        Every value above is a normalized coordinate or a scale factor, which is
+        hard to picture; this draws the result instead. It goes through the real
+        generator with only_one=True, so the layout is exact -- just one
+        character arrangement rather than all six.
+        """
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {_BG3};")
+        cbox.addWidget(sep)
+
+        # Controls, hint and image share one column the width of the preview, and
+        # the column is centred in the section -- the same arrangement the Top 8
+        # preview uses, so the controls line up with the image's left edge instead
+        # of drifting away from it as the window widens.
+        column = QtWidgets.QWidget()
+        column.setFixedWidth(self._CFG_PREVIEW_SIZE[0])
+        col = QtWidgets.QVBoxLayout(column)
+        col.setContentsMargins(0, 0, 0, 0)
+
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Preview:"))
+        self._cfg_preview_sample = _NoWheelComboBox()
+        self._cfg_preview_sample.addItems(
+            ["Selected VOD line", "1 character", "2 characters", "3 characters"])
+        self._cfg_preview_sample.setCurrentText("3 characters")
+        self._cfg_preview_sample.setToolTip(
+            "Which match to draw. The numbered samples use placeholder players so "
+            "every character slot is filled, which is what the 1/2/3-char shifts "
+            "above control.")
+        self._cfg_preview_sample.currentTextChanged.connect(
+            lambda *_: self._render_config_preview(force=True))
+        row.addWidget(self._cfg_preview_sample)
+        refresh = QtWidgets.QPushButton("Refresh")
+        refresh.setToolTip("Redraw the preview now")
+        refresh.clicked.connect(lambda: self._render_config_preview(force=True))
+        row.addWidget(refresh)
+        self._cfg_preview_open = QtWidgets.QPushButton("Open Full Size")
+        self._cfg_preview_open.setToolTip("Open the preview at full resolution")
+        self._cfg_preview_open.setEnabled(False)
+        self._cfg_preview_open.clicked.connect(self._open_preview_full_size)
+        row.addWidget(self._cfg_preview_open)
+        row.addStretch(1)
+        col.addLayout(row)
+
+        col.addWidget(_muted(
+            "Draws the fields above as they stand, saved or not, so a shift can be "
+            "judged before committing it. Generating still produces every character "
+            "arrangement; this shows the first."))
+
+        # Which line actually got drawn. A selected row that is a comment, a
+        # header or an unparseable line falls back to the first real match, and
+        # without this the preview looks like it simply ignored the selection.
+        self._cfg_preview_line_label = _muted("")
+        self._cfg_preview_line_label.setWordWrap(False)
+        self._cfg_preview_line_label.setToolTip("The match line this preview was drawn from")
+        col.addWidget(self._cfg_preview_line_label)
+
+        self._cfg_preview_pil = None
+        self._cfg_preview_label = QtWidgets.QLabel("Press Refresh to draw a preview")
+        self._cfg_preview_label.setFixedSize(*self._CFG_PREVIEW_SIZE)
+        self._cfg_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._cfg_preview_label.setWordWrap(True)
+        self._cfg_preview_label.setStyleSheet(
+            f"background-color: {_BG3}; border-radius: 4px;")
+        col.addWidget(self._cfg_preview_label)
+
+        centred = QtWidgets.QHBoxLayout()
+        centred.addStretch(1)
+        centred.addWidget(column)
+        centred.addStretch(1)
+        cbox.addLayout(centred)
+
+        # A burst of typing should render once, not once per keystroke.
+        self._cfg_preview_timer = QtCore.QTimer(self)
+        self._cfg_preview_timer.setSingleShot(True)
+        self._cfg_preview_timer.setInterval(500)
+        self._cfg_preview_timer.timeout.connect(self._render_config_preview)
+        edits = list(self._cfg_line.values()) + [
+            self._cfg_background, self._cfg_foreground, self._cfg_text_split]
+        for xe, ye in self._cfg_pos.values():
+            edits += [xe, ye]
+        edits += [cf.edit for cf in self._cfg_color.values()]
+        for e in edits:
+            e.textChanged.connect(self._schedule_config_preview)
+        for cb in (self._cfg_glow, self._cfg_one_char, self._cfg_single_text):
+            cb.toggled.connect(self._schedule_config_preview)
+        self._cfg_font.currentTextChanged.connect(self._schedule_config_preview)
+
+    def _schedule_config_preview(self, *_args):
+        """Queue a redraw, but only while the preview is actually on screen."""
+        label = getattr(self, "_cfg_preview_label", None)
+        if label is None or not label.isVisible():
+            return
+        self._cfg_preview_timer.start()
+
+    def _selected_vod_match_line(self) -> str:
+        """The VOD row the user has selected, else the first real match line."""
+        model = getattr(self, "_vod_model", None)
+        if model is None:
+            return ""
+        row = getattr(self, "_vod_selected_source_row", -1)
+        if 0 <= row < model.rowCount():
+            text = model.text_at(row)
+            if _VOD_VS_RE.search(text):
+                return text
+        for r in range(model.rowCount()):
+            text = model.text_at(r)
+            if _VOD_VS_RE.search(text):
+                return text
+        return ""
+
+    def _preview_sample_line(self, event_name: str):
+        """(match line, event name to parse it with, abbreviation) for the preview.
+
+        A real VOD line is parsed with the event name and abbreviation its own
+        file declared, since that is what the generator would use; the synthetic
+        samples are built around the event name in the form.
+        """
+        mode = self._cfg_preview_sample.currentText()
+        if mode.startswith("Selected VOD"):
+            line = self._selected_vod_match_line()
+            if line:
+                return (line,
+                        getattr(self, "_vod_event_name", "") or event_name,
+                        getattr(self, "_vod_abbrev", ""))
+        try:
+            count = int(mode.split()[0])
+        except (ValueError, IndexError):
+            count = 3
+        p1 = _preview_sample_chars(count)
+        # Offset the second player so the two sides are told apart at a glance.
+        p2 = _preview_sample_chars(count, skip=count)
+        if not p1 or not p2:
+            raise RuntimeError("No character renders found to draw a sample with")
+        return (f"{event_name} - Grand Final - Player One ({', '.join(p1)}) Vs "
+                f"Player Two ({', '.join(p2)}) - SSBU", event_name, "")
+
+    def _build_preview_image(self):
+        """Render one thumbnail from the current form values."""
+        if _pg is None:
+            raise RuntimeError("populate_ultimate_globals could not be imported")
+        gen = _thumbnail_generator()
+        from PIL import Image
+
+        series = self._thumb_series.currentText().strip()
+        props = {**_base_event_props(series), **self._collect_config_form()}
+        event_name = (self._thumb_event_name.text().strip() or series or "Sample Event")
+        props["event_name"] = event_name
+        props["event_short_name"] = event_name
+        props["show_first_image"] = False
+        # The generator resolves these against its working directory; the GUI's
+        # is not guaranteed to be the generator root.
+        for key in ("char_renders", "background_file", "foreground_file", "font_location"):
+            val = props.get(key)
+            if val and not os.path.isabs(str(val)):
+                props[key] = str(ROOT / val)
+
+        line, parse_name, abbrev = self._preview_sample_line(event_name)
+        self._cfg_preview_line = line
+        gen._properties = props
+        gen._character_database = _pg.readCharDatabase(str(CHAR_DB_PATH))
+        gen._player_database = _pg.readPlayerDatabase(
+            str(PLAYER_DB_PATH), char_database=gen._character_database)
+        # The placeholder players are deliberately absent from the player
+        # database. Unlike Rivals, no default-costume map is needed to cope with
+        # that: this generator falls back to alt 1 for any character it cannot
+        # find a costume for, which every render folder has.
+
+        with tempfile.TemporaryDirectory() as tmp:
+            match = gen.createMatches([line], os.path.join(tmp, "missing.log"),
+                                      parse_name, event_name, event_abbrev=abbrev)[0]
+        background = Image.open(props["background_file"]).convert("RGBA")
+        foreground = Image.open(props["foreground_file"]).convert("RGBA")
+        gen.createRoundImages([match], background, foreground, only_one=True)
+        return match.Images[0].convert("RGBA")
+
+    def _render_config_preview(self, force: bool = False):
+        label = getattr(self, "_cfg_preview_label", None)
+        if label is None or (not force and not label.isVisible()):
+            return
+        try:
+            image = self._build_preview_image()
+        except Exception as exc:
+            self._cfg_preview_pil = None
+            self._cfg_preview_open.setEnabled(False)
+            self._cfg_preview_line = ""
+            self._show_preview_source_line()
+            label.setPixmap(QtGui.QPixmap())
+            label.setText("Preview failed:\n{e}".format(e=exc))
+            return
+        self._cfg_preview_pil = image
+        self._cfg_preview_open.setEnabled(True)
+        self._show_preview_source_line()
+        qimage = QtGui.QImage(image.tobytes("raw", "RGBA"), image.width, image.height,
+                              QtGui.QImage.Format.Format_RGBA8888).copy()
+        label.setText("")
+        label.setPixmap(QtGui.QPixmap.fromImage(qimage).scaled(
+            label.size(), Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
+
+    def _show_preview_source_line(self):
+        """Name the line under the preview, elided to the column width."""
+        label = getattr(self, "_cfg_preview_line_label", None)
+        if label is None:
+            return
+        line = getattr(self, "_cfg_preview_line", "")
+        if not line:
+            label.setText("")
+            return
+        metrics = QtGui.QFontMetrics(label.font())
+        label.setText(metrics.elidedText(
+            "Drawn from: " + strip_skins(line),
+            Qt.TextElideMode.ElideRight, self._CFG_PREVIEW_SIZE[0] - 8))
+
+    def _open_preview_full_size(self):
+        image = getattr(self, "_cfg_preview_pil", None)
+        if image is None:
+            return
+        path = Path(tempfile.gettempdir()) / "rivals_config_preview.png"
+        try:
+            image.save(str(path))
+            os.startfile(str(path))
+        except Exception as exc:
+            self._log("[Error opening preview: {e}]\n".format(e=exc))
+
+    def _collect_config_form(self) -> dict:
+        """The config the form currently describes, saved or not.
+
+        Shared by Save Config and the live preview, so what the preview draws is
+        exactly what saving would write.
+        """
         cfg: dict = {}
         bg = self._cfg_background.text().strip()
         fg = self._cfg_foreground.text().strip()
@@ -1595,8 +2502,14 @@ class UltimateWindow(QtWidgets.QMainWindow):
         split = self._cfg_text_split.text()
         if split:
             cfg["event_round_text_split"] = split
+        return cfg
 
-        self._event_configs[series] = cfg
+    def _save_thumbnail_config(self):
+        series = self._thumb_series.currentText().strip()
+        if not series:
+            self._log("[Error: no series selected]\n")
+            return
+        self._event_configs[series] = self._collect_config_form()
         self._save_event_configs()
         self._log(f"[Config saved for \"{series}\"]\n")
 
@@ -1639,13 +2552,48 @@ class UltimateWindow(QtWidgets.QMainWindow):
             src = self._vod_proxy.mapToSource(current)
             self._vod_selected_source_row = src.row()
 
+    def _on_vod_row_clicked(self, index):
+        if index.isValid():
+            self._set_vod_selected_row(self._vod_proxy.mapToSource(index).row())
+
+    def _on_vod_model_reset(self):
+        self._set_vod_selected_row(-1)
+
+    def _set_vod_selected_row(self, row: int):
+        """Remember the row the preview should draw, and redraw if it changed."""
+        if row == getattr(self, "_vod_selected_source_row", -1):
+            return
+        self._vod_selected_source_row = row
+        # Selecting a line is the whole point of the "Selected VOD line" sample,
+        # so don't make the user press Refresh as well.
+        sample = getattr(self, "_cfg_preview_sample", None)
+        if sample is not None and sample.currentText().startswith("Selected VOD"):
+            self._schedule_config_preview()
+
+    def _vod_move_row(self, proxy_row: int, delta: int):
+        if self._vod_filter.text():
+            self._log("[Clear the filter before reordering lines]\n")
+            return
+        src_row = self._vod_proxy.mapToSource(
+            self._vod_proxy.index(proxy_row, 0)).row()
+        new = self._vod_model.move_row(src_row, delta)
+        if new < 0:
+            return
+        self._vod_selected_source_row = new
+        self._vod_rebuild_red_rows()
+
     def _vod_rebuild_red_rows(self):
         self._vod_red_rows = {
             r for r in range(self._vod_model.rowCount())
             if _vod_missing_chars(self._vod_model.text_at(r))
         }
 
-    def _on_vod_data_changed(self, top_left, bottom_right, _roles=None):
+    def _on_vod_data_changed(self, top_left, bottom_right, roles=None):
+        # Ignore repaint-only changes (a check-mark repainting the row, say):
+        # they cannot have altered the text this tracks.
+        if roles and (Qt.ItemDataRole.EditRole not in roles
+                      and Qt.ItemDataRole.DisplayRole not in roles):
+            return
         for row in range(top_left.row(), bottom_right.row() + 1):
             text = self._vod_model.text_at(row)
             was_red = row in self._vod_red_rows
@@ -1654,7 +2602,10 @@ class UltimateWindow(QtWidgets.QMainWindow):
                 self._vod_red_rows.add(row)
             else:
                 self._vod_red_rows.discard(row)
-            if was_red and not is_red:
+            # Blanking a line or turning it into a comment also clears the red
+            # flag, but neither is "character data complete" -- don't say so.
+            if (was_red and not is_red
+                    and text.strip() and not text.strip().startswith("#")):
                 self._log(f"[Line {row + 1} character data complete]\n")
 
     def _on_vod_filter_changed(self, text: str):
@@ -1674,11 +2625,114 @@ class UltimateWindow(QtWidgets.QMainWindow):
                     if _VOD_VS_RE.search(self._vod_model.text_at(r))]
         ready = bool(vs_lines) and not any(_vod_missing_chars(t) for t in vs_lines)
         self._import_players_btn.setEnabled(ready)
+        if hasattr(self, "_import_skins_btn"):
+            # Only worth offering when a line actually names a costume -- the
+            # button has nothing to copy into the database otherwise -- and only
+            # once every player has a row to write those costumes onto.
+            named = any(":" in paren for t in vs_lines
+                        for paren in _VOD_PARENS_RE.findall(t))
+            missing = self._vod_players_missing_from_db(vs_lines)
+            self._import_skins_btn.setEnabled(named and not missing)
+            if not named:
+                tip = "No line names a per-set costume (Character:Alt) yet"
+            elif missing:
+                shown = ", ".join(missing[:3])
+                more = f" +{len(missing) - 3} more" if len(missing) > 3 else ""
+                tip = (f"{len(missing)} player(s) are not in the player database "
+                       f"({shown}{more}) — use Import Missing Players first")
+            else:
+                tip = ("Add every per-set costume named in these lines to that "
+                       "player's row in the player database")
+            self._import_skins_btn.setToolTip(tip)
         if hasattr(self, "_gen_thumb_btn"):
             self._gen_thumb_btn.setEnabled(ready)
             self._gen_thumb_btn.setToolTip(
                 "" if ready else "Fill in character data for all match lines to enable"
             )
+
+    def _vod_players_missing_from_db(self, lines) -> list:
+        """Player tags in these lines with no row in the player database.
+
+        Adding a costume to a player who has no row would silently do nothing, so
+        the Add Missing Costumes button stays greyed out until Import Missing
+        Players has created them. Reads the in-memory copy the Player Database
+        tab keeps, since this runs on every edit to the VOD table.
+        """
+        db = getattr(self, "_db_players", None)
+        if db is None:
+            db = load_player_db()[1]
+        known = {name.lower() for name in db}
+        missing: list[str] = []
+        for line in lines:
+            for name, _chars in _parse_vod_player_skins(line):
+                if name.lower() not in known and name not in missing:
+                    missing.append(name)
+        return missing
+
+    def _import_missing_skins(self):
+        """Save every per-set costume named in these VOD lines onto its player's row.
+
+        A costume typed into a line already renders without being in the
+        database, so this is purely about making it stick -- next time it is one
+        click away in the Set costumes dialog and the Player Database tab. New
+        costumes are appended unstarred, and whichever costume was already
+        winning for that character gets pinned, so no player's default silently
+        changes.
+        """
+        headers, db = load_player_db()
+        by_lower = {name.lower(): name for name in db}
+        added = 0
+        unknown: list[str] = []
+        unresolved: list[str] = []
+        for r in range(self._vod_model.rowCount()):
+            for name, chars in _parse_vod_player_skins(self._vod_model.text_at(r)):
+                key = by_lower.get(name.lower())
+                if key is None:
+                    if name not in unknown:
+                        unknown.append(name)
+                    continue
+                entries = db[key]
+                for char, skin in chars:
+                    if not skin:
+                        continue
+                    alt = stem_for_label(char, skin)
+                    if not alt:
+                        miss = f"{char}:{skin}"
+                        if miss not in unresolved:
+                            unresolved.append(miss)
+                        continue
+                    same = [i for i, (c, _) in enumerate(entries)
+                            if c.upper() == char.upper()]
+                    if any(split_pref(entries[i][1])[0] == alt for i in same):
+                        continue
+                    # A second costume makes the character's default ambiguous,
+                    # so pin the one already in use -- same rule as Add Entry.
+                    if same and not any(split_pref(entries[i][1])[1] for i in same):
+                        c0, a0 = entries[same[0]]
+                        entries[same[0]] = (c0, join_pref(split_pref(a0)[0], True))
+                    entries.append((char, alt))
+                    added += 1
+                    self._log(f"[Costumes: added {char} — {alt} to '{key}']\n")
+
+        for name in unknown:
+            self._log(f"[Costumes: '{name}' is not in the player database — "
+                      f"use Import Missing Players first]\n")
+        for miss in unresolved:
+            self._log(f"[Costumes: no render matches '{miss}']\n")
+        if not added:
+            self._log("[Costumes: nothing to add — every costume named is already "
+                      "in the database]\n")
+            return
+
+        save_player_db(headers, db)
+        self._log(f"[Costumes: saved {added} new costume "
+                  f"{'entry' if added == 1 else 'entries'} to the database]\n")
+        if hasattr(self, "_db_players"):
+            self._db_players = db
+            self._refresh_player_list()
+            selected = getattr(self, "_db_selected_player", None)
+            if selected in db:
+                self._populate_char_tree(selected)
 
     def _import_missing_players(self):
         _headers, existing = load_player_db()
@@ -1769,7 +2823,7 @@ class UltimateWindow(QtWidgets.QMainWindow):
 
         row = QtWidgets.QHBoxLayout()
         row.addWidget(QtWidgets.QLabel("File:"))
-        self._vod_file = QtWidgets.QComboBox()
+        self._vod_file = _NoWheelComboBox()
         self._vod_file.setMinimumWidth(360)
         row.addWidget(self._vod_file)
         rb = QtWidgets.QPushButton("⟳")
@@ -1782,19 +2836,40 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._vod_char_picker = QtWidgets.QComboBox()
         self._vod_char_picker.setMinimumWidth(160)
         self._vod_char_picker.setToolTip(
-            "Pick a character, then Copy to paste the exact spelling into a VOD line")
+            "Pick a character to copy its exact spelling to the clipboard")
         self._refresh_vod_char_picker()
+        self._vod_char_picker.activated.connect(self._copy_vod_char)
+        # A new character invalidates the picked costume: reset to blank rather
+        # than carrying over an alt number that means something else now.
+        self._vod_char_picker.currentTextChanged.connect(
+            lambda *_: self._refresh_vod_skin_picker(keep=False))
         row.addWidget(self._vod_char_picker)
         crb = QtWidgets.QPushButton("⟳")
         crb.setObjectName("tool")
         crb.setToolTip("Refresh character list")
         crb.clicked.connect(self._refresh_vod_char_picker)
         row.addWidget(crb)
+        row.addWidget(QtWidgets.QLabel("Costume:"))
+        self._vod_skin_picker = QtWidgets.QComboBox()
+        self._vod_skin_picker.setMinimumWidth(90)
+        self._vod_skin_picker.setToolTip(
+            "Optional per-set costume — picking one copies Character:Alt to the clipboard.\n"
+            "Leave blank to use the player's preferred costume.")
+        self._refresh_vod_skin_picker()
+        # Same auto-copy as the character picker: choosing a costume puts the
+        # whole "Character:Alt" token on the clipboard, ready to paste.
+        self._vod_skin_picker.activated.connect(self._copy_vod_char)
+        self._vod_skin_picker.currentTextChanged.connect(self._refresh_vod_preview)
+        row.addWidget(self._vod_skin_picker)
         cc = QtWidgets.QPushButton("Copy")
-        cc.setToolTip("Copy the selected character name to the clipboard")
+        cc.setToolTip("Copy the selected character (with costume, if chosen) to the clipboard")
         cc.clicked.connect(self._copy_vod_char)
         row.addWidget(cc)
         row.addSpacing(20)
+        self._import_skins_btn = QtWidgets.QPushButton("Add Missing Costumes")
+        self._import_skins_btn.clicked.connect(self._import_missing_skins)
+        self._import_skins_btn.setEnabled(False)
+        row.addWidget(self._import_skins_btn)
         self._import_players_btn = QtWidgets.QPushButton("Import Missing Players")
         self._import_players_btn.setToolTip(
             "Add players from these VOD lines who are not yet in the player database")
@@ -1802,7 +2877,6 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._import_players_btn.setEnabled(False)
         row.addWidget(self._import_players_btn)
         row.addStretch(1)
-        cbox.addLayout(row)
 
         # Filter bar
         filter_row = QtWidgets.QHBoxLayout()
@@ -1811,7 +2885,28 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._vod_filter.setPlaceholderText("Search match lines…")
         self._vod_filter.setClearButtonEnabled(True)
         filter_row.addWidget(self._vod_filter)
-        cbox.addLayout(filter_row)
+
+        # Full-size preview on the left with the toolbar rows stacked to its
+        # right, the same arrangement the Player Database tab uses: an alt number
+        # alone doesn't tell you what the render looks like, and at this size it
+        # can share its height with both rows instead of stretching either one.
+        picker_area = QtWidgets.QHBoxLayout()
+        self._vod_preview_label = QtWidgets.QLabel()
+        self._vod_preview_label.setFixedSize(200, 200)
+        self._vod_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._vod_preview_label.setStyleSheet(
+            f"background-color: {_BG3}; border-radius: 4px;")
+        self._vod_preview_label.setToolTip(
+            "Preview of the selected costume (alt 1 when none is picked)")
+        picker_area.addWidget(self._vod_preview_label, 0, Qt.AlignmentFlag.AlignTop)
+        picker_area.addSpacing(16)
+        picker_rows = QtWidgets.QVBoxLayout()
+        picker_rows.addLayout(row)
+        picker_rows.addLayout(filter_row)
+        picker_rows.addStretch(1)
+        picker_area.addLayout(picker_rows, 1)
+        cbox.addLayout(picker_area)
+        self._refresh_vod_preview()
 
         self._vod_model = VodModel()
         # Auto-save: every content change restarts a short debounce timer, so a
@@ -1823,10 +2918,13 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._vod_save_timer.setInterval(600)
         self._vod_save_timer.timeout.connect(self._auto_save_vod_file)
         self._vod_model.contentChanged.connect(self._schedule_vod_autosave)
+        # Len and the Copy button must never disagree about what a line becomes,
+        # so both go through the same implementation.
+        self._vod_model.copy_text_fn = self._vod_abbrev_line
         self._vod_proxy = QtCore.QSortFilterProxyModel()
         self._vod_proxy.setSourceModel(self._vod_model)
         self._vod_proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self._vod_proxy.setFilterKeyColumn(2)
+        self._vod_proxy.setFilterKeyColumn(5)
         self._vod_filter.textChanged.connect(self._on_vod_filter_changed)
 
         self._vod_selected_source_row: int = -1
@@ -1836,16 +2934,24 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._vod_view.setMinimumHeight(400)
         self._vod_view.verticalHeader().setVisible(False)
         self._vod_view.horizontalHeader().setSectionResizeMode(
-            2, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            5, QtWidgets.QHeaderView.ResizeMode.Stretch)
         self._vod_view.setColumnWidth(0, 30)
         self._vod_view.setColumnWidth(1, 34)
-        self._vod_view.setColumnWidth(3, 64)
-        self._vod_view.setMouseTracking(True)
+        self._vod_view.setColumnWidth(2, 30)
+        self._vod_view.setColumnWidth(3, 30)
+        self._vod_view.setColumnWidth(4, 64)
+        self._vod_view.setMouseTracking(True)  # enables per-cell hover state
         self._vod_copy_delegate = CopyButtonDelegate(self._vod_view)
         self._vod_copy_delegate.copyRequested.connect(self._vod_copy_row)
         self._vod_view.setItemDelegateForColumn(1, self._vod_copy_delegate)
+        self._vod_up_delegate = MoveButtonDelegate(-1, self._vod_view)
+        self._vod_up_delegate.moveRequested.connect(self._vod_move_row)
+        self._vod_view.setItemDelegateForColumn(2, self._vod_up_delegate)
+        self._vod_down_delegate = MoveButtonDelegate(1, self._vod_view)
+        self._vod_down_delegate.moveRequested.connect(self._vod_move_row)
+        self._vod_view.setItemDelegateForColumn(3, self._vod_down_delegate)
         self._vod_line_delegate = VodLineDelegate(self._vod_view)
-        self._vod_view.setItemDelegateForColumn(2, self._vod_line_delegate)
+        self._vod_view.setItemDelegateForColumn(5, self._vod_line_delegate)
         self._vod_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._vod_view.customContextMenuRequested.connect(self._vod_context_menu)
         self._vod_model.dataChanged.connect(lambda *_: self._vod_update_delete_btn())
@@ -1893,13 +2999,53 @@ class UltimateWindow(QtWidgets.QMainWindow):
         if cur in chars:
             self._vod_char_picker.setCurrentText(cur)
         self._vod_char_picker.blockSignals(False)
+        self._refresh_vod_skin_picker()
+
+    def _refresh_vod_skin_picker(self, *_args, keep: bool = True):
+        """List the character's costumes; blank means "use the preferred one".
+
+        ``keep`` re-selects the current alt after the rebuild, which is right
+        when only the list was reloaded. Switching character passes False: the
+        old alt numbered a different character's costume.
+        """
+        picker = getattr(self, "_vod_skin_picker", None)
+        if picker is None:
+            return
+        char = self._vod_char_picker.currentText().strip()
+        cur = picker.currentText()
+        labels = [skin_label(st) for st in get_skins_for_char(char)] if char else []
+        picker.blockSignals(True)
+        picker.clear()
+        picker.addItem("")          # no costume -> player's preferred
+        picker.addItems(labels)
+        if keep and cur in labels:
+            picker.setCurrentText(cur)
+        picker.blockSignals(False)
+        self._refresh_vod_preview()
+
+    def _refresh_vod_preview(self, *_args):
+        """Show the picked costume, or alt 1 when none is picked."""
+        label = getattr(self, "_vod_preview_label", None)
+        if label is None:
+            return
+        char = self._vod_char_picker.currentText().strip()
+        if not char:
+            label.clear()
+            return
+        lbl = self._vod_skin_picker.currentText().strip()
+        alt = stem_for_label(char, lbl) if lbl else neutral_skin_for(char)
+        self._show_preview(render_stem(char, alt) if alt else "", label)
 
     def _copy_vod_char(self):
         name = self._vod_char_picker.currentText().strip()
         if not name:
             return
-        QtWidgets.QApplication.clipboard().setText(name)
-        self._log(f"[Copied character to clipboard: {name}]\n")
+        skin = ""
+        if getattr(self, "_vod_skin_picker", None) is not None:
+            skin = self._vod_skin_picker.currentText().strip()
+        text = f"{name}:{skin}" if skin else name
+        QtWidgets.QApplication.clipboard().setText(text)
+        self._log(f"[Copied character to clipboard: {text}]\n")
 
     def _refresh_top8_char_picker(self):
         if not hasattr(self, "_top8_char_picker"):
@@ -1912,15 +3058,62 @@ class UltimateWindow(QtWidgets.QMainWindow):
         if cur in chars:
             self._top8_char_picker.setCurrentText(cur)
         self._top8_char_picker.blockSignals(False)
+        self._refresh_top8_skin_picker()
+
+    def _refresh_top8_skin_picker(self, *_args, keep: bool = True):
+        """List the character's costumes; blank means "use the preferred one"."""
+        picker = getattr(self, "_top8_skin_picker", None)
+        if picker is None:
+            return
+        char = self._top8_char_picker.currentText().strip()
+        cur = picker.currentText()
+        labels = [skin_label(st) for st in get_skins_for_char(char)] if char else []
+        picker.blockSignals(True)
+        picker.clear()
+        picker.addItem("")          # no costume -> the player's preferred one
+        picker.addItems(labels)
+        if keep and cur in labels:
+            picker.setCurrentText(cur)
+        picker.blockSignals(False)
+        self._refresh_top8_skin_preview()
+
+    def _refresh_top8_skin_preview(self, *_args):
+        """Show the picked costume, or alt 1 when none is picked."""
+        label = getattr(self, "_top8_skin_preview_label", None)
+        if label is None:
+            return
+        char = self._top8_char_picker.currentText().strip()
+        if not char:
+            label.clear()
+            return
+        lbl = self._top8_skin_picker.currentText().strip()
+        alt = stem_for_label(char, lbl) if lbl else neutral_skin_for(char)
+        self._show_preview(render_stem(char, alt) if alt else "", label)
 
     def _copy_top8_char(self):
         name = self._top8_char_picker.currentText().strip()
         if not name:
             return
+        skin = ""
+        if getattr(self, "_top8_skin_picker", None) is not None:
+            skin = self._top8_skin_picker.currentText().strip()
+        name = f"{name}:{skin}" if skin else name
         QtWidgets.QApplication.clipboard().setText(name)
         self._log(f"[Copied character to clipboard: {name}]\n")
 
+    def _refresh_vod_len(self):
+        """Len depends on the abbreviation, which lives outside the model."""
+        if hasattr(self, "_vod_model"):
+            self._vod_model.refresh_len_column()
+
     def _vod_abbrev_line(self, text: str) -> str:
+        """Prepare a match line for the clipboard: the YouTube title for this set.
+
+        Per-set costumes are a rendering detail, so they come off first -- both
+        because they don't belong in the title and because the length limit is
+        about the title, not about what we wrote to steer the generator.
+        """
+        text = strip_skins(text)
         if len(text) <= MAX_LINE_LEN:
             return text
         abbrev = getattr(self, "_vod_abbrev", "")
@@ -1940,6 +3133,7 @@ class UltimateWindow(QtWidgets.QMainWindow):
         src_idx = self._vod_proxy.mapToSource(idx)
         menu = QtWidgets.QMenu(self)
         copy_act = menu.addAction("Copy line")
+        skins_act = menu.addAction("Set costumes…")
         del_act = menu.addAction("Delete line")
         act = menu.exec(self._vod_view.viewport().mapToGlobal(pos))
         if act == copy_act:
@@ -1948,9 +3142,82 @@ class UltimateWindow(QtWidgets.QMainWindow):
             QtWidgets.QApplication.clipboard().setText(out)
             suffix = " (abbreviated)" if out != text else ""
             self._log(f"[Copied to clipboard{suffix}: {out}]\n")
+        elif act == skins_act:
+            self._vod_set_skins(src_idx.row())
         elif act == del_act:
             self._vod_model.delete_row(src_idx.row())
             self._vod_update_delete_btn()
+
+    def _vod_set_skins(self, src_row: int):
+        """Pick a per-set costume for each character in one match line.
+
+        A row can hold up to four characters across two players, which is why
+        this is a dialog rather than a column in the table. Leaving a costume on
+        "(preferred)" writes no ``:Alt`` into the line, keeping it short.
+        """
+        line = self._vod_model.text_at(src_row)
+        parsed = _parse_vod_player_skins(line)
+        if not parsed:
+            self._log("[Set costumes: could not parse that line]\n")
+            return
+
+        _, players = load_player_db()
+        db = {name.lower(): entries for name, entries in players.items()}
+
+        def preferred_label(player: str, char: str) -> str:
+            """The costume this character renders as today, for the placeholder."""
+            entries = db.get(player.lower().removesuffix(" [l]"), [])
+            matches = [split_pref(sk) for c, sk in entries if c.upper() == char.upper()]
+            if not matches:
+                return ""
+            alt = next((st for st, pref in matches if pref), matches[0][0])
+            return alt or ""
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Set costumes for this set")
+        lay = QtWidgets.QVBoxLayout(dlg)
+        lay.addWidget(_muted("Leave a costume on \u201c(preferred)\u201d to use the "
+                             "player's default from the player database."))
+        form = QtWidgets.QFormLayout()
+        combos = []          # (player_slot, char, combo)
+        for slot, (name, chars) in enumerate(parsed):
+            for char, skin in chars:
+                combo = QtWidgets.QComboBox()
+                combo.setMinimumWidth(160)
+                pref = preferred_label(name, char)
+                combo.addItem(f"(preferred{': ' + pref if pref else ''})", "")
+                labels = [skin_label(st) for st in get_skins_for_char(char)]
+                for lbl in labels:
+                    combo.addItem(lbl, lbl)
+                if skin:
+                    # Accept whatever the line already says, even a stale alt
+                    hit = stem_for_label(char, skin)
+                    want = hit if hit else skin
+                    if want not in labels:
+                        combo.addItem(want, want)
+                    combo.setCurrentText(want)
+                form.addRow(f"{name} \u2014 {char}", combo)
+                combos.append((slot, char, combo))
+        lay.addLayout(form)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        lay.addWidget(buttons)
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+
+        per_player = [[] for _ in parsed]
+        for slot, char, combo in combos:
+            per_player[slot].append((char, combo.currentData() or None))
+        new_line = _rewrite_vod_players(line, per_player)
+        if new_line == line:
+            return
+        self._vod_model.setData(self._vod_model.index(src_row, 5), new_line,
+                                Qt.ItemDataRole.EditRole)
+        self._log(f"[Set costumes: {new_line}]\n")
 
     def _refresh_vod_files(self):
         vod_dir = ROOT / "Vod_Names"
@@ -2000,7 +3267,7 @@ class UltimateWindow(QtWidgets.QMainWindow):
             if stripped.startswith("# ABBREV:"):
                 self._vod_abbrev = stripped[len("# ABBREV:"):].strip()
             elif stripped and not stripped.startswith("#") and " - " in stripped:
-                self._vod_event_name = stripped.split(" - ")[0].strip()
+                self._vod_event_name = self._derive_vod_event_name(stripped)
                 break
         lines = [l for l in content.splitlines() if l.strip()]
         self._vod_suppress_autosave = True
@@ -2010,9 +3277,42 @@ class UltimateWindow(QtWidgets.QMainWindow):
             self._vod_suppress_autosave = False
         self._vod_update_delete_btn()
 
+    def _derive_vod_event_name(self, line: str) -> str:
+        """The event-name prefix of a match line.
+
+        The current format puts " - " between the event and the round, so the
+        first segment is the event. Older files separate them with a space, and
+        splitting those on " - " hands back "{event} {round}" -- which then gets
+        abbreviated away with the event, or leaves the generator nothing to
+        parse. The Thumbnails tab already knows the event name, so prefer that
+        whenever the line actually starts with it.
+        """
+        configured = ""
+        if hasattr(self, "_thumb_event_name"):
+            configured = self._thumb_event_name.text().strip()
+        if configured:
+            if line.startswith(configured):
+                return configured
+            # Files often punctuate the number differently from the series
+            # template ("CR Clash #77" in the file, "CR Clash 77" from the tab),
+            # so fall back to comparing letters and digits only, and return the
+            # slice of the line that consumed them -- the file's own spelling is
+            # what the rest of the line is prefixed with.
+            want = "".join(c for c in configured if c.isalnum()).lower()
+            if want:
+                seen = ""
+                for i, ch in enumerate(line):
+                    if ch.isalnum():
+                        seen += ch.lower()
+                        if not want.startswith(seen):
+                            break
+                        if seen == want:
+                            return line[:i + 1]
+        return line.split(" - ")[0].strip()
+
     def _vod_add_new_row(self):
         pos = self._vod_model.add_blank()
-        src_idx = self._vod_model.index(pos, 2)
+        src_idx = self._vod_model.index(pos, 5)
         proxy_idx = self._vod_proxy.mapFromSource(src_idx)
         self._vod_view.scrollTo(proxy_idx)
         self._vod_view.setCurrentIndex(proxy_idx)
@@ -2125,18 +3425,53 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._top8_char_picker.setToolTip(
             "Pick a character, then Copy to paste the exact spelling into the Top 8 data")
         self._refresh_top8_char_picker()
+        self._top8_char_picker.activated.connect(self._copy_top8_char)
+        self._top8_char_picker.currentTextChanged.connect(
+            lambda *_: self._refresh_top8_skin_picker(keep=False))
         t8_char_row.addWidget(self._top8_char_picker)
         t8_crb = QtWidgets.QPushButton("⟳")
         t8_crb.setObjectName("tool")
         t8_crb.setToolTip("Refresh character list")
         t8_crb.clicked.connect(self._refresh_top8_char_picker)
         t8_char_row.addWidget(t8_crb)
+        t8_char_row.addWidget(QtWidgets.QLabel("Costume:"))
+        self._top8_skin_picker = QtWidgets.QComboBox()
+        self._top8_skin_picker.setMinimumWidth(90)
+        self._top8_skin_picker.setToolTip(
+            "Optional costume override — picking one copies Character:Alt to the clipboard.\n"
+            "Leave blank to use the player's preferred costume.")
+        self._refresh_top8_skin_picker()
+        self._top8_skin_picker.activated.connect(self._copy_top8_char)
+        self._top8_skin_picker.currentTextChanged.connect(self._refresh_top8_skin_preview)
+        t8_char_row.addWidget(self._top8_skin_picker)
         t8_cc = QtWidgets.QPushButton("Copy")
-        t8_cc.setToolTip("Copy the selected character name to the clipboard")
+        t8_cc.setToolTip("Copy the selected character (with costume, if chosen) to the clipboard")
         t8_cc.clicked.connect(self._copy_top8_char)
         t8_char_row.addWidget(t8_cc)
         t8_char_row.addStretch(1)
-        ctxt.addLayout(t8_char_row)
+
+        # Preview to the left of the row, as on the Thumbnails and Player
+        # Database tabs: an alt number alone does not tell you what the render
+        # looks like.
+        t8_picker_area = QtWidgets.QHBoxLayout()
+        self._top8_skin_preview_label = QtWidgets.QLabel()
+        self._top8_skin_preview_label.setFixedSize(200, 200)
+        self._top8_skin_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._top8_skin_preview_label.setStyleSheet(
+            f"background-color: {_BG3}; border-radius: 4px;")
+        self._top8_skin_preview_label.setToolTip(
+            "Preview of the selected costume (alt 1 when none is picked)")
+        t8_picker_area.addWidget(self._top8_skin_preview_label, 0,
+                                 Qt.AlignmentFlag.AlignTop)
+        t8_picker_area.addSpacing(16)
+        t8_rows = QtWidgets.QVBoxLayout()
+        t8_rows.addLayout(t8_char_row)
+        t8_rows.addStretch(1)
+        t8_picker_area.addLayout(t8_rows, 1)
+        ctxt.addLayout(t8_picker_area)
+        ctxt.addWidget(_muted(
+            "A character may carry a costume for this graphic after a colon "
+            "(e.g. Mario:5); without one the player's preferred costume is used."))
 
         self._top8_text = QtWidgets.QPlainTextEdit()
         self._top8_text.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
@@ -2144,8 +3479,21 @@ class UltimateWindow(QtWidgets.QMainWindow):
         Top8DataHighlighter(self._top8_text.document())
         ctxt.addWidget(self._top8_text)
         save_txt = QtWidgets.QPushButton("Save")
-        save_txt.clicked.connect(self._save_top8_text)
+        save_txt.setToolTip("Write the data now (it also saves on its own as you type)")
+        save_txt.clicked.connect(lambda: self._save_top8_text())
         ctxt.addWidget(save_txt)
+
+        # One flag guards every programmatic write to the three editors below,
+        # so loading a file or populating the config form never saves it back.
+        self._top8_suppress_autosave = False
+        self._top8_text_save_timer = QtCore.QTimer(self)
+        self._top8_text_save_timer.setSingleShot(True)
+        self._top8_text_save_timer.setInterval(800)
+        self._top8_text_save_timer.timeout.connect(
+            lambda: self._save_top8_text(auto=True))
+        self._top8_text.textChanged.connect(self._on_top8_text_edit)
+
+        self._build_top8_preview_section(lay)
 
         chtml = CollapsibleBox("Top 8 HTML Result", collapsed=False)
         lay.addWidget(chtml)
@@ -2174,7 +3522,7 @@ class UltimateWindow(QtWidgets.QMainWindow):
             "The browser preview is for spot-checking data (names, placements), not pixel-perfect layout. "
             "Use Ctrl + + to zoom in, Ctrl+0 to reset."))
 
-        self._build_top8_layout_config(chtml)
+        self._build_default_top8_config(chtml)
 
         chtml_src = CollapsibleBox("HTML Source", collapsed=True)
         chtml.addWidget(chtml_src)
@@ -2184,10 +3532,20 @@ class UltimateWindow(QtWidgets.QMainWindow):
         HtmlHighlighter(self._top8_html_text.document())
         chtml_src.addWidget(self._top8_html_text)
         save_html = QtWidgets.QPushButton("Save")
-        save_html.clicked.connect(self._save_top8_html)
+        save_html.setToolTip("Write the HTML now (it also saves on its own as you type)")
+        save_html.clicked.connect(lambda: self._save_top8_html())
         chtml_src.addWidget(save_html)
 
+        self._top8_html_save_timer = QtCore.QTimer(self)
+        self._top8_html_save_timer.setSingleShot(True)
+        self._top8_html_save_timer.setInterval(800)
+        self._top8_html_save_timer.timeout.connect(
+            lambda: self._save_top8_html(auto=True))
+        self._top8_html_text.textChanged.connect(self._on_top8_html_edit)
+
         self._top8_html_file.currentTextChanged.connect(self._load_top8_html)
+        self._top8_html_file.currentTextChanged.connect(
+            lambda *_: self._refresh_top8_preview())
         self._d8_last_html_file = None
         lay.addStretch(1)
 
@@ -2208,6 +3566,9 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._refresh_top8_files()
 
     def _get_top8_text_path(self) -> Path:
+        # The Default template is series-agnostic and reads its own sample data.
+        if self._top8_html_file.currentText() == "Default Top 8.html":
+            return ROOT / "Top_8_Texts" / "Default Top 8 HTML.txt"
         series = self._top8_series.currentText()
         for cfg in FETCH_EVENTS:
             if cfg["label"] == series:
@@ -2244,24 +3605,61 @@ class UltimateWindow(QtWidgets.QMainWindow):
             path.write_text(content, encoding="utf-8")
             self._log(f"[Auto-created {path.name}]\n")
         content = path.read_text(encoding="utf-8")
-        self._top8_text.setPlainText(content)
+        # Nesting-safe: _load_top8_text is called both on its own and from inside
+        # _load_top8_html, which has already set the flag.
+        prev = self._top8_suppress_autosave
+        self._top8_suppress_autosave = True
+        try:
+            self._top8_text.setPlainText(content)
+        finally:
+            self._top8_suppress_autosave = prev
         m = re.search(r'(?m)^Event name:\t*(.*)$', content)
         self._top8_event_name.setText(
             m.group(1).strip() if m and m.group(1).strip()
             else self._top8_series.currentText())
 
-    def _save_top8_text(self):
+    def _on_top8_text_edit(self):
+        if self._top8_suppress_autosave:
+            return
+        self._top8_text_save_timer.start()
+
+    def _on_top8_html_edit(self):
+        if self._top8_suppress_autosave:
+            return
+        self._top8_html_save_timer.start()
+
+    def _flush_top8_autosave(self):
+        """Write immediately if any debounced Top 8 save is still pending."""
+        for name in ("_top8_text_save_timer", "_top8_html_save_timer",
+                     "_top8_config_save_timer"):
+            timer = getattr(self, name, None)
+            if timer is not None and timer.isActive():
+                timer.stop()
+                timer.timeout.emit()
+
+    def _save_top8_text(self, auto: bool = False):
         path = self._get_top8_text_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._top8_text.toPlainText(), encoding="utf-8")
-        self._log(f"[Saved {path.name}]\n")
+        self._log(f"[{'Auto-saved' if auto else 'Saved'}: {path.name}]\n")
+        # The preview reads this file, so it is stale until it reloads.
+        self._refresh_top8_preview()
 
     def _refresh_top8_html_files(self):
         results_dir = ROOT / "Top_8_Results"
         series = self._top8_series.currentText()
         all_files = sorted(f.name for f in results_dir.glob("*.html")) if results_dir.exists() else []
-        series_files = [f for f in all_files if f.startswith(series)]
-        files = series_files or all_files
+        # List the event's own files first; keep the generic Default last.
+        #
+        # Unlike Rivals, this game's templates are named by abbreviation ("IFN
+        # Top 8.HTML" for the "Immortal Fight Night" series), so a prefix match
+        # finds nothing for most series. Falling back to the full list keeps
+        # every real template reachable -- hiding them behind Default would be
+        # worse than showing too many.
+        default = "Default Top 8.html"
+        series_files = [f for f in all_files if f.startswith(series) and f != default]
+        listed = series_files or [f for f in all_files if f != default]
+        files = listed + ([default] if default in all_files else [])
         cur = self._top8_html_file.currentText()
         self._top8_html_file.blockSignals(True)
         self._top8_html_file.clear()
@@ -2269,11 +3667,14 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._top8_html_file.blockSignals(False)
         if files:
             self._top8_html_warning.setText("")
+            # Default to a real template when one is listed, falling back to the
+            # generic Default only when nothing else exists. Keep an explicit
+            # choice the user already made, Default included.
             if cur in files:
                 sel = cur
-            elif series_files:
-                top8 = [f for f in series_files if "Top 8" in f]
-                sel = top8[-1] if top8 else series_files[-1]
+            elif listed:
+                top8 = [f for f in listed if "Top 8" in f]
+                sel = top8[-1] if top8 else listed[-1]
             else:
                 sel = files[0]
             self._top8_html_file.setCurrentText(sel)
@@ -2291,23 +3692,35 @@ class UltimateWindow(QtWidgets.QMainWindow):
         path = ROOT / "Top_8_Results" / name
         if not path.exists():
             return
-        self._top8_html_text.setPlainText(path.read_text(encoding="utf-8"))
-        if name != self._d8_last_html_file:
-            self._d8_last_html_file = name
-            self._load_top8_layout_config()
-            self._load_top8_text()
+        raw = path.read_bytes()
+        # Qt strips a leading BOM on setPlainText, so remember it here and write
+        # it back in _save_top8_html -- otherwise every save silently drops it.
+        self._top8_html_bom = raw.startswith(b"\xef\xbb\xbf")
+        prev = self._top8_suppress_autosave
+        self._top8_suppress_autosave = True
+        try:
+            self._top8_html_text.setPlainText(raw.decode("utf-8-sig"))
+            if name != self._d8_last_html_file:
+                self._d8_last_html_file = name
+                self._load_default_top8_config()
+                self._load_top8_text()
+        finally:
+            self._top8_suppress_autosave = prev
 
-    def _save_top8_html(self):
+    def _save_top8_html(self, auto: bool = False):
         name = self._top8_html_file.currentText()
         if not name:
-            self._log("[Error: no HTML file selected]\n")
+            if not auto:
+                self._log("[Error: no HTML file selected]\n")
             return
         path = ROOT / "Top_8_Results" / name
-        path.write_text(self._top8_html_text.toPlainText(), encoding="utf-8")
-        self._log(f"[Saved {name}]\n")
+        encoding = "utf-8-sig" if getattr(self, "_top8_html_bom", False) else "utf-8"
+        path.write_text(self._top8_html_text.toPlainText(), encoding=encoding)
+        self._log(f"[{'Auto-saved' if auto else 'Saved'}: {name}]\n")
+        self._refresh_top8_preview()
 
     # --- Top 8 layout config (edits CSS in the selected HTML by element id) ---
-    def _build_top8_layout_config(self, parent_box):
+    def _build_default_top8_config(self, parent_box):
         cbox = CollapsibleBox("Layout Config", collapsed=True)
         parent_box.addWidget(cbox)
 
@@ -2321,7 +3734,12 @@ class UltimateWindow(QtWidgets.QMainWindow):
             self._d8_event.append(d)
         self._d8_renders = [{"top": _hline("", 60), "left": _hline("", 60), "height": _hline("", 60)} for _ in range(8)]
         self._d8_nums = [{"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60)} for _ in range(8)]
-        self._d8_names = [{"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60)} for _ in range(8)]
+        self._d8_names = [{"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60),
+                           "wrap": QtWidgets.QCheckBox()} for _ in range(8)]
+        for f in self._d8_names:
+            f["wrap"].setToolTip(
+                "When on, this player's name wraps onto multiple lines at spaces "
+                "instead of staying on a single line.")
         self._d8_sponsors = [{"top": _hline("", 60), "left": _hline("", 60), "size": _hline("", 60)} for _ in range(8)]
 
         colbox = QtWidgets.QGroupBox("Colors")
@@ -2350,9 +3768,12 @@ class UltimateWindow(QtWidgets.QMainWindow):
         cbox.addWidget(evbox)
 
         def slot_section(title, vars_list, col3_lbl):
+            """Build one placement table. The caller places it; see the flow below."""
+            has_wrap = any("wrap" in f for f in vars_list)
             gb = QtWidgets.QGroupBox(title)
             g = QtWidgets.QGridLayout(gb)
-            for ci, txt in enumerate(["Place", "Top %", "Left %", col3_lbl]):
+            headers = ["Place", "Top %", "Left %", col3_lbl] + (["Wrap"] if has_wrap else [])
+            for ci, txt in enumerate(headers):
                 g.addWidget(_muted(txt), 0, ci)
             for i, f in enumerate(vars_list):
                 g.addWidget(QtWidgets.QLabel(str(i + 1)), i + 1, 0)
@@ -2360,25 +3781,76 @@ class UltimateWindow(QtWidgets.QMainWindow):
                 g.addWidget(f["left"], i + 1, 2)
                 third = "height" if "height" in f else "size"
                 g.addWidget(f[third], i + 1, 3)
-            g.setColumnStretch(4, 1)
-            cbox.addWidget(gb)
+                if "wrap" in f:
+                    g.addWidget(f["wrap"], i + 1, 4)
+            # No stretch column here: in a flow layout the box is placed at its
+            # size hint, so slack would only pad it and fit fewer per row.
+            gb.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed,
+                             QtWidgets.QSizePolicy.Policy.Fixed)
+            return gb
 
-        slot_section("Character Renders", self._d8_renders, "Height %")
-        slot_section("Placement Numbers", self._d8_nums, "Size px")
-        slot_section("Player Names", self._d8_names, "Size px")
-        slot_section("Sponsors", self._d8_sponsors, "Size px")
+        # The four placement tables are the same shape and eight rows tall each;
+        # stacked they run off the screen, so they flow across the width instead
+        # and rewrap as the window is resized.
+        slots_host = QtWidgets.QWidget()
+        slots_flow = FlowLayout(slots_host)
+        for gb in (slot_section("Character Renders", self._d8_renders, "Height %"),
+                   slot_section("Placement Numbers", self._d8_nums, "Size px"),
+                   slot_section("Player Names", self._d8_names, "Size px"),
+                   slot_section("Sponsors", self._d8_sponsors, "Size px")):
+            slots_flow.addWidget(gb)
+        cbox.addWidget(slots_host)
 
         apply_btn = QtWidgets.QPushButton("Apply Config && Save")
         apply_btn.setObjectName("accent")
-        apply_btn.clicked.connect(self._apply_top8_layout_config)
+        apply_btn.clicked.connect(lambda: self._apply_default_top8_config())
         cbox.addWidget(apply_btn)
 
-    def _load_top8_layout_config(self):
+        # Auto-save layout config: any field edit (debounced) re-applies to the
+        # HTML and writes it. Programmatic loads are guarded by the suppress flag.
+        self._top8_config_save_timer = QtCore.QTimer(self)
+        self._top8_config_save_timer.setSingleShot(True)
+        self._top8_config_save_timer.setInterval(700)
+        self._top8_config_save_timer.timeout.connect(
+            lambda: self._apply_default_top8_config(auto=True))
+        color_fields = [self._d8_label_color, self._d8_sponsor_color]
+        line_fields = []
+        for f in self._d8_event:
+            line_fields += [f["top"], f["left"], f["size"]]
+            if "color" in f:
+                color_fields.append(f["color"])
+        for group in (self._d8_renders, self._d8_nums, self._d8_names, self._d8_sponsors):
+            for f in group:
+                line_fields += [f["top"], f["left"], f[next(
+                    k for k in ("height", "size") if k in f)]]
+        for e in line_fields:
+            e.textChanged.connect(self._on_top8_config_edit)
+        for cf in color_fields:
+            cf.edit.textChanged.connect(self._on_top8_config_edit)
+        for f in self._d8_names:
+            f["wrap"].toggled.connect(self._on_top8_config_edit)
+
+    def _on_top8_config_edit(self, *_):
+        if self._top8_suppress_autosave:
+            return
+        self._top8_config_save_timer.start()
+
+    def _load_default_top8_config(self):
+        # Populating the form fires textChanged on every field, which would
+        # schedule an auto-save of the very file being read. Its only caller,
+        # _load_top8_html, already holds _top8_suppress_autosave for exactly
+        # that reason -- so do not set the flag again here.
         html = self._top8_html_text.toPlainText()
 
         def get_style(elem_id):
             m = re.search(rf'id="{re.escape(elem_id)}"[^>]*?style="([^"]*)"', html)
             return m.group(1) if m else ""
+
+        def wraps(style):
+            # Per-element wrap = inline white-space:normal overriding the
+            # .label rule's nowrap. No inline declaration -> inherits nowrap.
+            m = re.search(r'white-space:\s*(nowrap|normal)', style)
+            return bool(m) and m.group(1) == "normal"
 
         def num_prop(style, name):
             m = re.search(rf'{re.escape(name)}:\s*([\d.]+)', style)
@@ -2416,12 +3888,13 @@ class UltimateWindow(QtWidgets.QMainWindow):
             self._d8_names[i]["top"].setText(num_prop(s, "top"))
             self._d8_names[i]["left"].setText(num_prop(s, "left"))
             self._d8_names[i]["size"].setText(num_prop(s, "font-size"))
+            self._d8_names[i]["wrap"].setChecked(wraps(s))
             s = get_style(f"place-{n}-sponsor")
             self._d8_sponsors[i]["top"].setText(num_prop(s, "top"))
             self._d8_sponsors[i]["left"].setText(num_prop(s, "left"))
             self._d8_sponsors[i]["size"].setText(num_prop(s, "font-size"))
 
-    def _apply_top8_layout_config(self):
+    def _apply_default_top8_config(self, auto: bool = False):
         html = self._top8_html_text.toPlainText()
 
         def patch_style(h, elem_id, props):
@@ -2432,6 +3905,15 @@ class UltimateWindow(QtWidgets.QMainWindow):
                         style = re.sub(r'(color:\s*)#[0-9a-fA-F]+', rf'\g<1>{val}', style)
                     elif unit in ("%", "px"):
                         style = re.sub(rf'({re.escape(prop)}:\s*)[\d.]+({re.escape(unit)})', rf'\g<1>{val}\2', style)
+                    elif unit == "keyword":
+                        # Drop any existing declaration, then re-add unless val is
+                        # None (None = inherit the class default, e.g. nowrap).
+                        style = re.sub(rf'\s*{re.escape(prop)}:\s*[^;]*;?', '', style)
+                        if val is not None:
+                            style = style.rstrip()
+                            if style and not style.endswith(';'):
+                                style += ';'
+                            style = (style + f' {prop}: {val};').strip()
                 return m.group(1) + style + '"'
             return re.sub(rf'(id="{re.escape(elem_id)}"[^>]*?style=")([^"]*)"', repl, h)
 
@@ -2463,32 +3945,65 @@ class UltimateWindow(QtWidgets.QMainWindow):
             f = self._d8_names[i]
             html = patch_style(html, f"place-{n}-name", [
                 ("top", f["top"].text(), "%"), ("left", f["left"].text(), "%"),
-                ("font-size", f["size"].text(), "px")])
+                ("font-size", f["size"].text(), "px"),
+                ("white-space", "normal" if f["wrap"].isChecked() else None, "keyword")])
             f = self._d8_sponsors[i]
             html = patch_style(html, f"place-{n}-sponsor", [
                 ("top", f["top"].text(), "%"), ("left", f["left"].text(), "%"),
                 ("font-size", f["size"].text(), "px")])
 
-        self._top8_html_text.setPlainText(html)
-        self._save_top8_html()
+        prev = self._top8_suppress_autosave
+        self._top8_suppress_autosave = True
+        try:
+            self._top8_html_text.setPlainText(html)
+        finally:
+            self._top8_suppress_autosave = prev
+        self._save_top8_html(auto=auto)
+
+    def _ensure_http_server(self) -> int:
+        """Start the local preview server if needed; return its port.
+
+        The page fetches its data file and the player CSV, which fetch() refuses
+        to do over file://, so both the browser button and the embedded preview
+        go through here.
+        """
+        if not self._http_server:
+            handler = functools.partial(_PreviewHTTPRequestHandler,
+                                        directory=str(ROOT))
+            # Threaded, and loopback-only. This used to be a single-threaded
+            # TCPServer, which a browser reliably wedged: it opens several
+            # sockets at once (parallel asset fetches, keep-alive, and
+            # speculative preconnects that send no request at all). One idle
+            # socket blocked the only handler thread, the 5-deep listen backlog
+            # filled, and Windows then refused every further connection -- the
+            # page just never loaded. Binding 127.0.0.1 instead of "" also stops
+            # the whole generator folder being served to the local network; the
+            # URL is localhost either way.
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            server.daemon_threads = True
+            port = server.server_address[1]
+            threading.Thread(target=server.serve_forever, daemon=True,
+                             name="top8-http-server").start()
+            self._http_server = server
+            self._http_server_port = port
+            self._log(f"[Local server started on port {port}]\n")
+        return self._http_server_port
+
+    def _top8_preview_url(self, name: str) -> str:
+        """Server URL for one Top 8 HTML file.
+
+        Event names carry spaces, and can carry "#" or "&" -- all of which change
+        what the browser asks for unless the path is encoded here.
+        """
+        port = self._ensure_http_server()
+        return f"http://localhost:{port}/Top_8_Results/{urllib.parse.quote(name)}"
 
     def _open_top8_html_in_browser(self):
         name = self._top8_html_file.currentText()
         if not name:
             self._log("[Error: no HTML file selected]\n")
             return
-        if not self._http_server:
-            with socket.socket() as s:
-                s.bind(("", 0))
-                port = s.getsockname()[1]
-            handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(ROOT))
-            server = socketserver.TCPServer(("", port), handler)
-            server.allow_reuse_address = True
-            threading.Thread(target=server.serve_forever, daemon=True, name="top8-http-server").start()
-            self._http_server = server
-            self._http_server_port = port
-            self._log(f"[Local server started on port {port}]\n")
-        url = f"http://localhost:{self._http_server_port}/Top_8_Results/{name}"
+        url = self._top8_preview_url(name)
         webbrowser.open(url)
         self._log(f"[Opened {url}]\n")
 
@@ -2579,6 +4094,8 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._posts_text = QtWidgets.QPlainTextEdit()
         self._posts_text.setMinimumHeight(300)
         ctext.addWidget(self._posts_text)
+
+        self._build_notes_section(lay)
         lay.addStretch(1)
 
         self._posts_active_file = None
@@ -2649,10 +4166,115 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._update_posts_name()
         self._save_settings()
 
+    def _build_notes_section(self, parent_layout):
+        """A free-form scratchpad kept per series, beside that series' post text.
+
+        Deliberately unstructured -- it exists for whatever doesn't fit the
+        generated post (running order, a recurring caster note, a reminder for
+        next week). Keyed to the series, not the event number, so it carries over
+        from one week's event to the next instead of starting empty every time.
+        It saves to Results_Posts/{Series} Notes.txt, next to the post files.
+        """
+        box = CollapsibleBox("Notes", collapsed=False)
+        parent_layout.addWidget(box)
+
+        self._notes_path_label = _muted("")
+        box.addWidget(self._notes_path_label)
+
+        self._notes_text = QtWidgets.QPlainTextEdit()
+        self._notes_text.setMinimumHeight(500)
+        self._notes_text.setPlaceholderText(
+            "Notes for this series \u2014 saved automatically, one file per series, "
+            "kept across event numbers.")
+        box.addWidget(self._notes_text)
+
+        row = QtWidgets.QHBoxLayout()
+        save = QtWidgets.QPushButton("Save")
+        save.setToolTip("Write the notes now (they also save on their own as you type)")
+        save.clicked.connect(lambda: self._save_notes())
+        row.addWidget(save)
+        row.addStretch(1)
+        box.addLayout(row)
+
+        # The path the buffer was loaded from. Every write goes here rather than
+        # to whatever series the form currently shows, so a debounced save that
+        # lands after the user switches series cannot write one series' notes
+        # into another's file.
+        self._notes_path = None
+        self._notes_suppress_autosave = False
+        self._notes_save_timer = QtCore.QTimer(self)
+        self._notes_save_timer.setSingleShot(True)
+        self._notes_save_timer.setInterval(800)
+        self._notes_save_timer.timeout.connect(lambda: self._save_notes(auto=True))
+        self._notes_text.textChanged.connect(self._on_notes_edit)
+
+    def _notes_path_for(self, series: str):
+        return ROOT / "Results_Posts" / f"{series} Notes.txt"
+
+    def _on_notes_edit(self):
+        if self._notes_suppress_autosave or self._notes_path is None:
+            return
+        self._notes_save_timer.start()
+
+    def _flush_notes_autosave(self):
+        """Write immediately if a debounced save is still pending."""
+        timer = getattr(self, "_notes_save_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+            self._save_notes(auto=True)
+
+    def _save_notes(self, auto: bool = False):
+        path = self._notes_path
+        if path is None:
+            if not auto:
+                self._log("[Error: no event selected]\n")
+            return
+        text = self._notes_text.toPlainText()
+        # An emptied note should remove the file rather than leave a blank one
+        # lying next to the post files.
+        if not text.strip():
+            if path.exists():
+                path.unlink()
+                self._log(f"[Removed empty {path.name}]\n")
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text.rstrip() + "\n", encoding="utf-8")
+        self._log(f"[{'Auto-saved' if auto else 'Saved'}: {path.name}]\n")
+
+    def _load_notes(self):
+        """Point the scratchpad at the selected series' notes file.
+
+        Called from _update_posts_name, which also runs on every keystroke in the
+        event-number box -- but the notes belong to the series, so re-reading then
+        would throw away what is being typed and move the cursor. Reloading only
+        when the path actually changes keeps the buffer alone, and is also where
+        the outgoing series' pending save gets committed.
+        """
+        if not hasattr(self, "_notes_text"):
+            return
+        series = self._posts_series.currentText().strip()
+        path = self._notes_path_for(series) if series else None
+        if path == self._notes_path:
+            return
+        self._flush_notes_autosave()
+        self._notes_suppress_autosave = True
+        try:
+            self._notes_path = path
+            if path is None:
+                self._notes_text.clear()
+                self._notes_path_label.setText("Select a series to keep notes for it.")
+                return
+            self._notes_text.setPlainText(
+                path.read_text(encoding="utf-8").rstrip() if path.exists() else "")
+            self._notes_path_label.setText(f"Results_Posts/{path.name}")
+        finally:
+            self._notes_suppress_autosave = False
+
     def _update_posts_name(self):
         template = self._posts_event_map.get(self._posts_series.currentText(), "{n}")
         self._posts_event_name.setText(template.format(n=self._posts_num.text().strip()))
         self._posts_load_file()
+        self._load_notes()
 
     def _posts_load_file(self):
         event_name = self._posts_event_name.text().strip()
@@ -2811,11 +4433,16 @@ class UltimateWindow(QtWidgets.QMainWindow):
         rv.addWidget(self._editing_label)
 
         self._char_tree = QtWidgets.QTreeWidget()
-        self._char_tree.setColumnCount(2)
-        self._char_tree.setHeaderLabels(["Character", "Alt #"])
+        self._char_tree.setColumnCount(3)
+        self._char_tree.setHeaderLabels(["Character", "Alt #", "Preferred"])
         self._char_tree.setColumnWidth(0, 180)
+        self._char_tree.setColumnWidth(1, 120)
+        self._char_tree.setColumnWidth(2, 80)
         self._char_tree.setRootIsDecorated(False)
+        # Guards the itemChanged handler while we rebuild rows ourselves.
+        self._char_tree_updating = False
         self._char_tree.currentItemChanged.connect(self._on_char_tree_select)
+        self._char_tree.itemChanged.connect(self._on_char_tree_check)
         rv.addWidget(self._char_tree)
 
         tb = QtWidgets.QHBoxLayout()
@@ -2825,6 +4452,11 @@ class UltimateWindow(QtWidgets.QMainWindow):
         rmb = QtWidgets.QPushButton("Remove Selected")
         rmb.clicked.connect(self._remove_char_entry)
         tb.addWidget(rmb)
+        prefb = QtWidgets.QPushButton("Set Preferred")
+        prefb.setToolTip("Use this costume whenever a VOD line doesn't name one for "
+                         "this character (same as ticking its Preferred box)")
+        prefb.clicked.connect(self._set_preferred_entry)
+        tb.addWidget(prefb)
         tb.addStretch(1)
         up = QtWidgets.QPushButton("Move Up")
         up.clicked.connect(lambda: self._move_char_entry(-1))
@@ -2907,6 +4539,8 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._char_tree.clear()
         self._editing_label.setText("Select a player")
         self._db_selected_player = None
+        # Which players exist gates Add Missing Costumes on the other tab.
+        self._update_import_btn()
 
     def _refresh_player_list(self):
         query = self._player_search.text().lower()
@@ -2926,10 +4560,112 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._populate_char_tree(name)
         self._clear_form()
 
+    def _sort_char_entries(self, name: str):
+        """Group a player's rows by character, in place.
+
+        The sort is stable, so a character's own costumes keep their relative
+        order -- which matters, because the first of them is the fallback
+        default when none is marked preferred. Sorting the model rather than
+        just the view keeps tree row indexes usable as model indexes.
+        """
+        entries = self._db_players.get(name)
+        if entries:
+            entries.sort(key=lambda e: e[0].casefold())
+
     def _populate_char_tree(self, name: str):
+        """List a player's character/costume rows, checking the preferred one.
+
+        A character listed more than once has several costumes available for
+        per-set use; the checked row (or the first, if none is starred) is the
+        one used when a VOD line doesn't name a costume.
+        """
+        self._sort_char_entries(name)
         self._char_tree.clear()
-        for char, alt in self._db_players.get(name, []):
-            QtWidgets.QTreeWidgetItem(self._char_tree, [char, alt or "(none)"])
+        entries = self._db_players.get(name, [])
+        # Which row wins for each character, mirroring skin_utils.preferred_stem
+        winner: dict[str, int] = {}
+        for idx, (char, alt) in enumerate(entries):
+            _stem, is_pref = split_pref(alt)
+            key = char.upper()
+            if is_pref and key not in winner:
+                winner[key] = idx
+        for idx, (char, alt) in enumerate(entries):
+            key = char.upper()
+            if key not in winner:
+                winner[key] = idx
+        counts: dict[str, int] = {}
+        for char, _ in entries:
+            counts[char.upper()] = counts.get(char.upper(), 0) + 1
+        # Rebuilding rows fires itemChanged for every setCheckState; ignore those.
+        self._char_tree_updating = True
+        try:
+            for idx, (char, alt) in enumerate(entries):
+                stem, _ = split_pref(alt)
+                lbl = stem if stem else "(none)"
+                key = char.upper()
+                item = QtWidgets.QTreeWidgetItem(self._char_tree, [char, lbl])
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                # Exactly one row per character is checked: the explicitly
+                # preferred one, else the first listed. Something always wins,
+                # so the box shows which costume is actually in use.
+                chosen = winner.get(key) == idx
+                item.setCheckState(
+                    2, Qt.CheckState.Checked if chosen else Qt.CheckState.Unchecked)
+                item.setToolTip(2, (
+                    "This costume is used when a VOD line doesn't name one"
+                    if chosen else
+                    f"Tick to make this {char}'s default costume"))
+                if chosen and counts[key] > 1:
+                    font = item.font(1)
+                    font.setBold(True)
+                    item.setFont(1, font)
+        finally:
+            self._char_tree_updating = False
+
+    def _on_char_tree_check(self, item, column):
+        """Tick a Preferred box to make that costume the character's default."""
+        if column != 2 or self._char_tree_updating:
+            return
+        idx = self._char_tree.indexOfTopLevelItem(item)
+        if idx < 0:
+            return
+        if item.checkState(2) != Qt.CheckState.Checked:
+            # Every character always has a default, so a box can't simply be
+            # cleared -- pick a different row instead. Restore what we drew.
+            self._populate_char_tree(self._db_selected_player)
+            return
+        self._set_preferred_index(idx)
+
+    def _set_preferred_entry(self):
+        """Button path: make the selected row its character's default costume."""
+        idx = self._char_tree.indexOfTopLevelItem(self._char_tree.currentItem())
+        if idx < 0 or not self._db_selected_player:
+            self._log("[Select a costume row first]\n")
+            return
+        self._set_preferred_index(idx)
+
+    def _set_preferred_index(self, idx: int):
+        """Mark entry ``idx`` preferred, clearing the character's other rows.
+
+        Shared by the Preferred checkbox and the Set Preferred button so the two
+        can't drift apart.
+        """
+        if not self._db_selected_player:
+            return
+        entries = self._db_players[self._db_selected_player]
+        if idx >= len(entries):
+            return
+        char = entries[idx][0]
+        for i, (c, alt) in enumerate(entries):
+            if c.upper() != char.upper():
+                continue
+            stem, _ = split_pref(alt)
+            entries[i] = (c, join_pref(stem, i == idx))
+        self._populate_char_tree(self._db_selected_player)
+        self._char_tree.setCurrentItem(self._char_tree.topLevelItem(idx))
+        self._autosave_player_db()
+        self._log(f"[Preferred costume for {char}: "
+                  f"{split_pref(entries[idx][1])[0]}]\n")
 
     def _confirm_add_player(self):
         name = self._new_player.text().strip()
@@ -2970,8 +4706,9 @@ class UltimateWindow(QtWidgets.QMainWindow):
         self._on_form_alt_change()
 
     def _on_form_alt_change(self, *_):
-        self._show_preview(self._form_char.currentText().strip(),
-                           self._form_alt.currentText().strip())
+        char = self._form_char.currentText().strip()
+        alt = self._form_alt.currentText().strip()
+        self._show_preview(skin_utils.render_stem(char, alt) if char and alt else "")
 
     def _on_char_tree_select(self, current, _prev=None):
         if current is None:
@@ -2980,28 +4717,39 @@ class UltimateWindow(QtWidgets.QMainWindow):
         alt = current.text(1)
         if alt == "(none)":
             alt = ""
-        self._show_preview(char, alt)
+        self._show_preview(skin_utils.render_stem(char, alt) if char and alt else "")
 
-    def _show_preview(self, char: str, alt: str):
-        if not char or not alt:
-            self._preview_label.clear()
+    def _show_preview(self, stem: str, label: QtWidgets.QLabel | None = None):
+        """Draw a render into a preview label (the Player Database one by default).
+
+        ``stem`` is a render filename without the extension, "Mario (5)" --
+        build it with skin_utils.render_stem rather than by hand.
+
+        The cache is keyed by size as well as stem, because the tabs show the
+        same renders at different sizes and a scaled pixmap can't be reused
+        across them without blurring.
+        """
+        label = label if label is not None else self._preview_label
+        if not stem:
+            label.clear()
             return
-        key = f"{char} ({alt})"
+        size = label.size()
+        key = (stem, size.width(), size.height())
         if key in self._preview_cache:
-            self._preview_label.setPixmap(self._preview_cache[key])
+            label.setPixmap(self._preview_cache[key])
             return
-        path = RENDERS_DIR / f"{key}.png"
+        path = RENDERS_DIR / f"{stem}.png"
         if not path.exists():
-            self._preview_label.clear()
+            label.clear()
             return
         pix = QtGui.QPixmap(str(path))
         if pix.isNull():
-            self._preview_label.clear()
+            label.clear()
             return
-        scaled = pix.scaled(self._preview_label.size(), Qt.AspectRatioMode.KeepAspectRatio,
+        scaled = pix.scaled(size, Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.SmoothTransformation)
         self._preview_cache[key] = scaled
-        self._preview_label.setPixmap(scaled)
+        label.setPixmap(scaled)
 
     def _add_char_entry(self):
         if not self._db_selected_player:
@@ -3012,7 +4760,17 @@ class UltimateWindow(QtWidgets.QMainWindow):
             self._log("[Select a character]\n")
             return
         alt = self._form_alt.currentText().strip()
-        self._db_players[self._db_selected_player].append((char, alt))
+        entries = self._db_players[self._db_selected_player]
+        # Adding a second costume for a character makes the default ambiguous, so
+        # pin the one that was already winning. Behaviour is then unchanged until
+        # the user explicitly stars a different one.
+        same = [i for i, (c, _) in enumerate(entries) if c.upper() == char.upper()]
+        if same and not any(split_pref(entries[i][1])[1] for i in same):
+            c0, a0 = entries[same[0]]
+            entries[same[0]] = (c0, join_pref(split_pref(a0)[0], True))
+            self._log(f"[{char} now has {len(same) + 1} costumes - "
+                      f"{split_pref(a0)[0]} kept as preferred]\n")
+        entries.append((char, alt))
         self._populate_char_tree(self._db_selected_player)
         self._autosave_player_db()
 
@@ -3025,7 +4783,8 @@ class UltimateWindow(QtWidgets.QMainWindow):
             return
         char, alt = chars[idx]
         self._form_char.setCurrentText(char)
-        self._form_alt.setCurrentText(alt)
+        # The star is a property of the row, not something to edit by hand.
+        self._form_alt.setCurrentText(split_pref(alt)[0])
         self._db_selected_char_idx = idx
         self._form_add_btn.setEnabled(False)
         self._form_edit_btn.setEnabled(True)
@@ -3037,7 +4796,10 @@ class UltimateWindow(QtWidgets.QMainWindow):
         alt = self._form_alt.currentText().strip()
         chars = self._db_players[self._db_selected_player]
         if self._db_selected_char_idx < len(chars):
-            chars[self._db_selected_char_idx] = (char, alt)
+            # Editing a row must not silently demote it: keep whatever preferred
+            # state it already had.
+            _old, was_pref = split_pref(chars[self._db_selected_char_idx][1])
+            chars[self._db_selected_char_idx] = (char, join_pref(alt, was_pref))
         self._populate_char_tree(self._db_selected_player)
         self._clear_form()
         self._autosave_player_db()
@@ -3058,11 +4820,20 @@ class UltimateWindow(QtWidgets.QMainWindow):
             return
         chars = self._db_players[self._db_selected_player]
         new_idx = idx + direction
-        if 0 <= new_idx < len(chars):
-            chars[idx], chars[new_idx] = chars[new_idx], chars[idx]
-            self._populate_char_tree(self._db_selected_player)
-            self._char_tree.setCurrentItem(self._char_tree.topLevelItem(new_idx))
-            self._autosave_player_db()
+        if not (0 <= new_idx < len(chars)):
+            return
+        # Rows are grouped by character now, so a swap across two characters
+        # would just be undone by the sort on the next repopulate. Reordering a
+        # character's own costumes -- which decides the fallback default when
+        # none is starred -- still works, and is what this is mainly for.
+        if chars[idx][0].upper() != chars[new_idx][0].upper():
+            self._log("[Rows are grouped by character; reorder a character's own "
+                      "costumes instead]\n")
+            return
+        chars[idx], chars[new_idx] = chars[new_idx], chars[idx]
+        self._populate_char_tree(self._db_selected_player)
+        self._char_tree.setCurrentItem(self._char_tree.topLevelItem(new_idx))
+        self._autosave_player_db()
 
     def _clear_form(self):
         self._form_char.setCurrentText("")
@@ -3085,6 +4856,8 @@ class UltimateWindow(QtWidgets.QMainWindow):
             self._log("[Auto-saved: player database]\n")
         except Exception as exc:
             self._log(f"[Error auto-saving player database: {exc}]\n")
+        # Adding a player here can unblock Add Missing Costumes on the other tab.
+        self._update_import_btn()
 
     # ================================================================== #
     #  Tab: Character Database (two-column alias -> filename)           #
@@ -3451,17 +5224,58 @@ class UltimateWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         self._flush_vod_autosave()
+        self._flush_notes_autosave()
         super().closeEvent(event)
 
 
+def _init_web_engine() -> None:
+    """Prepare QtWebEngine before the QApplication exists.
+
+    Qt requires AA_ShareOpenGLContexts to be set before the application is
+    constructed, and wants the module imported up front. Leaving it until the
+    first web view is created makes Qt reconfigure the top-level window at that
+    moment: on Windows the native window is destroyed and recreated, which looks
+    to the user like the whole app closing and reopening.
+
+    The import costs about 0.1s and starts no Chromium process -- that still
+    waits until a page is actually created, so the Top 8 preview stays as lazy
+    as it was.
+    """
+    QtCore.QCoreApplication.setAttribute(
+        Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+    try:
+        import PySide6.QtWebEngineWidgets  # noqa: F401  -- imported for its side effects
+    except ImportError:
+        pass  # the preview reports this itself; nothing else in the GUI needs it
+
+
 def main():
+    _init_web_engine()
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    # The Fusion combo-popup delegate paints the hovered/selected row from the
+    # palette's Highlight role, ignoring ::item stylesheet rules -- so set a
+    # bright Highlight here to make dropdown hovering clearly visible.
+    pal = app.palette()
+    pal.setColor(QtGui.QPalette.ColorRole.Highlight, QtGui.QColor(_HILITE))
+    pal.setColor(QtGui.QPalette.ColorRole.HighlightedText, QtGui.QColor("#ffffff"))
+    app.setPalette(pal)
+
     app.setStyleSheet(STYLESHEET)
     win = UltimateWindow()
-    win.show()
-    sys.exit(app.exec())
+    # Before show(): see prewarm_top8_preview.
+    win.prewarm_top8_preview()
+
+    if "--selftest" in sys.argv:
+        # Construct, show briefly, then quit 0 -- used to validate the build.
+        QtCore.QTimer.singleShot(0, app.quit)
+        win.show()
+        return app.exec()
+
+    win.showMaximized()
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

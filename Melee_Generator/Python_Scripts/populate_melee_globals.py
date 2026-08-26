@@ -5,6 +5,8 @@ Also populated player and character databases
 import io
 import os
 
+import skin_utils
+
 
 def readCharDatabase(filename, deliminator=','):
     """
@@ -77,7 +79,7 @@ def readPlayerDatabase(filename, deliminator=',', char_database=None):
         # grab player name
         player_name = line.pop(0)
         # loop through character & alts
-        char_alt_list = []
+        char_skin_dict = {}
         for i in range(0, len(line), 2):
             j = i + 1
             a_char = line[i].strip()
@@ -85,15 +87,21 @@ def readPlayerDatabase(filename, deliminator=',', char_database=None):
             # skip if blank
             if a_char == '' and a_alt == '':
                 continue
+            # strip inline comments from the last field
+            if '#' in a_alt:
+                a_alt = a_alt[:a_alt.index('#')].strip()
             # check character mapping (to uppercase)
             if a_char.upper() in char_database.keys():
                 a_char = char_database[a_char.upper()]
-            # format "{character} ({alt})"
-            a_char_alt = '{char} ({alt})'.format(char=a_char, alt=a_alt)
-            # add char alt combo to list
-            char_alt_list.append(a_char_alt)
+            # A character may be listed more than once to give the player several
+            # costumes for it; keep every one, in CSV order. A leading '*' marks
+            # the preferred costume (used when a VOD line doesn't name one).
+            a_alt, a_pref = skin_utils.split_pref(a_alt)
+            char_skin_dict.setdefault(a_char.upper(), []).append((a_alt, a_pref))
         # Add to player database dictionary (to uppercase)
-        play_database[player_name.upper()] = char_alt_list
+        # Keyed by character rather than a flat list, so a lookup is exact --
+        # the old substring scan matched "Mario" against "Dr Mario".
+        play_database[player_name.upper()] = char_skin_dict
     # end loop
     return play_database
 

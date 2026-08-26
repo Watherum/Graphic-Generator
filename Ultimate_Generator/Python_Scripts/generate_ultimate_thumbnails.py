@@ -17,6 +17,7 @@ import os
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import populate_ultimate_globals
+import skin_utils
 from helper import *
 
 import sys
@@ -31,17 +32,51 @@ _properties = dict()
 
 
 class Match:
-    def __init__(self, _title, _event, _round, _player1, _char1, _player2, _char2):
+    def __init__(self, _title, _event, _round, _player1, _char1, _player2, _char2,
+                 _skin1=None, _skin2=None):
         self.t = _title
         self.e = _event
         self.r = _round
         self.p1 = _player1
         self.c1 = _char1
+        # Per-set costume requested in the VOD line ("Mario:5"), parallel to
+        # c1/c2. None in a slot means "use the player's preferred costume".
+        self.c1_skins = _skin1 if _skin1 is not None else [None] * len(_char1)
         self.c1_renders = []
         self.p2 = _player2
         self.c2 = _char2
+        self.c2_skins = _skin2 if _skin2 is not None else [None] * len(_char2)
         self.c2_renders = []
         self.Images = []
+
+
+def stripSkinsFromTitle(title):
+    """Remove any per-set costume from a match title.
+
+    The title becomes the output filename (and so the YouTube VOD name), where a
+    costume has no business appearing -- and ':' is not even legal in a Windows
+    filename. Both the ':5' and the legacy ' 5' forms go. Only text inside the
+    character parentheses is touched, and only when a costume is actually
+    present, so titles without one are returned byte-for-byte unchanged.
+    """
+    return skin_utils.strip_skins(title)
+
+
+def splitCharSkins(char_tokens):
+    """Split a parsed character list into parallel character and costume lists.
+
+    A VOD line may name a per-set costume after a colon ("Mario:5"). Returns
+    (chars, skins) where a costume entry is None when none was given. The legacy
+    inline form ("Mario 5") has no colon and is left on the character token for
+    createMatches to peel off with skin_utils.split_legacy_alt.
+    """
+    chars = []
+    skins = []
+    for token in char_tokens:
+        a_char, a_skin = skin_utils.split_char_skin(token)
+        chars.append(a_char)
+        skins.append(a_skin)
+    return chars, skins
 
 
 def setGlobals(weekly_event, property_settings=None):
@@ -221,14 +256,17 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
         player1_chars = player1_info[1]
         player1_chars = player1_chars.split(')')[0]  # trim off ')'
         player1_chars = [x.strip() for x in player1_chars.split(',')]  # create a list for characters
+        player1_chars, player1_skins = splitCharSkins(player1_chars)
         # Grab player 2 name and characters {player_2} ({char_2})
         player2_info = player2_info.split('(')
         player2_name = player2_info[0].strip()
         player2_chars = player2_info[1]
         player2_chars = player2_chars.split(')')[0]  # trim off ')'
         player2_chars = [x.strip() for x in player2_chars.split(',')]  # create a list for characters (strip whitespace)
+        player2_chars, player2_skins = splitCharSkins(player2_chars)
         # Have all the information, create a match
-        a_match = Match(a_title, event_short_name, a_round, player1_name, player1_chars, player2_name, player2_chars)
+        a_match = Match(stripSkinsFromTitle(a_title), event_short_name, a_round, player1_name, player1_chars,
+                        player2_name, player2_chars, player1_skins, player2_skins)
         match_list.append(a_match)
     # end of match creation
 
@@ -237,64 +275,79 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
     # Dictionaries for players and characters not found
     player_not_found = {}
     char_not_found = {}
+    skin_not_found = {}
     for a_match in match_list:
         # Loop through character lists and grab character render
         #  Add them to the new lists
         player1_char_files = []
         player2_char_files = []
         p1_flag = True  # used in loop
-        for a_list in [a_match.c1, a_match.c2]:
+        for a_list, a_skin_list in [(a_match.c1, a_match.c1_skins), (a_match.c2, a_match.c2_skins)]:
             # Loop through all characters and find their file locations
-            for a_char in a_list:
-                # Case for handling alts in the char name
-                #  {event_1} {round_1} - {player_1} ({char_1}) Vs. {player_2} ({char_2}) - SSBU
-                #  where {char_1[2]} = ["a_char a_alt", "a_char2 a_alt2", ...]
-                alt_num_in_name = False
-                if a_char[-2] == ' ' and a_char[-1] in "12345678":
-                    alt_num_in_name = True
-                    alt_num = '(' + a_char[-1] + ')'
-                    a_char = a_char[:-2]
-                else:
-                    alt_num = '(1)'
+            for a_char, a_skin_request in zip(a_list, a_skin_list):
+                # The legacy inline costume, "Mario 5" -- kept so VOD files
+                # written before the "Mario:5" syntax still resolve. The colon
+                # form wins when a token somehow carries both.
+                if not a_skin_request:
+                    a_char, a_skin_request = skin_utils.split_legacy_alt(a_char)
                 # Search for character in char database
                 if a_char.upper() in _character_database.keys():
                     a_char = _character_database[a_char.upper()]
-                # Create char image file name
-                char_file = a_char + ' ' + alt_num
-                # Lookup character in player database for alt costume (if it exists) if alt not specified
-                if not alt_num_in_name:
-                    if p1_flag:
-                        player_name = a_match.p1
+                # Default costume, used when neither the line nor the player
+                # database names one. Alt 1 is what this generator has always
+                # fallen back to.
+                alt = '1'
+                if p1_flag:
+                    player_name = a_match.p1
+                else:
+                    player_name = a_match.p2
+                # Remove [L] suffix if present when searching for player
+                if player_name[-4:] == ' [L]':
+                    player_name = player_name[:-4]
+                # Player not found case (to uppercase)
+                if player_name.upper() not in _player_database.keys():
+                    # add player to not found dictionary
+                    if player_name not in player_not_found.keys():
+                        player_not_found[player_name] = []
+                    if a_char not in player_not_found[player_name]:
+                        player_not_found[player_name].append(a_char)
+                else:  # Player found, now look for characters
+                    player_chars_lookup = _player_database[player_name.upper()]
+                    char_found = False
+                    # A character may be listed several times to give the player
+                    # several costumes; entries are (alt, is_preferred) in CSV
+                    # order. Keying the character exactly is also what stops
+                    # "Mario" matching this player's "Dr Mario" row.
+                    char_entries = player_chars_lookup.get(a_char.upper(), [])
+                    if char_entries:
+                        alt = skin_utils.preferred_stem(char_entries) or alt
+                        char_found = True
+                    # Char not found case and character is not random
+                    if not char_found and a_char.upper() != 'RANDOM':
+                        # add player to not found dictionary (to uppercase)
+                        if player_name not in char_not_found.keys():
+                            char_not_found[player_name] = []
+                        if a_char not in char_not_found[player_name]:
+                            char_not_found[player_name].append(a_char)
+                # A costume named in the VOD line wins over the player's
+                # preferred one, so the same player can use different costumes
+                # across sets.
+                if a_skin_request:
+                    requested = skin_utils.stem_for_label(
+                        a_char, a_skin_request,
+                        candidates=_player_database.get(player_name.upper(), {}).get(a_char.upper()))
+                    if requested:
+                        alt = requested
                     else:
-                        player_name = a_match.p2
-                    # Remove [L] suffix if present when searching for player
-                    if player_name[-4:] == ' [L]':
-                        player_name = player_name[:-4]
-                    # Player not found case (to uppercase)
-                    if player_name.upper() not in _player_database.keys():
-                        # add player to not found dictionary
-                        if player_name not in player_not_found.keys():
-                            player_not_found[player_name] = []
-                        if a_char not in player_not_found[player_name]:
-                            player_not_found[player_name].append(a_char)
-                    else:  # Player found, now look for characters
-                        # Lookup character (to uppercase)
-                        player_chars_lookup = _player_database[player_name.upper()]
-                        char_found = False
-                        # Search existing characters in player database
-                        for p_char in player_chars_lookup:
-                            if a_char.upper() in p_char.upper():
-                                # Char found, set char file
-                                char_file = p_char
-                                char_found = True
-                                break
-                        # Char not found case and character is not random
-                        if not char_found and a_char.upper() != 'RANDOM':
-                            # add player to not found dictionary (to uppercase)
-                            if player_name not in char_not_found.keys():
-                                char_not_found[player_name] = []
-                            if a_char not in char_not_found[player_name]:
-                                char_not_found[player_name].append(a_char)
+                        # Unknown costume: fall back to the preferred one rather
+                        # than failing the whole run, and report it in the log.
+                        key = player_name + ' (' + a_char + ')'
+                        if key not in skin_not_found:
+                            skin_not_found[key] = []
+                        if a_skin_request not in skin_not_found[key]:
+                            skin_not_found[key].append(a_skin_request)
+                # Create char image file name
+                char_file = skin_utils.render_stem(a_char, alt)
                 # Check if char file exists at render location
                 #  Render type must be specified, Render type 2 & 3 need not be
                 if _properties['render_type'] is None:
@@ -333,6 +386,12 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
         out_text += "{s}".format(s=a_player)
         for a_char in char_not_found[a_player]:
             out_text += "\t{s}\t1".format(s=a_char)
+        out_text += "\n"
+    out_text += "** List of costumes not found (fell back to preferred costume) **\n"
+    for a_key in skin_not_found.keys():
+        out_text += "{s}".format(s=a_key)
+        for a_skin in skin_not_found[a_key]:
+            out_text += "\t{s}".format(s=a_skin)
         out_text += "\n"
     # Print information to screen or to file
     if log_file == '':
@@ -534,12 +593,14 @@ def createCharacterWindow(char_list, win_size, right_bool=False, single_bool=Fal
     return canvas_list
 
 
-def createRoundImages(match_list, background, foreground):
+def createRoundImages(match_list, background, foreground, only_one=False):
     """
     Creates images based off of the content in match list and applies it to the Background and Foreground images
     :param match_list:
     :param background:
     :param foreground:
+    :param only_one: stop after the first character arrangement instead of every
+        permutation -- used by the GUI config preview, which needs one image fast
     :return:
     """
     # Loop through the matches and add the images
@@ -555,8 +616,10 @@ def createRoundImages(match_list, background, foreground):
         char_window = _properties['char_window']
         one_char_flag = _properties['one_char_flag']
         char_canvas = (int(background.size[0] * char_window[0]), int(background.size[1] * char_window[1]))
-        c1_image_list = createCharacterWindow(c1_char_list, char_canvas, single_bool=one_char_flag)
-        c2_image_list = createCharacterWindow(c2_char_list, char_canvas, right_bool=True, single_bool=one_char_flag)
+        c1_image_list = createCharacterWindow(c1_char_list, char_canvas, single_bool=one_char_flag,
+                                              only_one=only_one)
+        c2_image_list = createCharacterWindow(c2_char_list, char_canvas, right_bool=True,
+                                              single_bool=one_char_flag, only_one=only_one)
         # Grab offsets for placing the character windows
         char_offset1 = _properties['char_offset1']
         offset1 = (int(background.size[0] * char_offset1[0]), int(background.size[1] * char_offset1[1]))
