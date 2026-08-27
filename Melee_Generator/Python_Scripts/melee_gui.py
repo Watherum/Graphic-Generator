@@ -860,6 +860,20 @@ def _preview_sample_chars(count: int, skip: int = 0) -> list:
     return [names[(skip + i) % len(names)] for i in range(count)]
 
 
+# The VOD editor's costume preview and the gap after it. The count label in
+# the filter bar borrows both, which is what puts "Filter:" directly under
+# "File:".
+_VOD_PREVIEW_PX = 200
+_VOD_PREVIEW_GAP = 16
+
+
+def _is_set_line(text: str) -> bool:
+    """A real match line. Blank rows and '#' comments -- the ABBREV header
+    among them -- are file bookkeeping, not sets, so they never count."""
+    t = text.strip()
+    return bool(t) and not t.startswith("#")
+
+
 def _muted(text: str) -> QtWidgets.QLabel:
     lbl = QtWidgets.QLabel(text)
     lbl.setObjectName("muted")
@@ -920,22 +934,36 @@ class VodModel(QtCore.QAbstractTableModel):
                 return "Missing character data — add character name(s) inside the parentheses"
         if col == 4:
             # Measure exactly what the Copy button puts on the clipboard: skins
-            # stripped and the series abbreviation already applied. Red therefore
-            # means "still too long after abbreviation", which is the only case
-            # that needs the user to do something.
-            length = len(self.copy_text(row["text"]).strip())
+            # stripped and the series abbreviation already applied. Red means
+            # "still too long after abbreviating" -- the only case that needs the
+            # user to do something. Blue italic means the abbreviation is what
+            # brought it under: the line beside it still shows the full
+            # tournament name, so without that cue the count reads as wrong.
+            copied = self.copy_text(row["text"]).strip()
+            length = len(copied)
+            abbreviated = copied != strip_skins(row["text"]).strip()
             if role == Qt.ItemDataRole.DisplayRole:
                 return f"{length}/{MAX_LINE_LEN}"
             if role == Qt.ItemDataRole.TextAlignmentRole:
                 return int(Qt.AlignmentFlag.AlignCenter)
-            if role == Qt.ItemDataRole.ForegroundRole and length > MAX_LINE_LEN:
-                return QtGui.QColor("#ff6b6b")
+            if role == Qt.ItemDataRole.ForegroundRole:
+                if length > MAX_LINE_LEN:
+                    return QtGui.QColor("#ff6b6b")
+                if abbreviated:
+                    return QtGui.QColor("#6cb6ff")
+            if role == Qt.ItemDataRole.FontRole and abbreviated:
+                # Start from the app font so this only adds italics.
+                f = QtWidgets.QApplication.font()
+                f.setItalic(True)
+                return f
             if role == Qt.ItemDataRole.ToolTipRole:
-                return ("Over the 100-character limit even after abbreviating — set or "
-                        "shorten the Abbreviation for this series in the Fetch tab"
-                        if length > MAX_LINE_LEN
-                        else "Length of the line as copied (skins stripped, "
-                             "abbreviation applied)")
+                if length > MAX_LINE_LEN:
+                    return ("Over the 100-character limit even after abbreviating — set or "
+                            "shorten the Abbreviation for this series in the Fetch tab")
+                if abbreviated:
+                    return "Abbreviated to fit — copies as:\n" + copied
+                return ("Length of the line as copied (skins stripped, "
+                        "abbreviation applied)")
         if col == 1 and role == Qt.ItemDataRole.ToolTipRole:
             return "Copy line"
         if col == 2 and role == Qt.ItemDataRole.ToolTipRole:
@@ -2860,8 +2888,14 @@ class MeleeWindow(QtWidgets.QMainWindow):
         rb.setToolTip("Refresh VOD file list")
         rb.clicked.connect(self._refresh_vod_files)
         row.addWidget(rb)
-        row.addSpacing(20)
-        row.addWidget(QtWidgets.QLabel("Character:"))
+        row.addStretch(1)
+
+        # Second row: the character/costume pickers and the two database
+        # buttons. Splitting them off the file selector keeps each row short
+        # enough to read left-to-right instead of one long strip of unrelated
+        # controls.
+        row2 = QtWidgets.QHBoxLayout()
+        row2.addWidget(QtWidgets.QLabel("Character:"))
         self._vod_char_picker = QtWidgets.QComboBox()
         self._vod_char_picker.setMinimumWidth(160)
         self._vod_char_picker.setToolTip(
@@ -2872,13 +2906,13 @@ class MeleeWindow(QtWidgets.QMainWindow):
         # than carrying over an alt number that means something else now.
         self._vod_char_picker.currentTextChanged.connect(
             lambda *_: self._refresh_vod_skin_picker(keep=False))
-        row.addWidget(self._vod_char_picker)
+        row2.addWidget(self._vod_char_picker)
         crb = QtWidgets.QPushButton("⟳")
         crb.setObjectName("tool")
         crb.setToolTip("Refresh character list")
         crb.clicked.connect(self._refresh_vod_char_picker)
-        row.addWidget(crb)
-        row.addWidget(QtWidgets.QLabel("Costume:"))
+        row2.addWidget(crb)
+        row2.addWidget(QtWidgets.QLabel("Costume:"))
         self._vod_skin_picker = QtWidgets.QComboBox()
         self._vod_skin_picker.setMinimumWidth(90)
         self._vod_skin_picker.setToolTip(
@@ -2889,26 +2923,40 @@ class MeleeWindow(QtWidgets.QMainWindow):
         # whole "Character:Alt" token on the clipboard, ready to paste.
         self._vod_skin_picker.activated.connect(self._copy_vod_char)
         self._vod_skin_picker.currentTextChanged.connect(self._refresh_vod_preview)
-        row.addWidget(self._vod_skin_picker)
+        row2.addWidget(self._vod_skin_picker)
         cc = QtWidgets.QPushButton("Copy")
         cc.setToolTip("Copy the selected character (with costume, if chosen) to the clipboard")
         cc.clicked.connect(self._copy_vod_char)
-        row.addWidget(cc)
-        row.addSpacing(20)
+        row2.addWidget(cc)
+        row2.addSpacing(20)
         self._import_skins_btn = QtWidgets.QPushButton("Add Missing Costumes")
         self._import_skins_btn.clicked.connect(self._import_missing_skins)
         self._import_skins_btn.setEnabled(False)
-        row.addWidget(self._import_skins_btn)
+        row2.addWidget(self._import_skins_btn)
         self._import_players_btn = QtWidgets.QPushButton("Import Missing Players")
         self._import_players_btn.setToolTip(
             "Add players from these VOD lines who are not yet in the player database")
         self._import_players_btn.clicked.connect(self._import_missing_players)
         self._import_players_btn.setEnabled(False)
-        row.addWidget(self._import_players_btn)
-        row.addStretch(1)
+        row2.addWidget(self._import_players_btn)
+        row2.addStretch(1)
 
-        # Filter bar
+        # Filter bar. Built here but added directly above the table further
+        # down, so it sits against the lines it filters instead of floating in
+        # the picker column beside a 200px preview. The set count leads it -- a
+        # slightly shorter filter box is a fair trade for seeing at a glance how
+        # many real match lines the file holds.
         filter_row = QtWidgets.QHBoxLayout()
+        self._vod_count_label = _muted("")
+        self._vod_count_label.setWordWrap(False)
+        # Occupy exactly the preview's column so the label after it starts where
+        # "File:" does one row up.
+        self._vod_count_label.setFixedWidth(_VOD_PREVIEW_PX)
+        self._vod_count_label.setToolTip(
+            "Match lines in this file — blank rows and '#' comments "
+            "(the ABBREV header) are not counted")
+        filter_row.addWidget(self._vod_count_label)
+        filter_row.addSpacing(_VOD_PREVIEW_GAP)
         filter_row.addWidget(QtWidgets.QLabel("Filter:"))
         self._vod_filter = QtWidgets.QLineEdit()
         self._vod_filter.setPlaceholderText("Search match lines…")
@@ -2921,18 +2969,23 @@ class MeleeWindow(QtWidgets.QMainWindow):
         # can share its height with both rows instead of stretching either one.
         picker_area = QtWidgets.QHBoxLayout()
         self._vod_preview_label = QtWidgets.QLabel()
-        self._vod_preview_label.setFixedSize(200, 200)
+        self._vod_preview_label.setFixedSize(_VOD_PREVIEW_PX, _VOD_PREVIEW_PX)
         self._vod_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._vod_preview_label.setStyleSheet(
             f"background-color: {_BG3}; border-radius: 4px;")
         self._vod_preview_label.setToolTip(
             "Preview of the selected costume (alt 1 when none is picked)")
         picker_area.addWidget(self._vod_preview_label, 0, Qt.AlignmentFlag.AlignTop)
-        picker_area.addSpacing(16)
+        picker_area.addSpacing(_VOD_PREVIEW_GAP)
         picker_rows = QtWidgets.QVBoxLayout()
         picker_rows.addLayout(row)
-        picker_rows.addLayout(filter_row)
+        # The stretch goes between the rows, not after them: the preview is
+        # 200px tall whatever these rows do, so parking the pickers at the
+        # bottom of that column puts them right above the filter bar -- the two
+        # rows that act on the table sit together -- instead of leaving dead
+        # space there.
         picker_rows.addStretch(1)
+        picker_rows.addLayout(row2)
         picker_area.addLayout(picker_rows, 1)
         cbox.addLayout(picker_area)
         self._refresh_vod_preview()
@@ -2990,6 +3043,15 @@ class MeleeWindow(QtWidgets.QMainWindow):
         self._vod_model.modelReset.connect(self._update_import_btn)
         self._vod_model.modelReset.connect(self._vod_rebuild_red_rows)
         self._vod_red_rows: set[int] = set()
+        # Anything that can change what the table shows -- a new file, an edit
+        # that comments a line out, a filter -- can change the count, and the
+        # proxy is downstream of all of them.
+        for _sig in (self._vod_proxy.modelReset, self._vod_proxy.layoutChanged,
+                     self._vod_proxy.rowsInserted, self._vod_proxy.rowsRemoved,
+                     self._vod_proxy.dataChanged):
+            _sig.connect(lambda *_: self._refresh_vod_count())
+        self._refresh_vod_count()
+        cbox.addLayout(filter_row)
         cbox.addWidget(self._vod_view)
         self._vod_view.selectionModel().currentRowChanged.connect(self._on_vod_row_changed)
 
@@ -3135,6 +3197,23 @@ class MeleeWindow(QtWidgets.QMainWindow):
         if hasattr(self, "_vod_model"):
             self._vod_model.refresh_len_column()
 
+    def _refresh_vod_count(self):
+        """'41 sets', or '12 of 41 sets' while a filter is narrowing the view."""
+        if not hasattr(self, "_vod_count_label"):
+            return
+        m = self._vod_model
+        total = sum(1 for r in range(m.rowCount()) if _is_set_line(m.text_at(r)))
+        word = "set" if total == 1 else "sets"
+        if self._vod_filter.text().strip():
+            shown = 0
+            for r in range(self._vod_proxy.rowCount()):
+                src = self._vod_proxy.mapToSource(self._vod_proxy.index(r, 0)).row()
+                if _is_set_line(m.text_at(src)):
+                    shown += 1
+            self._vod_count_label.setText(f"{shown} of {total} {word}")
+        else:
+            self._vod_count_label.setText(f"{total} {word}")
+
     def _vod_abbrev_line(self, text: str) -> str:
         """Prepare a match line for the clipboard: the YouTube title for this set.
 
@@ -3145,15 +3224,44 @@ class MeleeWindow(QtWidgets.QMainWindow):
         text = strip_skins(text)
         if len(text) <= MAX_LINE_LEN:
             return text
-        abbrev = getattr(self, "_vod_abbrev", "")
-        if not abbrev:
-            series = self._thumb_series.currentText() if hasattr(self, "_thumb_series") else ""
-            w = self._fetch_widgets.get(series, {}) if hasattr(self, "_fetch_widgets") else {}
-            abbrev = w["abbrev"].text().strip() if "abbrev" in w else ""
         event_name = getattr(self, "_vod_event_name", "")
-        if abbrev and event_name and text.startswith(event_name):
-            return abbrev + text[len(event_name):]
-        return text
+        if not (event_name and text.startswith(event_name)):
+            # Fall back to the line's own event name. The header only tells us
+            # what the *first* line of the loaded file names; a renamed, merged
+            # or hand-edited file -- or a stale load -- leaves lines whose event
+            # it does not match, and those must still be abbreviated rather than
+            # silently copied at full length.
+            event_name = text.split(" - ")[0].strip() if " - " in text else ""
+            if not (event_name and text.startswith(event_name)):
+                return text
+        abbrev = self._abbrev_for_event(event_name)
+        return abbrev + text[len(event_name):] if abbrev else text
+
+    def _abbrev_for_event(self, event_name: str) -> str:
+        """'Straight Into The Abyss 63' -> 'SITA 63'.
+
+        The file's own '# ABBREV:' header wins, but only for the event that
+        header belongs to. Otherwise the series abbreviation from the Fetch tab
+        is joined to this event's own number -- on its own that field holds just
+        'SITA', so using it raw dropped the number and produced 'SITA - ...'.
+        """
+        header = getattr(self, "_vod_abbrev", "")
+        if header and getattr(self, "_vod_event_name", "") == event_name:
+            return header
+        series = self._thumb_series.currentText() if hasattr(self, "_thumb_series") else ""
+        w = self._fetch_widgets.get(series, {}) if hasattr(self, "_fetch_widgets") else {}
+        base = w["abbrev"].text().strip() if "abbrev" in w else ""
+        if not base and header:
+            base = re.sub(r"\s+\S*\d\S*$", "", header).strip()
+        if not base:
+            return ""
+        suffix = ""
+        if series and event_name.startswith(series):
+            suffix = event_name[len(series):].strip()
+        if not suffix:
+            m = re.search(r"(\S*\d\S*)$", event_name)
+            suffix = m.group(1) if m else ""
+        return (base + " " + suffix).strip()
 
     def _vod_context_menu(self, pos):
         idx = self._vod_view.indexAt(pos)
@@ -3258,8 +3366,11 @@ class MeleeWindow(QtWidgets.QMainWindow):
                     files.append(f)
 
         def _key(p):
+            # Newest first. Every number in the name counts, so a split event
+            # ("... 63-1") sorts beside its own event instead of dropping to the
+            # bottom on its trailing part number.
             nums = re.findall(r"\d+", p.stem)
-            return (-int(nums[-1]) if nums else 0, p.stem)
+            return (tuple(-int(n) for n in nums) if nums else (0,), p.stem)
 
         files.sort(key=_key)
         names = [f.name for f in files]
@@ -3634,6 +3745,7 @@ class MeleeWindow(QtWidgets.QMainWindow):
             path.write_text(content, encoding="utf-8")
             self._log(f"[Auto-created {path.name}]\n")
         content = path.read_text(encoding="utf-8")
+        self._top8_last_chars = self._top8_char_signature(content)
         # Nesting-safe: _load_top8_text is called both on its own and from inside
         # _load_top8_html, which has already set the flag.
         prev = self._top8_suppress_autosave
@@ -3666,13 +3778,37 @@ class MeleeWindow(QtWidgets.QMainWindow):
                 timer.stop()
                 timer.timeout.emit()
 
+    @staticmethod
+    def _top8_char_signature(text: str) -> tuple:
+        """The character/costume fields of every placement line, in order.
+
+        A placement line is `place,name,sponsor,char[:alt][,char2...]`, so
+        the fourth field onward is what decides which renders the page loads.
+        """
+        sig = []
+        for line in text.splitlines():
+            if not line[:1].isdigit():
+                continue
+            sig.append(tuple(f.strip() for f in line.split(",")[3:]))
+        return tuple(sig)
+
     def _save_top8_text(self, auto: bool = False):
         path = self._get_top8_text_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self._top8_text.toPlainText(), encoding="utf-8")
+        text = self._top8_text.toPlainText()
+        path.write_text(text, encoding="utf-8")
         self._log(f"[{'Auto-saved' if auto else 'Saved'}: {path.name}]\n")
-        # The preview reads this file, so it is stale until it reloads.
-        self._refresh_top8_preview()
+        # The preview reads this file, so it is stale until it reloads. A
+        # changed character means different render URLs, and a reload in
+        # place can still be answered from the image cache -- and the page's
+        # own onerror fallback clears itself after one swap -- so that case
+        # gets the same from-scratch load the Refresh button does.
+        chars = self._top8_char_signature(text)
+        if chars != getattr(self, "_top8_last_chars", None):
+            self._top8_last_chars = chars
+            self._force_refresh_top8_preview()
+        else:
+            self._refresh_top8_preview()
 
     def _refresh_top8_html_files(self):
         results_dir = ROOT / "Top_8_Results"
@@ -3933,7 +4069,15 @@ class MeleeWindow(QtWidgets.QMainWindow):
                     if unit == "color":
                         style = re.sub(r'(color:\s*)#[0-9a-fA-F]+', rf'\g<1>{val}', style)
                     elif unit in ("%", "px"):
-                        style = re.sub(rf'({re.escape(prop)}:\s*)[\d.]+({re.escape(unit)})', rf'\g<1>{val}\2', style)
+                        if not val.strip():
+                            # An empty box must leave the declaration alone. Writing
+                            # "top: %" would break the number regex below, so the next
+                            # value typed could never be applied and the field stayed
+                            # stuck empty.
+                            continue
+                        # The number is matched with * rather than + so a file already
+                        # left in that broken state is repaired by the next edit.
+                        style = re.sub(rf'({re.escape(prop)}:\s*)[\d.]*({re.escape(unit)})', rf'\g<1>{val}\2', style)
                     elif unit == "keyword":
                         # Drop any existing declaration, then re-add unless val is
                         # None (None = inherit the class default, e.g. nowrap).

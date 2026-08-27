@@ -140,11 +140,15 @@ View and edit match data files without leaving the GUI.
 - The **Len** column shows the exact length of what the **Copy** button would put on the
   clipboard — measured *after* skins are stripped and the series abbreviation is applied.
   It turns red only when a line is still over 100 characters even once abbreviated, which
-  is the only case that needs action
+  is the only case that needs action. **Blue italic** means the abbreviation is what brought
+  the line under — the row still shows the full tournament name, so the count would
+  otherwise look wrong for the text beside it; hover for the exact line that gets copied
 - Each row has its own **Copy** button and **↑ / ↓** buttons to reorder lines (clear the
   filter first — reordering a filtered view is blocked)
 - Right-click a row for **Copy line**, **Set skins…** and **Delete line**
 - Tick rows and use **Delete Marked** to remove them, or **Delete Unmarked** to keep only the ticked rows
+- The count to the left of the filter box reads **`41 sets`**, or **`12 of 41 sets`** while
+  a filter is narrowing the view. Blank rows and `#` comments aren't counted
 - **Search match lines** filter bar narrows the table live as you type; generating while filtered only processes the visible lines. Clearing the filter re-highlights whatever row was selected
 - Rows for VS-lines with missing character data are **highlighted red**; fixing a red line auto-saves it and logs the fix to the console
 - **Import Missing Players** (enabled only when red rows exist) jumps to the Player Database tab to fill in the missing entries
@@ -219,7 +223,14 @@ A visual config form for adjusting the layout of the selected HTML file without 
 
 The four slot sections flow side by side and rewrap as the window is resized. **Edits
 auto-save** a moment after you stop typing and the preview reloads to match;
-**Apply Config & Save** writes immediately. Hand-added CSS and scripts in the file survive
+**Apply Config & Save** writes immediately. Clearing a box leaves that value as it stands —
+an empty field means "no change", so you can wipe a number and type a new one without the
+half-typed state being written out.
+
+A player name is drawn at the size you set unless it would collide with the slot next to it,
+in which case it shrinks to the largest size that still fits (and a name with a space in it
+may wrap to two lines first). If a size seems to be ignored, that's the reason — the tag is
+simply too wide for the space between it and its neighbour. Hand-added CSS and scripts in the file survive
 a save — the form patches individual styles rather than regenerating the page.
 
 **HTML Source** *(collapsible, starts collapsed)*
@@ -259,7 +270,8 @@ no render on disk falls back to the player's usual one rather than blanking the 
 
 A live render of the selected HTML file, at a size worth looking at.
 
-- Reloads itself whenever Layout Config **or** the text data saves
+- Reloads itself whenever Layout Config **or** the text data saves. Changing a character
+  reloads it from scratch, so the new render is fetched rather than served from the cache
 - **⟳ Refresh** forces a fresh load, for when something still looks stale
 - **Save Image…** renders the graphic to a full-size 1920×1080 PNG and asks where to put it.
   It captures through the GUI's own browser engine, so it works whatever your default

@@ -244,30 +244,78 @@
             return { src: stem ? `${RENDER_DIR}/${stem}.png` : fallback, fallback };
         }
 
-        // Fits text within maxWidthPct/maxHeightPct of canvas: splits at last space first, then shrinks font.
-        const SLOT_MAX_WIDTHS    = [0.165, 0.11, 0.11, 0.11, 0.09,  0.09,  0.09,  0.08];
+        // Fits text within maxWidthPct/maxHeightPct of canvas: splits at last space
+        // first, then shrinks font. The widths are the geometric no-overlap limit,
+        // derived from the slots' own left%: each label is centred on its left%, so
+        // two neighbours may each claim half the gap between them -- hence a budget
+        // equal to the distance to the nearest label on the same row (capped by the
+        // canvas edge). They are deliberately NOT tuned tighter than that: the size
+        // set per slot in the GUI's layout config is what should show, and shrinking
+        // is a last resort for a tag long enough to collide. The old, tighter values
+        // only looked right while text was being measured in the fallback font (see
+        // fontsReady()) -- Arial is far narrower than HKModular Bold, so once the
+        // measuring was fixed every name shrank well below its configured size.
+        const SLOT_MAX_WIDTHS    = [0.238, 0.221, 0.214, 0.214, 0.167, 0.165, 0.165, 0.165];
         const SLOT_MAX_HEIGHTS   = [0.07,  0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05];
         const SLOT_ALLOW_WRAPPING = [true,  true, true, true, true, true, true, true];
+        // Every element fitText() has touched, with the arguments it was given,
+        // so the whole pass can be repeated once the real font has landed.
+        const fitted = new Map();
+        function refitAll() {
+            fitted.forEach((args, el) => fitText(el, args[0], args[1], args[2]));
+        }
+
         function fitText(el, maxWidthPct, allowWrap = true, maxHeightPct = 1) {
-            if (!el || !el.textContent) return;
+            if (!el) return;
             const canvas     = document.getElementById('canvas');
             // Never measure against a canvas that has no width yet: the shrink
             // loop below would drive every label to its 8px floor.
             if (!canvas || !canvas.offsetWidth) return;
+            fitted.set(el, [maxWidthPct, allowWrap, maxHeightPct]);
+
+            // Fitting is destructive -- it lowers the font size and may inject a
+            // line break -- so every pass has to start again from the untouched
+            // text at the untouched size. Without this a repeat pass could only
+            // ever shrink further, and a size measured against the wrong font
+            // metrics (see fontsReady()) could never be recovered.
+            if (el.dataset.fitBaseSize === undefined) {
+                el.dataset.fitBaseSize = parseFloat(el.style.fontSize) ||
+                                         parseFloat(getComputedStyle(el).fontSize) || 0;
+            }
+            if (el.dataset.fitBaseText === undefined) el.dataset.fitBaseText = el.textContent;
+            // The layout config may set white-space inline (the per-slot wrap
+            // checkbox), so restore what was there rather than clearing it.
+            if (el.dataset.fitBaseWs === undefined) el.dataset.fitBaseWs = el.style.whiteSpace;
+            const base = parseFloat(el.dataset.fitBaseSize);
+            el.textContent      = el.dataset.fitBaseText;
+            el.style.whiteSpace = el.dataset.fitBaseWs;
+            if (base) el.style.fontSize = base + 'px';
+            if (!el.textContent || !base) return;
+
             const maxWidth   = canvas.offsetWidth  * maxWidthPct;
             const maxHeight  = canvas.offsetHeight * maxHeightPct;
 
+            let wrapped = false;
             if (allowWrap && el.scrollWidth > maxWidth) {
                 const spaceIdx = el.textContent.lastIndexOf(' ');
                 if (spaceIdx !== -1) {
                     const full = el.textContent;
                     el.style.whiteSpace = 'pre-line';
                     el.textContent = full.slice(0, spaceIdx) + '\n' + full.slice(spaceIdx + 1);
+                    wrapped = true;
                 }
             }
 
-            let size = parseFloat(el.style.fontSize);
-            while ((el.scrollWidth > maxWidth || el.scrollHeight > maxHeight) && size > 8) {
+            // The height budget guards against a *wrapped* name spilling into the
+            // row below -- that is the only case it was ever there for. Applying
+            // it to a single line just fights the size set in the layout config:
+            // these budgets, like the widths, were implicitly tuned to the
+            // fallback font, and HKModular's line box is taller than Arial's, so
+            // once measuring was honest every name was pulled a few px under its
+            // configured size no matter how short the tag was.
+            let size = base;
+            while ((el.scrollWidth > maxWidth || (wrapped && el.scrollHeight > maxHeight))
+                   && size > 8) {
                 size -= 1;
                 el.style.fontSize = size + 'px';
             }
@@ -276,7 +324,10 @@
         function populate({ info, placements }, playerDB) {
             const set = (id, text) => {
                 const el = document.getElementById(id);
-                if (el) el.textContent = text ?? '';
+                if (!el) return;
+                el.textContent = text ?? '';
+                // New text: drop the copy fitText() kept for re-fitting.
+                delete el.dataset.fitBaseText;
             };
 
             set('event-name',     info['event_name']);
@@ -335,10 +386,29 @@
         // runs all the way down to its 8px floor -- a cold load rendered unreadable
         // text while a reload (images cached) looked fine. The webfont matters for
         // the same reason: fallback metrics measure the wrong width. Wait for both.
-        const layoutReady = Promise.all([
-            imagesReady,
-            document.fonts ? document.fonts.ready : Promise.resolve()
-        ]);
+        //
+        // document.fonts.ready is not enough on its own: it waits only for faces
+        // the page has already *asked* for, and at this point every label is
+        // still empty, so nothing on the page uses the webfont yet and it
+        // resolves immediately against the fallback. populate() then measured
+        // with fallback metrics -- wider than the real face -- and shrank names
+        // several px too far; the mis-fit only became visible once the real face
+        // swapped in, and only when it was not already warm in the cache, which
+        // is exactly why the preview disagreed with OBS intermittently. Ask for
+        // each face the labels actually use, then wait.
+        function fontsReady() {
+            if (!document.fonts) return Promise.resolve();
+            const specs = new Set();
+            document.querySelectorAll('#canvas .label').forEach(el => {
+                const cs = getComputedStyle(el);
+                specs.add(`${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`);
+            });
+            return Promise.all([...specs].map(s => document.fonts.load(s).catch(() => {})))
+                .then(() => document.fonts.ready)
+                .catch(() => {});
+        }
+
+        const layoutReady = Promise.all([imagesReady, fontsReady()]);
 
         // Fetch both files in parallel, then populate
         // Note: requires a local HTTP server (e.g. `python -m http.server`) — fetch() is blocked on file://
@@ -351,6 +421,12 @@
             const data     = parseDataFile(dataText);
             const playerDB = parsePlayerDB(dbText);
             populate(data, playerDB);
+            // Belt and braces: should a face still settle after the gate above
+            // (a slow disk, a face the gate could not name), fit once more from
+            // the stored originals instead of leaving the mis-measured sizes.
+            if (document.fonts) {
+                document.fonts.ready.then(() => requestAnimationFrame(refitAll));
+            }
         })
         .catch(err => console.error('Could not load data files:', err));
     </script>

@@ -1,14 +1,14 @@
 {
   "last_event_nums": {
     "Immortal Fight Night": "290",
-    "Straight Into The Abyss": "62"
+    "Straight Into The Abyss": "63-1"
   },
   "abbrevs": {
     "Immortal Fight Night": "IFN",
     "Straight Into The Abyss": "SITA"
   },
-  "last_thumb_series": "Immortal Fight Night",
-  "last_posts_series": "Immortal Fight Night",
+  "last_thumb_series": "Straight Into The Abyss",
+  "last_posts_series": "Straight Into The Abyss",
   "posts_cfg": {
     "Straight Into The Abyss": {
       "next_date": "2026-08-19",
