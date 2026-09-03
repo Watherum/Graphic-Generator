@@ -4796,16 +4796,36 @@ class MeleeWindow(QtWidgets.QMainWindow):
             self._char_tree_updating = False
 
     def _on_char_tree_check(self, item, column):
-        """Tick a Preferred box to make that costume the character's default."""
+        """Tick a Preferred box to make that costume the character's default.
+
+        Both outcomes rebuild the tree, which deletes every QTreeWidgetItem --
+        including the one Qt is still inside ``setData`` on while it delivers
+        this signal. Doing that synchronously is a use-after-free that crashes
+        the process outright (no traceback), and it only shows up once a
+        character has a second costume to tick. So the row index is taken here
+        and the rebuild is deferred to the next event-loop turn, by which point
+        Qt has finished with the item."""
         if column != 2 or self._char_tree_updating:
             return
         idx = self._char_tree.indexOfTopLevelItem(item)
         if idx < 0:
             return
-        if item.checkState(2) != Qt.CheckState.Checked:
+        checked = item.checkState(2) == Qt.CheckState.Checked
+        player = self._db_selected_player
+        QtCore.QTimer.singleShot(
+            0, lambda: self._apply_char_tree_check(player, idx, checked))
+
+    def _apply_char_tree_check(self, player, idx: int, checked: bool):
+        """Deferred half of :meth:`_on_char_tree_check` (see why it is deferred).
+
+        The player may have changed in the meantime -- a tick is only ever
+        applied to the player it was made on."""
+        if player is None or player != self._db_selected_player:
+            return
+        if not checked:
             # Every character always has a default, so a box can't simply be
             # cleared -- pick a different row instead. Restore what we drew.
-            self._populate_char_tree(self._db_selected_player)
+            self._populate_char_tree(player)
             return
         self._set_preferred_index(idx)
 
@@ -4823,10 +4843,8 @@ class MeleeWindow(QtWidgets.QMainWindow):
         Shared by the Preferred checkbox and the Set Preferred button so the two
         can't drift apart.
         """
-        if not self._db_selected_player:
-            return
-        entries = self._db_players[self._db_selected_player]
-        if idx >= len(entries):
+        entries = self._db_players.get(self._db_selected_player or "")
+        if not entries or not (0 <= idx < len(entries)):
             return
         char = entries[idx][0]
         for i, (c, alt) in enumerate(entries):
