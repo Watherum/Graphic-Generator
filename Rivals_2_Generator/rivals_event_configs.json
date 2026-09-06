@@ -144,5 +144,153 @@
     "font_color4": "#F5F5F5",
     "event_round_single_text": false,
     "event_round_text_split": " "
+  },
+  "__files__": {
+    "Twist of Fate Doubles Names.txt": {
+      "background_file": "Resources\\Overlays\\Background_TOF.png",
+      "foreground_file": "Resources\\Overlays\\Foreground_TOF.png",
+      "font_location": "Resources\\Fonts\\HKModular-Bold.otf",
+      "char_glow_bool": false,
+      "one_char_flag": false,
+      "resize_1": 0.55,
+      "resize_2": 0.55,
+      "resize_3": 0.35,
+      "font_player1_size": 55,
+      "font_player2_size": 55,
+      "font_event_size": 45,
+      "font_round_size": 50,
+      "text_angle": 0,
+      "center_shift_1": [
+        -0.0,
+        0.0
+      ],
+      "center_shift_2_1": [
+        0.243,
+        0.0
+      ],
+      "center_shift_2_2": [
+        -0.249,
+        0.0
+      ],
+      "center_shift_3_1": [
+        -0.0,
+        0.0
+      ],
+      "center_shift_3_2": [
+        -0.35,
+        0.05
+      ],
+      "center_shift_3_3": [
+        0.35,
+        0.05
+      ],
+      "text_player1": [
+        0.24,
+        0.065
+      ],
+      "text_player2": [
+        0.76,
+        0.065
+      ],
+      "text_event": [
+        0.761,
+        0.919
+      ],
+      "text_round": [
+        0.205,
+        0.919
+      ],
+      "char_offset1": [
+        0.0,
+        0.0
+      ],
+      "char_offset2": [
+        0.5,
+        0.0
+      ],
+      "char_window": [
+        0.5,
+        1.0
+      ],
+      "font_color1": "#FFFFFF",
+      "font_color2": "#FFFFFF",
+      "font_color3": "#FFFFFF",
+      "font_color4": "#FFFFFF",
+      "event_round_single_text": false,
+      "event_round_text_split": " "
+    },
+    "Twist of Fate Crews Names.txt": {
+      "background_file": "Resources\\Overlays\\Background_TOF.png",
+      "foreground_file": "Resources\\Overlays\\Foreground_TOF.png",
+      "font_location": "Resources\\Fonts\\HKModular-Bold.otf",
+      "char_glow_bool": false,
+      "one_char_flag": false,
+      "resize_1": 0.4,
+      "resize_2": 0.4,
+      "resize_3": 0.4,
+      "font_player1_size": 65,
+      "font_player2_size": 65,
+      "font_event_size": 70,
+      "font_round_size": 50,
+      "text_angle": 0,
+      "center_shift_1": [
+        -0.0,
+        0.0
+      ],
+      "center_shift_2_1": [
+        -0.0,
+        0.0
+      ],
+      "center_shift_2_2": [
+        -0.32,
+        0.0
+      ],
+      "center_shift_3_1": [
+        -0.0,
+        0.0
+      ],
+      "center_shift_3_2": [
+        -0.3,
+        0.0
+      ],
+      "center_shift_3_3": [
+        0.3,
+        0.0
+      ],
+      "text_player1": [
+        0.24,
+        0.065
+      ],
+      "text_player2": [
+        0.76,
+        0.065
+      ],
+      "text_event": [
+        0.777,
+        0.919
+      ],
+      "text_round": [
+        0.211,
+        0.919
+      ],
+      "char_offset1": [
+        0.0,
+        0.0
+      ],
+      "char_offset2": [
+        0.5,
+        0.0
+      ],
+      "char_window": [
+        0.5,
+        1.0
+      ],
+      "font_color1": "#FFFFFF",
+      "font_color2": "#FFFFFF",
+      "font_color3": "#FFFFFF",
+      "font_color4": "#FFFFFF",
+      "event_round_single_text": false,
+      "event_round_text_split": " "
+    }
   }
 }

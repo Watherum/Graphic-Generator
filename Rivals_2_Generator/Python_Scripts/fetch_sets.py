@@ -14,6 +14,8 @@ import argparse
 import requests
 from typing import Optional
 
+import team_utils
+
 API_URL = "https://www.start.gg/api/-/gql"
 REQUEST_TIMEOUT = 20.0
 HEADERS = {
@@ -100,6 +102,19 @@ def strip_sponsor(name: str) -> str:
     return name
 
 
+def format_entrant(name: str) -> str:
+    """Clean up an entrant name, singles or doubles.
+
+    start.gg writes a doubles entrant as "Sponsor | shane / Other | pizza": the
+    members are slash separated and each carries its own sponsor tag. Every
+    member is stripped, and the team is rejoined with a comma -- a slash cannot
+    be part of the thumbnail filename the title turns into.
+    """
+    return team_utils.join_team(
+        strip_sponsor(member) for member in team_utils.split_team(name)
+    ) or strip_sponsor(name)
+
+
 def build_entrant_characters(games: list) -> dict[str, list[str]]:
     """Collect unique characters per entrant across all games, in first-appearance order."""
     entrant_chars: dict[str, list[str]] = {}
@@ -117,15 +132,14 @@ def build_entrant_characters(games: list) -> dict[str, list[str]]:
 MAX_LINE_LEN = 100
 
 
-def format_set(set_node: dict, tournament_name: str, game_name: str,
-               abbrev: str = "", max_len: int = MAX_LINE_LEN) -> Optional[str]:
+def format_set(set_node: dict, tournament_name: str, game_name: str) -> Optional[str]:
     games = set_node.get("games") or []
     entrant_chars = build_entrant_characters(games)
 
     if len(entrant_chars) >= 2:
         entrants = list(entrant_chars.keys())
-        p1 = f"{strip_sponsor(entrants[0])} ({', '.join(entrant_chars[entrants[0]])})"
-        p2 = f"{strip_sponsor(entrants[1])} ({', '.join(entrant_chars[entrants[1]])})"
+        p1 = f"{format_entrant(entrants[0])} ({', '.join(entrant_chars[entrants[0]])})"
+        p2 = f"{format_entrant(entrants[1])} ({', '.join(entrant_chars[entrants[1]])})"
     else:
         # Fall back to slot entrant names when game data is absent
         slots = [
@@ -135,8 +149,8 @@ def format_set(set_node: dict, tournament_name: str, game_name: str,
         ]
         if len(slots) < 2:
             return None
-        p1 = f"{strip_sponsor(slots[0])} ()"
-        p2 = f"{strip_sponsor(slots[1])} ()"
+        p1 = f"{format_entrant(slots[0])} ()"
+        p2 = f"{format_entrant(slots[1])} ()"
 
     matchup = f"{p1} Vs {p2}"
 
@@ -153,18 +167,16 @@ def format_set(set_node: dict, tournament_name: str, game_name: str,
             .replace("Semi-Final", "Semi")
         )
 
-    def assemble(event_prefix: str) -> str:
-        prefix = " - ".join(p for p in [event_prefix, round_text] if p)
-        ln = f"{prefix} - {matchup}"
-        if game_name:
-            ln += f" - {game_name}"
-        return ln
-
-    line = assemble(tournament_name)
-    # Swap in the shorter abbreviation only when the full name pushes the line
-    # past the length budget — keeps most lines spelled out in full.
-    if abbrev and len(line) > max_len:
-        line = assemble(abbrev)
+    # Always the full tournament name. The abbreviation is a *publishing*
+    # step, applied by the GUI's Copy button to a line that would otherwise
+    # exceed MAX_LINE_LEN; writing it into the file instead left the editor
+    # showing shortened lines that could not be read back to the full name, and
+    # mixed two spellings of one event within a single file. The abbreviation
+    # still reaches the GUI and the generator through the '# ABBREV:' header.
+    prefix = " - ".join(p for p in [tournament_name, round_text] if p)
+    line = f"{prefix} - {matchup}"
+    if game_name:
+        line += f" - {game_name}"
     return line
 
 
@@ -179,8 +191,9 @@ def main():
     )
     parser.add_argument(
         "--abbrev", "-a", default="",
-        help="Abbreviated tournament name; substituted for --name on any line "
-             f"longer than {MAX_LINE_LEN} characters",
+        help="Abbreviated tournament name. Recorded in the '# ABBREV:' header "
+             f"and used by the GUI when copying a line longer than {MAX_LINE_LEN} "
+             "characters; the lines themselves always spell the event out in full",
     )
     parser.add_argument(
         "--station", "-s", type=int, default=None,
@@ -229,14 +242,15 @@ def main():
 
     lines = []
     for node in nodes:
-        line = format_set(node, tournament_name, game_name_out, args.abbrev)
+        line = format_set(node, tournament_name, game_name_out)
         if line:
             lines.append(line)
 
     print(f"Formatted sets: {len(lines)}", file=sys.stderr)
 
-    # When an abbreviation is in play, record it as a header comment so the
-    # thumbnail generator recognises abbreviated lines as the same event.
+    # Record the abbreviation as a header comment. It is what the GUI shortens
+    # a copied line with, and what lets the generator recognise an abbreviated
+    # line (hand-written, or from an older fetch) as the same event.
     header = f"# ABBREV: {args.abbrev}\n" if args.abbrev else ""
 
     output = "\n".join(lines)

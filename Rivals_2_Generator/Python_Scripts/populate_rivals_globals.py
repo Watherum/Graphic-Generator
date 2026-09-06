@@ -44,6 +44,13 @@ def readCharDatabase(filename, deliminator=','):
     return char_database
 
 
+#: Reserved key in rivals_event_configs.json holding per-VOD-file overrides,
+#: keyed by the names file's basename. It lives beside the series keys rather
+#: than in a second file so one save writes one place, and it can never be
+#: mistaken for a series because no event name starts with "__".
+FILE_CONFIG_KEY = "__files__"
+
+
 def readPlayerDatabase(filename, deliminator=',', char_database=None):
     """
     Open and read player database from a file.
@@ -156,6 +163,13 @@ def set_default_properties(event_info=None):
     properties['text_event'] = (0.25, 0.924)
     properties['text_round'] = (0.75, 0.924)
     properties['text_angle'] = 2  # degree of rotation counter-clockwise
+    # Safety margin on the fit-to-width shrink applied to every text label.
+    # A label is centred on its position, so it can run half its width either
+    # side before leaving the canvas; anything longer is redrawn a point smaller
+    # until it fits. Doubles team names ("shane,THE PIZZA GUY") are about twice
+    # the length of a singles tag and would otherwise be cut off by the edge.
+    # 1.0 = fit to the canvas edge exactly, 0 = never shrink.
+    properties['text_fit_width'] = 1.0
     properties['event_round_single_text'] = False  # Flag to determine if the event and round text is combined
     properties['event_round_text_split'] = ' '  # Text for between event and round when a single element
     # Font settings

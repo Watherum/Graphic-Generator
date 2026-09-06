@@ -18,6 +18,7 @@ import os
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import populate_rivals_globals as populate_globals
 import skin_utils
+import team_utils
 from helper import *
 
 import sys
@@ -51,12 +52,32 @@ class Match:
         self.Images = []
 
 
-def setGlobals(weekly_event, property_settings=None):
+def fileConfigFor(event_file, all_configs):
+    """The per-VOD-file config override for this names file, or ``{}``.
+
+    Matched on the basename, case-insensitively: props['event_file'] is built as
+    "{event} names.txt" while the file on disk is "{Event} Names.txt", and only
+    Windows' case-insensitive filesystem makes those one file.
+    """
+    name = os.path.basename(str(event_file or '')).strip().lower()
+    if not name:
+        return {}
+    for a_key, a_cfg in (all_configs.get(populate_globals.FILE_CONFIG_KEY) or {}).items():
+        if str(a_key).strip().lower() == name:
+            return a_cfg
+    return {}
+
+
+def setGlobals(weekly_event, property_settings=None, vod_file=None, config_file=None):
     """
     Set all globals based off the type of event. Weekly is the series, Number is the event number.
     These globals are set to then create the associated thumbnails
     :param weekly_event:
     :param property_settings:
+    :param vod_file: names file this run reads, overriding the one the event
+        name implies (the -v flag)
+    :param config_file: names file whose per-file config applies, when vod_file
+        points at a temporary copy of it (the -c flag)
     :return:
     """
     # Set globals based off of type of weekly
@@ -78,6 +99,10 @@ def setGlobals(weekly_event, property_settings=None):
         global_properties = populate_globals.setGlobalsQuarantainment(weekly_event)
     else:
         global_properties = populate_globals.set_default_properties(weekly_event)
+    # A -v override names the file this run actually reads, so it has to be in
+    # place before the per-file config below is looked up.
+    if vod_file:
+        global_properties['event_file'] = vod_file
     # Apply per-event JSON config overrides (from rivals_event_configs.json)
     try:
         import json as _json
@@ -85,9 +110,17 @@ def setGlobals(weekly_event, property_settings=None):
         with open(_cfg_path, encoding="utf-8") as _f:
             _all_cfgs = _json.load(_f)
         for _label in sorted(_all_cfgs, key=len, reverse=True):
+            if _label == populate_globals.FILE_CONFIG_KEY:
+                continue  # holds per-file configs, never an event-name prefix
             if weekly_event.startswith(_label):
                 global_properties.update(_all_cfgs[_label])
                 break
+        # A per-file config wins over the series entry. Two brackets of one
+        # tournament share an event-name prefix but not a layout -- a doubles
+        # thumbnail is not a singles one -- and the names file is what tells
+        # them apart.
+        global_properties.update(
+            fileConfigFor(config_file or global_properties.get('event_file', ''), _all_cfgs))
     except Exception:
         pass
     return global_properties
@@ -103,6 +136,23 @@ def stripSkinsFromTitle(title):
     byte-for-byte unchanged.
     """
     return skin_utils.strip_skins(title)
+
+
+#: Characters Windows will not accept in a filename. ':' is already removed by
+#: stripSkinsFromTitle and '/' by the team-name normalisation, so this is a last
+#: line of defence for a hand-edited VOD line rather than the usual path.
+_ILLEGAL_FILENAME_CHARS = r'<>:"/\|?*'
+
+
+def sanitizeFilename(name):
+    """Make a match title safe to use as a filename.
+
+    A doubles title used to carry '/' between the team members, which Windows
+    reads as a path separator -- the save then failed outright. Illegal
+    characters become '-' so a set is still written out instead of taking the
+    whole run down.
+    """
+    return ''.join('-' if ch in _ILLEGAL_FILENAME_CHARS else ch for ch in name)
 
 
 def splitCharSkins(char_tokens):
@@ -170,6 +220,31 @@ def readEventAbbrev(filename):
     except OSError:
         pass
     return None
+
+
+def resolvePlayerForChar(player_name, char_index, a_char):
+    """Which player database row owns this character in this match slot.
+
+    A singles tag is returned untouched. A doubles line names a team
+    ("shane,THE PIZZA GUY"), which has no row of its own: character *i* belongs
+    to member *i*, the order both start.gg and the VOD lines use. When that
+    member has no row -- or fields a second character, so the positions no
+    longer line up -- fall back to whichever member's row actually has the
+    character, and failing that to the member whose slot it is, so the missing
+    player is reported by name instead of as the whole team.
+    """
+    if player_name.upper() in _player_database:
+        return player_name
+    members = team_utils.split_team(player_name)
+    if len(members) < 2:
+        return player_name
+    char_upper = a_char.upper()
+    if char_index < len(members) and members[char_index].upper() in _player_database:
+        return members[char_index]
+    for a_member in members:
+        if char_upper in _player_database.get(a_member.upper(), {}):
+            return a_member
+    return team_utils.member_for_index(player_name, char_index)
 
 
 def createMatches(match_lines, log_file=None, event_name=None, event_short_name=None,
@@ -253,6 +328,16 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
         player2_chars = player2_chars.split(')')[0]  # trim off ')'
         player2_chars = [x.strip() for x in player2_chars.split(',')]  # create a list for characters (strip whitespace)
         player2_chars, player2_skins = splitCharSkins(player2_chars)
+        # A doubles entrant is a team of two. start.gg spells it "A / B", which
+        # cannot survive into the title -- the title becomes the output
+        # filename, and '/' is a path separator on Windows. Rewrite it to the
+        # comma form here so files written before that change still generate.
+        for _raw in (player1_name, player2_name):
+            _norm = team_utils.normalize_team(_raw)
+            if _norm != _raw:
+                a_title = a_title.replace(_raw, _norm, 1)
+        player1_name = team_utils.normalize_team(player1_name)
+        player2_name = team_utils.normalize_team(player2_name)
         # Have all the information, create a match
         a_match = Match(stripSkinsFromTitle(a_title), event_short_name, a_round, player1_name, player1_chars, player2_name, player2_chars,
                         player1_skins, player2_skins)
@@ -273,7 +358,7 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
         p1_flag = True  # used in loop
         for a_list, a_skin_list in [(a_match.c1, a_match.c1_skins), (a_match.c2, a_match.c2_skins)]:
             # Loop through all characters and find their file locations
-            for a_char, a_skin_request in zip(a_list, a_skin_list):
+            for char_index, (a_char, a_skin_request) in enumerate(zip(a_list, a_skin_list)):
                 # Search for character in char database
                 if a_char.upper() in _character_database.keys():
                     a_char = _character_database[a_char.upper()]
@@ -287,6 +372,8 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
                 # Remove [L] suffix if present when searching for player
                 if player_name[-4:] == ' [L]':
                     player_name = player_name[:-4]
+                # A doubles line names a team; each member has their own row.
+                player_name = resolvePlayerForChar(player_name, char_index, a_char)
                 # Player not found case (to uppercase)
                 if player_name.upper() not in _player_database.keys():
                     # add player to not found dictionary
@@ -380,6 +467,34 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
         out_file.close()
     # Return
     return return_list
+
+
+def fitTextFont(font_path, size, text, max_width, angle=0, min_size=8):
+    """Load a font, shrinking it until ``text`` fits ``max_width`` pixels wide.
+
+    Text that already fits is returned at its configured size, so every layout
+    tuned for singles renders byte-for-byte as before; only a label that would
+    run off the canvas is touched. That is normally a doubles team name, which
+    is about twice the length of a singles tag.
+
+    ``angle`` matters because the mask is rotated: the horizontal extent of
+    rotated text is ``x*cos + y*sin``, the same formula create_rotated_text
+    crops by.
+    """
+    from math import sin, cos, radians
+    font = ImageFont.truetype(font_path, size=size)
+    if max_width <= 0 or not text:
+        return font
+    while size > min_size:
+        box = font.getbbox(text)
+        x_text = box[2] - box[0]
+        y_text = box[3] - box[1]
+        width = abs(x_text * cos(radians(angle))) + abs(y_text * sin(radians(angle)))
+        if width <= max_width:
+            break
+        size -= 1
+        font = ImageFont.truetype(font_path, size=size)
+    return font
 
 
 def createCharacterWindow(char_list, win_size, right_bool=False, single_bool=False, border_bool=True, only_one=False):
@@ -642,31 +757,36 @@ def createRoundImages(match_list, background, foreground, only_one=False):
         match_fore = foreground.copy()
         # Apply the Text information to the desired locations on the foreground
         # Grab Font information
-        # TODO: open font as part of the set globals function so the imagefont is not called every loop
-        font_player1 = ImageFont.truetype(_properties['font_location'], size=_properties['font_player1_size'])
-        font_player2 = ImageFont.truetype(_properties['font_location'], size=_properties['font_player2_size'])
-        font_event = ImageFont.truetype(_properties['font_location'], size=_properties['font_event_size'])
-        font_round = ImageFont.truetype(_properties['font_location'], size=_properties['font_round_size'])
+        # Sizes rather than fonts: each label is loaded at the largest size that
+        # keeps it on the canvas (see fitTextFont), which only ever matters for a
+        # label long enough to overflow -- typically a doubles team name.
+        font_size_list = [_properties['font_player1_size'], _properties['font_player2_size']]
         # Loop through the following [ Player 1, Player 2, Event, Round ]
-        font_list = [font_player1, font_player2]
         text_center_list = [_properties['text_player1'], _properties['text_player2']]
         text_contents = [a_match.p1, a_match.p2]
         text_colors = [_properties['font_color1'], _properties['font_color2']]
         # Case for combining Event and Round - [ Player 1, Player 2, Event&Round]
         if _properties['event_round_single_text']:
-            font_list.append(font_event)
+            font_size_list.append(_properties['font_event_size'])
             text_center_list.append(_properties['text_event'])
             text_contents.append(a_match.e + _properties['event_round_text_split'] + a_match.r)
             text_colors.append(_properties['font_color3'])
         else:  # Normal case
-            font_list.extend([font_event, font_round])
+            font_size_list.extend([_properties['font_event_size'], _properties['font_round_size']])
             text_center_list.extend([_properties['text_event'], _properties['text_round']])
             text_contents.extend([a_match.e, a_match.r])
             text_colors.extend([_properties['font_color3'], _properties['font_color4']])
+        text_fit = _properties.get('text_fit_width', 1.0)
         # Apply text on foreground image
-        for t_font, t_center, t_contents, t_color in zip(font_list, text_center_list, text_contents, text_colors):
+        for t_size, t_center, t_contents, t_color in zip(font_size_list, text_center_list, text_contents, text_colors):
             # Determine center point for text
             t_offset = (int(foreground.size[0] * t_center[0]), int(foreground.size[1] * t_center[1]))
+            # The label is centred on t_offset, so it may run half its width
+            # either side: the widest it can be without crossing an edge is
+            # twice the distance to the nearer one.
+            t_max_width = 2 * min(t_center[0], 1 - t_center[0]) * foreground.size[0] * text_fit
+            t_font = fitTextFont(_properties['font_location'], t_size, t_contents,
+                                 t_max_width, angle=_properties['text_angle'])
             t_mask = create_rotated_text(_properties['text_angle'], t_contents, t_font)
             # apply mask to image at location
             color_image = Image.new('RGBA', t_mask.size, color=t_color)
@@ -726,7 +846,8 @@ def saveImages(match_list, folder_location, event_folder=None):
     for a_match in match_list:
         count_2 = 1
         for an_image in a_match.Images:
-            an_image.save(os.path.join(folder_location, str(count_1) + '.' + str(count_2) + ' ' + a_match.t + '.png'))
+            file_name = sanitizeFilename(str(count_1) + '.' + str(count_2) + ' ' + a_match.t) + '.png'
+            an_image.save(os.path.join(folder_location, file_name))
             an_image.close()
             count_2 += 1
         count_1 += 1
@@ -738,14 +859,15 @@ def main(argv):
     property_file = ''
     output_file = ''
     vod_file = ''
+    config_file = ''
     try:
-        opts, args = getopt.getopt(argv, "he:p:o:v:", ["event=", "number=", "property_file=", "output_file=", "vod-file="])
+        opts, args = getopt.getopt(argv, "he:p:o:v:c:", ["event=", "number=", "property_file=", "output_file=", "vod-file=", "config-file="])
     except getopt.GetoptError:
-        print('generate_rivals_thumbnail.py -e <event>, -p <property_file>, -o <output_file>')
+        print('generate_rivals_thumbnail.py -e <event>, -p <property_file>, -o <output_file>, -v <vod_file>, -c <config_file>')
         sys.exit(2)
     for opt, arg in opts:
         if opt == '-h':
-            print('generate_rivals_thumbnail.py -e <event (can have a number)>, -p <property_file>, -o <output_file>')
+            print('generate_rivals_thumbnail.py -e <event (can have a number)>, -p <property_file>, -o <output_file>, -v <vod_file>, -c <config_file for per-file config lookup>')
             sys.exit()
         elif opt in ("-e", "--event"):
             event_title = arg
@@ -755,15 +877,16 @@ def main(argv):
             output_file = arg
         elif opt in ("-v", "--vod-file"):
             vod_file = arg
+        elif opt in ("-c", "--config-file"):
+            config_file = arg
     print('Event is', event_title)
     # End of Command Line Arguments
 
     # 0. Setup information
     # Event
     global _properties
-    _properties = setGlobals(event_title, property_file)
-    if vod_file:
-        _properties['event_file'] = vod_file
+    _properties = setGlobals(event_title, property_file, vod_file=vod_file,
+                             config_file=config_file)
     # setGlobals('Sample test')
     # setGlobals('Quarantainment 43')
     # setGlobals('Students x Treehouse 8')

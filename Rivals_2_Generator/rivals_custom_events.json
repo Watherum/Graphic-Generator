@@ -7,6 +7,33 @@
     "top8_file": "EVO 2026 Top 8 HTML.txt",
     "current_num": "2026",
     "top8_link": "",
-    "collapsed": false
+    "collapsed": true
+  },
+  {
+    "label": "Twist of Fate Doubles",
+    "slug_template": "tournament/twist-of-fate/event/rivals-2-doubles",
+    "name_template": "Twist of Fate Doubles",
+    "abbrev": "ToF Doubles",
+    "top8_file": "Twist of Fate Doubles Top 8 HTML.txt",
+    "current_num": "",
+    "top8_link": ""
+  },
+  {
+    "label": "Twist of Fate Crews",
+    "slug_template": "tournament/twist-of-fate/event/rivals-2-crews-3v3",
+    "name_template": "Twist of Fate Crews",
+    "abbrev": "ToF Crews",
+    "top8_file": "Twist of Fate Crews Top 8 HTML.txt",
+    "current_num": "",
+    "top8_link": ""
+  },
+  {
+    "label": "Twist of Fate",
+    "slug_template": "tournament/twist-of-fate/event/rivals-2-singles",
+    "name_template": "Twist of Fate",
+    "abbrev": "ToF",
+    "top8_file": "Twist of Fate Top 8 HTML.txt",
+    "current_num": "",
+    "top8_link": ""
   }
 ]

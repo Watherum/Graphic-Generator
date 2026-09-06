@@ -7,7 +7,7 @@
     "Immortal Fight Night": "IFN",
     "Straight Into The Abyss": "SITA"
   },
-  "last_thumb_series": "Straight Into The Abyss",
+  "last_thumb_series": "Twist of Fate",
   "last_posts_series": "Straight Into The Abyss",
   "posts_cfg": {
     "Straight Into The Abyss": {
@@ -32,6 +32,12 @@
       "next_date": "",
       "next_link": "",
       "vods": ""
+    },
+    "Twist of Fate": {
+      "next_date": "2026-09-09",
+      "next_link": "",
+      "vods": "",
+      "has_next": false
     }
   },
   "last_update_tree": "",

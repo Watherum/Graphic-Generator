@@ -40,6 +40,7 @@ from skin_utils import (
     stem_for_label,
     strip_skins,
 )
+from team_utils import member_for_index, split_team
 
 # --------------------------------------------------------------------------- #
 #  Paths & constants                                                          #
@@ -104,8 +105,12 @@ MAX_LINE_LEN = 100
 
 try:
     import populate_rivals_globals as _pg
+    FILE_CONFIG_KEY = _pg.FILE_CONFIG_KEY
 except ImportError:
     _pg = None
+    # Mirrors populate_rivals_globals.FILE_CONFIG_KEY; only reached when that
+    # module failed to import, in which case configs are unusable anyway.
+    FILE_CONFIG_KEY = "__files__"
 
 
 # --------------------------------------------------------------------------- #
@@ -768,6 +773,72 @@ def _parse_vod_player_skins(line: str) -> list:
     return results
 
 
+#: The "(Ranno, Kragg)" after a player. Eats the space in front of it so
+#: removing one does not leave a double space behind.
+_VOD_CHARS_RE = re.compile(r'\s*\([^)]*\)')
+
+
+def _strip_char_lists(line: str) -> str:
+    """Drop the "(chars)" after every player -- the second way a title is shortened.
+
+    Only the player section is touched (between the round and the trailing game
+    suffix), so parentheses in an event name (``Some Event (Online) 12``) or a
+    round (``Pools (A) Wnrs Rd 2``) survive. A line that does not split into the
+    usual four fields is returned unchanged rather than mangled, and so is one
+    that would be left with no players at all.
+    """
+    parts = line.split(" - ")
+    if len(parts) < 4:
+        return line
+    middle = _VOD_CHARS_RE.sub("", " - ".join(parts[2:-1])).strip()
+    if not middle:
+        return line
+    return " - ".join(parts[:2] + [middle, parts[-1]])
+
+
+def _vod_shorten_flags(plain: str, copied: str) -> tuple[bool, bool]:
+    """(abbreviated, characters dropped) for a copied line.
+
+    Skins coming off is neither -- they are never part of a title, so nothing was
+    given up by removing them.
+    """
+    return (plain.split(" - ")[0] != copied.split(" - ")[0],
+            "(" in plain and "(" not in copied)
+
+
+def _vod_shorten_note(plain: str, copied: str) -> str:
+    """The same as words: '', 'abbreviated', 'characters dropped', or both."""
+    abbreviated, dropped = _vod_shorten_flags(plain, copied)
+    return ", ".join(b for b, on in
+                     (("abbreviated", abbreviated), ("characters dropped", dropped)) if on)
+
+
+def _expand_team(name: str, chars: list) -> list:
+    """Split a doubles tag into one entry per member: [(member, [(char, skin)])].
+
+    A team has no row of its own in the player database -- each member does --
+    so everything that reads or writes that database works on members, never on
+    the "shane,THE PIZZA GUY" tag the VOD line carries. Character *i* belongs to
+    member *i*; a member playing two characters gets both. A singles tag comes
+    back unchanged, so callers need no special case.
+    """
+    members = split_team(name)
+    if len(members) < 2:
+        return [(name, chars)]
+    buckets: list = [[] for _ in members]
+    for i, entry in enumerate(chars):
+        buckets[min(i, len(members) - 1)].append(entry)
+    return list(zip(members, buckets))
+
+
+def _parse_vod_team_members(line: str) -> list:
+    """:func:`_parse_vod_player_skins` with every doubles tag split into members."""
+    out: list = []
+    for name, chars in _parse_vod_player_skins(line):
+        out.extend(_expand_team(name, chars))
+    return out
+
+
 def _parse_vod_players(line: str) -> list:
     """Return [(player_name, [char, ...]), ...] for a match line, skins stripped."""
     return [(name, [c for c, _ in chars])
@@ -856,37 +927,51 @@ class VodModel(QtCore.QAbstractTableModel):
             if role == Qt.ItemDataRole.ToolTipRole:
                 return "Missing character data — add character name(s) inside the parentheses"
         if col == 4:
-            # Measure exactly what the Copy button puts on the clipboard: skins
-            # stripped and the series abbreviation already applied. Red means
-            # "still too long after abbreviating" -- the only case that needs the
-            # user to do something. Blue italic means the abbreviation is what
-            # brought it under: the line beside it still shows the full
-            # tournament name, so without that cue the count reads as wrong.
+            # The length of what Copy puts on the clipboard -- the title this set
+            # would be published under. Skins are stripped and the shortening
+            # strategies have run, because all of that happens on the way to the
+            # clipboard; showing the raw line length instead just reports a
+            # number nobody publishes.
+            #
+            # The colour says how much had to be given up to get there:
+            #   (none)  fits as written
+            #   blue    the series abbreviation was enough
+            #   yellow  the character lists had to go as well
+            #   red     over the limit even then -- the line itself needs work,
+            #           and nothing further is cut automatically because what to
+            #           give up next is the user's call.
+            plain = strip_skins(row["text"]).strip()
             copied = self.copy_text(row["text"]).strip()
             length = len(copied)
-            abbreviated = copied != strip_skins(row["text"]).strip()
+            abbreviated, dropped = _vod_shorten_flags(plain, copied)
+            over = length > MAX_LINE_LEN
             if role == Qt.ItemDataRole.DisplayRole:
                 return f"{length}/{MAX_LINE_LEN}"
             if role == Qt.ItemDataRole.TextAlignmentRole:
                 return int(Qt.AlignmentFlag.AlignCenter)
             if role == Qt.ItemDataRole.ForegroundRole:
-                if length > MAX_LINE_LEN:
+                if over:
                     return QtGui.QColor("#ff6b6b")
+                if dropped:
+                    return QtGui.QColor("#ffd166")
                 if abbreviated:
                     return QtGui.QColor("#6cb6ff")
-            if role == Qt.ItemDataRole.FontRole and abbreviated:
-                # Start from the app font so this only adds italics.
-                f = QtWidgets.QApplication.font()
-                f.setItalic(True)
-                return f
             if role == Qt.ItemDataRole.ToolTipRole:
-                if length > MAX_LINE_LEN:
-                    return ("Over the 100-character limit even after abbreviating — set or "
-                            "shorten the Abbreviation for this series in the Fetch tab")
+                if over:
+                    return (f"{length} characters — over the {MAX_LINE_LEN} limit even "
+                            f"{_vod_shorten_note(plain, copied) or 'at full length'}"
+                            f".\nNothing further is cut automatically: shorten the line "
+                            f"yourself, or set a shorter Abbreviation for this series in the "
+                            f"Fetch tab.\nCopies as: {copied}")
+                if dropped:
+                    return (f"{len(plain)} characters as written. The abbreviation alone was "
+                            f"not enough, so the character lists come off too, giving "
+                            f"{length}:\n{copied}")
                 if abbreviated:
-                    return "Abbreviated to fit — copies as:\n" + copied
-                return ("Length of the line as copied (skins stripped, "
-                        "abbreviation applied)")
+                    return (f"{len(plain)} characters as written, abbreviated to {length} "
+                            f"on copy:\n{copied}")
+                return ("Length of this line as a YouTube title. Per-set skins are "
+                        "not counted — they are stripped before copying")
         if col == 1 and role == Qt.ItemDataRole.ToolTipRole:
             return "Copy line"
         if col == 2 and role == Qt.ItemDataRole.ToolTipRole:
@@ -1744,6 +1829,24 @@ class RivalsWindow(QtWidgets.QMainWindow):
         cbox = CollapsibleBox("Thumbnail Config", collapsed=True)
         parent_layout.addWidget(cbox)
 
+        # What this form edits. A series config covers every event whose name
+        # starts with the series; a file config covers one names file, which is
+        # how two brackets of the same tournament -- a singles and a doubles --
+        # get different layouts without one overwriting the other.
+        srow = QtWidgets.QHBoxLayout()
+        srow.addWidget(QtWidgets.QLabel("Applies to:"))
+        self._cfg_scope = _NoWheelComboBox()
+        self._cfg_scope.addItems([self._CFG_SCOPE_SERIES, self._CFG_SCOPE_FILE])
+        self._cfg_scope.setMinimumWidth(160)
+        self._cfg_scope.setToolTip(
+            "Series: every event whose name starts with the series name.\n"
+            "VOD file: only the selected names file — a doubles bracket can then "
+            "look different from the singles one it shares a name with.")
+        self._cfg_scope.currentTextChanged.connect(self._on_cfg_scope_change)
+        srow.addWidget(self._cfg_scope)
+        srow.addStretch(1)
+        cbox.addLayout(srow)
+
         self._cfg_series_label = _muted("No series selected")
         cbox.addWidget(self._cfg_series_label)
 
@@ -2057,7 +2160,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         from PIL import Image
 
         series = self._thumb_series.currentText().strip()
-        props = {**_base_event_props(series), **self._collect_config_form()}
+        props = {**self._config_base_props(series), **self._collect_config_form()}
         event_name = (self._thumb_event_name.text().strip() or series or "Sample Event")
         props["event_name"] = event_name
         props["event_short_name"] = event_name
@@ -2390,10 +2493,78 @@ class RivalsWindow(QtWidgets.QMainWindow):
                 "char_offset1", "char_offset2", "char_window"]
     _CFG_COLOR = ["font_color1", "font_color2", "font_color3", "font_color4"]
 
-    def _load_config_into_form(self, series: str):
-        self._cfg_series_label.setText(f"Editing: {series}" if series else "No series selected")
-        saved = self._event_configs.get(series, {})
+    _CFG_SCOPE_SERIES = "Series"
+    _CFG_SCOPE_FILE = "VOD file"
+
+    def _cfg_scope_is_file(self) -> bool:
+        combo = getattr(self, "_cfg_scope", None)
+        return combo is not None and combo.currentText() == self._CFG_SCOPE_FILE
+
+    def _cfg_target_file(self) -> str:
+        """The names file a file-scoped config is written for."""
+        combo = getattr(self, "_vod_file", None)
+        return combo.currentText().strip() if combo is not None else ""
+
+    def _saved_file_config(self, name: str) -> dict:
+        """The stored override for one names file, matched as the generator does.
+
+        Case-insensitively: the generator looks the file up by the basename it
+        builds from the event name ("{event} names.txt"), which only matches the
+        file on disk ("{Event} Names.txt") because Windows ignores case.
+        """
+        if not name:
+            return {}
+        wanted = name.strip().lower()
+        for key, cfg in (self._event_configs.get(FILE_CONFIG_KEY) or {}).items():
+            if str(key).strip().lower() == wanted:
+                return cfg
+        return {}
+
+    def _config_base_props(self, series: str) -> dict:
+        """What the form values sit on top of.
+
+        A file config overrides *the series config*, not the Python defaults, so
+        in file scope the series entry is part of the base -- otherwise the
+        preview would draw a layout no run ever produces.
+        """
         base = _base_event_props(series)
+        if self._cfg_scope_is_file():
+            return {**base, **self._event_configs.get(series, {})}
+        return base
+
+    def _on_cfg_scope_change(self):
+        self._reload_config_form()
+
+    def _reload_config_form(self):
+        if hasattr(self, "_thumb_series") and hasattr(self, "_cfg_series_label"):
+            self._load_config_into_form(self._thumb_series.currentText())
+
+    def _cfg_scope_summary(self, series: str) -> str:
+        """The line under the scope picker: what is being edited, and any catch."""
+        if not self._cfg_scope_is_file():
+            return f"Editing: {series}" if series else "No series selected"
+        name = self._cfg_target_file()
+        if not name:
+            return "No VOD file selected"
+        text = f"Editing: {name}"
+        if not self._saved_file_config(name):
+            text += " (new -- starting from the series config)"
+        # A run reads the file its *event name* implies, so a config on any other
+        # file would never be applied. Say so rather than let it quietly do
+        # nothing.
+        event_name = getattr(self, "_thumb_event_name", None)
+        event_name = event_name.text().strip() if event_name is not None else ""
+        if event_name and name.lower() != f"{event_name} names.txt".lower():
+            text += f' -- note: generating "{event_name}" reads "{event_name} Names.txt"'
+        return text
+
+    def _load_config_into_form(self, series: str):
+        if self._cfg_scope_is_file():
+            saved = self._saved_file_config(self._cfg_target_file())
+        else:
+            saved = self._event_configs.get(series, {})
+        self._cfg_series_label.setText(self._cfg_scope_summary(series))
+        base = self._config_base_props(series)
         cfg = {**base, **saved}
 
         self._cfg_background.setText(cfg.get("background_file", ""))
@@ -2477,6 +2648,21 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
     def _save_thumbnail_config(self):
         series = self._thumb_series.currentText().strip()
+        if self._cfg_scope_is_file():
+            name = self._cfg_target_file()
+            if not name:
+                self._log("[Error: no VOD file selected]\n")
+                return
+            files = self._event_configs.setdefault(FILE_CONFIG_KEY, {})
+            # Replace whatever spelling is stored for this file, so a case
+            # difference cannot leave two entries fighting over one run.
+            for key in [k for k in files if str(k).strip().lower() == name.lower()]:
+                del files[key]
+            files[name] = self._collect_config_form()
+            self._save_event_configs()
+            self._log(f"[Config saved for file \"{name}\"]\n")
+            self._cfg_series_label.setText(self._cfg_scope_summary(series))
+            return
         if not series:
             self._log("[Error: no series selected]\n")
             return
@@ -2486,6 +2672,20 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
     def _clear_thumbnail_config(self):
         series = self._thumb_series.currentText().strip()
+        if self._cfg_scope_is_file():
+            # Dropping a file override means falling back to the series config,
+            # so reload the form onto that rather than emptying every box.
+            name = self._cfg_target_file()
+            files = self._event_configs.get(FILE_CONFIG_KEY) or {}
+            gone = [k for k in files if str(k).strip().lower() == name.lower()]
+            for key in gone:
+                del files[key]
+            if gone:
+                self._save_event_configs()
+                self._log(f"[Config for file \"{name}\" removed -- "
+                          f"back to the series config]\n")
+            self._load_config_into_form(series)
+            return
         if series in self._event_configs:
             del self._event_configs[series]
             self._save_event_configs()
@@ -2585,7 +2785,13 @@ class RivalsWindow(QtWidgets.QMainWindow):
             ]
             tmp_path = ROOT / "Vod_Names" / "_filter_tmp names.txt"
             tmp_path.write_text("\n".join(comment_lines + match_lines), encoding="utf-8")
+            # -v points at a temporary copy, whose name matches no config;
+            # -c names the file the lines came from so its per-file config is
+            # still the one applied.
             cmd += ["-v", str(tmp_path)]
+            selected_vod = self._vod_loaded_name or self._vod_file.currentText()
+            if selected_vod:
+                cmd += ["-c", selected_vod]
             self._log(f"[Filter active: generating {len(match_lines)} line(s) matching \"{filter_text}\"]\n")
 
             def _cleanup(_):
@@ -2973,7 +3179,8 @@ class RivalsWindow(QtWidgets.QMainWindow):
             text = self._vod_model.text_at(src_idx.row())
             out = self._vod_abbrev_line(text)
             QtWidgets.QApplication.clipboard().setText(out)
-            suffix = " (abbreviated)" if out != text else ""
+            note = _vod_shorten_note(strip_skins(text), out)
+            suffix = f" ({note})" if note else ""
             self._log(f"[Copied to clipboard{suffix}: {out}]\n")
         elif act == del_act:
             self._vod_model.delete_row(src_idx.row())
@@ -3004,6 +3211,25 @@ class RivalsWindow(QtWidgets.QMainWindow):
             stem = next((st for st, pref in matches if pref), matches[0][0])
             return skin_label(stem) if stem else ""
 
+        def owner_for(player: str, index: int, char: str) -> str:
+            """Which member of a doubles team this character belongs to.
+
+            Same rule the generator resolves renders by: character *i* is member
+            *i*'s, unless that member has no row and another member's row has the
+            character. A singles tag is returned unchanged.
+            """
+            base = player[:-4] if player[-4:] == " [L]" else player
+            members = split_team(base)
+            if len(members) < 2:
+                return player
+            if index < len(members) and members[index].lower() in db:
+                return members[index]
+            for a_member in members:
+                if any(c.upper() == char.upper()
+                       for c, _ in db.get(a_member.lower(), [])):
+                    return a_member
+            return member_for_index(base, index)
+
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("Set skins for this set")
         lay = QtWidgets.QVBoxLayout(dlg)
@@ -3012,10 +3238,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
         form = QtWidgets.QFormLayout()
         combos = []          # (player_slot, char, combo)
         for slot, (name, chars) in enumerate(parsed):
-            for char, skin in chars:
+            for idx, (char, skin) in enumerate(chars):
                 combo = QtWidgets.QComboBox()
                 combo.setMinimumWidth(220)
-                pref = preferred_label(name, char)
+                owner = owner_for(name, idx, char)
+                pref = preferred_label(owner, char)
                 combo.addItem(f"(preferred{': ' + pref if pref else ''})", "")
                 labels = [skin_label(st) for st in get_skins_for_char(char)]
                 for lbl in labels:
@@ -3027,7 +3254,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
                     if want not in labels:
                         combo.addItem(want, want)
                     combo.setCurrentText(want)
-                form.addRow(f"{name} — {char}", combo)
+                form.addRow(f"{owner} — {char}", combo)
                 combos.append((slot, char, combo))
         lay.addLayout(form)
 
@@ -3150,6 +3377,10 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._flush_vod_autosave()
         name = self._vod_file.currentText()
         self._vod_loaded_name = name
+        # A file-scoped thumbnail config belongs to this file, so the form has
+        # to follow the selection rather than keep editing the old file.
+        if self._cfg_scope_is_file():
+            self._reload_config_form()
         if not name:
             self._vod_model.load([])
             return
@@ -3202,10 +3433,17 @@ class RivalsWindow(QtWidgets.QMainWindow):
         Per-set skins are a rendering detail, so they come off first -- both
         because they don't belong in the title and because the length limit is
         about the title, not about what we wrote to steer the generator.
+
+        Then two strategies, in order, each applied only if the line is still
+        over the limit: the series abbreviation in place of the event name, and
+        after that the character lists. A line still too long once both have run
+        is copied as it is and flagged yellow in the Len column -- what to give
+        up next is the user's call.
         """
         text = strip_skins(text)
         if len(text) <= MAX_LINE_LEN:
             return text
+        # First: the series abbreviation.
         event_name = getattr(self, "_vod_event_name", "")
         if not (event_name and text.startswith(event_name)):
             # Fall back to the line's own event name. The header only tells us
@@ -3214,10 +3452,14 @@ class RivalsWindow(QtWidgets.QMainWindow):
             # it does not match, and those must still be abbreviated rather than
             # silently copied at full length.
             event_name = text.split(" - ")[0].strip() if " - " in text else ""
-            if not (event_name and text.startswith(event_name)):
-                return text
-        abbrev = self._abbrev_for_event(event_name)
-        return abbrev + text[len(event_name):] if abbrev else text
+        if event_name and text.startswith(event_name):
+            abbrev = self._abbrev_for_event(event_name)
+            if abbrev:
+                text = abbrev + text[len(event_name):]
+                if len(text) <= MAX_LINE_LEN:
+                    return text
+        # Second: the character lists.
+        return _strip_char_lists(text)
 
     def _abbrev_for_event(self, event_name: str) -> str:
         """'Straight Into The Abyss 63' -> 'SITA 63'.
@@ -3292,7 +3534,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         known = {name.lower() for name in db}
         missing: list[str] = []
         for line in lines:
-            for name, _chars in _parse_vod_player_skins(line):
+            for name, _chars in _parse_vod_team_members(line):
                 if name.lower() not in known and name not in missing:
                     missing.append(name)
         return missing
@@ -3305,7 +3547,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         new_players: dict = {}  # lower_name -> (canonical_name, set_of_chars)
         for r in range(self._vod_model.rowCount()):
             text = self._vod_model.text_at(r)
-            for name, chars in _parse_vod_player_skins(text):
+            # A doubles line names a team; add a row per member instead of one
+            # row whose name contains the comma the CSV splits on.
+            for name, chars in _parse_vod_team_members(text):
                 key = name.lower()
                 if key not in db_lower:
                     if key not in new_players:
@@ -3354,7 +3598,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         unknown: list[str] = []
         unresolved: list[str] = []
         for r in range(self._vod_model.rowCount()):
-            for name, chars in _parse_vod_player_skins(self._vod_model.text_at(r)):
+            for name, chars in _parse_vod_team_members(self._vod_model.text_at(r)):
                 key = by_lower.get(name.lower())
                 if key is None:
                     if name not in unknown:
@@ -3418,7 +3662,8 @@ class RivalsWindow(QtWidgets.QMainWindow):
         if text:
             out = self._vod_abbrev_line(text)
             QtWidgets.QApplication.clipboard().setText(out)
-            suffix = " (abbreviated)" if out != text else ""
+            note = _vod_shorten_note(strip_skins(text), out)
+            suffix = f" ({note})" if note else ""
             self._log(f"[Copied to clipboard{suffix}: {out}]\n")
 
     def _vod_delete_marked(self):
@@ -4986,6 +5231,12 @@ class RivalsWindow(QtWidgets.QMainWindow):
     def _confirm_add_player(self):
         name = self._new_player.text().strip()
         if not name:
+            return
+        if "," in name:
+            # The database is comma separated, so a doubles tag written as one
+            # name would be read back as a player plus a stray character.
+            self._log("[Player names cannot contain a comma — add each member "
+                      "of a doubles team as their own player]\n")
             return
         if name in self._db_players:
             self._log(f"[Player '{name}' already exists]\n")
