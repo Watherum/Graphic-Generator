@@ -632,6 +632,27 @@ class _NoWheelComboBox(QtWidgets.QComboBox):
         event.ignore()
 
 
+class _EditableCombo(_NoWheelComboBox):
+    """An editable combo that answers the QLineEdit API of the box it replaced.
+
+    Lets a control grow a dropdown of known values without every caller (and
+    every ``textChanged`` connection) having to change with it — a value that
+    is not in the list can still be typed, exactly as before.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setEditable(True)
+        self.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
+        self.textChanged = self.currentTextChanged
+
+    def text(self) -> str:
+        return self.currentText()
+
+    def setText(self, value: str):
+        self.setCurrentText(value)
+
+
 def _fmt_norm(value: float) -> str:
     """Trim a normalized value to something short and exact: 0.280 -> 0.28."""
     text = f"{value:.3f}".rstrip("0").rstrip(".")
@@ -742,8 +763,41 @@ _VOD_PLAYER_RE = re.compile(r'^(.+?)\s*\(([^)]*)\)\s*$')
 _STARTGG_URL_RE = re.compile(r'^https?://(?:www\.)?start\.gg/')
 
 def _normalize_startgg_slug(value: str) -> str:
-    """Strip a start.gg URL prefix, leaving just the slug path."""
-    return _STARTGG_URL_RE.sub("", value)
+    """Strip a start.gg URL prefix, leaving just the slug path.
+
+    A copied bracket URL carries extra path segments after the event
+    ("…/event/rivals-2-singles/brackets/1/2"), which the API rejects — keep
+    only the four segments that name the event.
+    """
+    slug = _STARTGG_URL_RE.sub("", value).strip().strip("/").split("?")[0]
+    parts = slug.split("/")
+    if len(parts) > 4 and parts[0] == "tournament" and parts[2] == "event":
+        slug = "/".join(parts[:4])
+    return slug
+
+
+def _startgg_slug_problem(value: str) -> str:
+    """Explain why a slug won't fetch, or "" if it looks like an event slug.
+
+    A tournament runs several events (Rivals 2 singles, doubles, Ultimate...)
+    and a fetch pulls the sets of exactly one of them, so the slug has to name
+    the event — "tournament/<tournament>/event/<event>" — not just the
+    tournament.
+    """
+    slug = _normalize_startgg_slug(value)
+    if not slug:
+        return "Enter the event slug (or paste the event's start.gg URL)."
+    if not slug.startswith("tournament/"):
+        return ("That doesn't look like an event URL. A short link like "
+                "start.gg/UIFN274 points at the whole tournament — open the "
+                "event's bracket page and copy the URL from there.")
+    if "/event/" not in slug:
+        return ("This is the tournament, not one of its events. A tournament "
+                "holds several events; open the one you want (e.g. Rivals 2 "
+                "Singles) and copy its URL — it ends in /event/<name>.")
+    if slug.split("/event/", 1)[1].strip("/") == "":
+        return "The slug ends at /event/ — it needs the event name after it."
+    return ""
 
 def _vod_missing_chars(text: str) -> bool:
     """True when a match line has a Vs but is missing or has empty character parens."""
@@ -1082,6 +1136,35 @@ class VodModel(QtCore.QAbstractTableModel):
         self.contentChanged.emit()
         return new
 
+    def set_abbrev_header(self, header: str) -> bool:
+        """Write the '# ABBREV:' header row, or drop it when *header* is empty.
+
+        The header is a row like any other, so this goes through the model and
+        rides the normal autosave out to the file.
+        """
+        line = f"# ABBREV: {header}".rstrip() if header else ""
+        for r, row in enumerate(self._rows):
+            if row["text"].strip().upper().startswith("# ABBREV:"):
+                if row["text"] == line:
+                    return False
+                if line:
+                    row["text"] = line
+                    idx = self.index(r, 5)
+                    self.dataChanged.emit(self.index(r, 4), idx)
+                else:
+                    self.beginRemoveRows(QtCore.QModelIndex(), r, r)
+                    self._rows.pop(r)
+                    self.endRemoveRows()
+                self.contentChanged.emit()
+                return True
+        if not line:
+            return False
+        self.beginInsertRows(QtCore.QModelIndex(), 0, 0)
+        self._rows.insert(0, {"checked": False, "text": line})
+        self.endInsertRows()
+        self.contentChanged.emit()
+        return True
+
     def any_checked(self) -> bool:
         return any(r["checked"] for r in self._rows)
 
@@ -1400,6 +1483,16 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._build_char_db_tab()
         self._build_update_tab()
 
+        # Player Database sits next to Generate Thumbnails, whose Import Missing
+        # Players / Add Missing Skins buttons write into it. Moved after the
+        # build rather than built in that order, because a tab's construction
+        # can depend on an earlier tab's widgets.
+        bar = self.tabs.tabBar()
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i) == "Player Database":
+                bar.moveTab(i, 2)
+                break
+
         # Give every dropdown a visibly highlighted hover/selection. A custom
         # delegate is used because the stylesheet/palette can't reliably reach
         # combo popups under Fusion (see ComboItemDelegate).
@@ -1515,10 +1608,17 @@ class RivalsWindow(QtWidgets.QMainWindow):
             num = _hline(saved_num, 60)
             row1.addWidget(num)
             row1.addSpacing(12)
-            row1.addWidget(QtWidgets.QLabel("Top 8 Link:"))
+            link_lbl = QtWidgets.QLabel("Link for Top 8 Graphic:")
+            link_tip = ("The short start.gg link printed on the Top 8 graphic "
+                        '(its "Event link" field), e.g. start.gg/UIFN274. '
+                        "Optional -- leave it blank and the graphic shows no link.")
+            link_lbl.setToolTip(link_tip)
+            row1.addWidget(link_lbl)
             link = QtWidgets.QLineEdit(cfg["default_link"].replace("{n}", saved_num))
             link.setMinimumWidth(280)
+            link.setToolTip(link_tip)
             row1.addWidget(link)
+            row1.addWidget(_muted("optional"))
             row1.addStretch(1)
             cbox.addLayout(row1)
 
@@ -1531,11 +1631,16 @@ class RivalsWindow(QtWidgets.QMainWindow):
                               f"{MAX_LINE_LEN} characters (e.g. IFN). The event "
                               "number is appended automatically.")
             rowa.addWidget(abbrev)
-            rowa.addWidget(_muted(f"used when a match line exceeds {MAX_LINE_LEN} chars"))
+            abbrev_hint = _muted(f"used when a match line exceeds {MAX_LINE_LEN} chars")
+            # One line: a QHBoxLayout gives a wrapping label its minimum width,
+            # which breaks a short hint into a narrow column.
+            abbrev_hint.setWordWrap(False)
+            rowa.addWidget(abbrev_hint)
             rowa.addStretch(1)
             cbox.addLayout(rowa)
             abbrev.textChanged.connect(
-                lambda _t: (self._save_settings(), self._refresh_vod_len()))
+                lambda _t, lbl=label: (self._save_settings(),
+                                       self._sync_abbrev_to_vod_file(lbl)))
 
             def _on_num(text, lk=link, tmpl=cfg["default_link"], lbl=label):
                 lk.setText(tmpl.replace("{n}", text.strip()))
@@ -1559,39 +1664,81 @@ class RivalsWindow(QtWidgets.QMainWindow):
             lay.addWidget(cbox)
             self._fetch_widgets[label] = {"num": num, "link": link, "abbrev": abbrev}
 
+        # Renaming a saved event refreshes the event lists, which reloads the
+        # Thumbnails tab -- too much to do on every keystroke, so it is deferred.
+        self._custom_refresh_timer = QtCore.QTimer(self)
+        self._custom_refresh_timer.setSingleShot(True)
+        self._custom_refresh_timer.setInterval(600)
+        self._custom_refresh_timer.timeout.connect(self._refresh_thumbnail_events)
+
         # Saved custom tournaments
-        self._saved_custom_box = QtWidgets.QGroupBox("Saved Custom Tournaments")
+        self._saved_custom_box = QtWidgets.QGroupBox("Saved Events")
         self._saved_custom_layout = QtWidgets.QVBoxLayout(self._saved_custom_box)
         lay.addWidget(self._saved_custom_box)
         self._build_saved_custom_rows()
 
         # Add new custom
-        addbox = QtWidgets.QGroupBox("Add New Custom Tournament")
+        addbox = QtWidgets.QGroupBox("Add A Tournament's Event")
         form = QtWidgets.QGridLayout(addbox)
-        form.addWidget(QtWidgets.QLabel("Slug:"), 0, 0)
+        intro = _muted(
+            "Adds one event from a tournament — the Rivals 2 singles bracket, say — "
+            "not the whole tournament. Open that event's page on start.gg and paste "
+            "its URL below; a tournament with several events needs one entry each.")
+        form.addWidget(intro, 0, 0, 1, 4)
+        form.addWidget(QtWidgets.QLabel("Event URL:"), 1, 0)
         self._custom_slug = QtWidgets.QLineEdit()
         self._custom_slug.setFixedWidth(360)
-        form.addWidget(self._custom_slug, 0, 1)
-        form.addWidget(_muted("slug or start.gg URL  ·  use {n} for event number"), 0, 2)
-        form.addWidget(QtWidgets.QLabel("Name:"), 1, 0)
+        self._custom_slug.setPlaceholderText(
+            "start.gg/tournament/my-tournament-{n}/event/rivals-2-singles")
+        self._custom_slug.setToolTip(
+            "The event's own start.gg URL or slug, ending in /event/<name>.\n"
+            "Put {n} where the event number goes so the entry can be reused "
+            "week to week.")
+        form.addWidget(self._custom_slug, 1, 1)
+        form.addWidget(_muted("event URL or slug, ending in /event/…  ·  use {n} for the event number"), 1, 2)
+        self._custom_slug_hint = _muted("")
+        self._custom_slug_hint.setWordWrap(True)
+        form.addWidget(self._custom_slug_hint, 2, 1, 1, 3)
+        self._custom_slug.textChanged.connect(self._refresh_custom_slug_hint)
+        form.addWidget(QtWidgets.QLabel("Name:"), 3, 0)
         self._custom_name = QtWidgets.QLineEdit()
         self._custom_name.setFixedWidth(250)
-        form.addWidget(self._custom_name, 1, 1)
-        form.addWidget(_muted("e.g. Immortal Fight Night"), 1, 2)
-        form.addWidget(QtWidgets.QLabel("Abbrev:"), 2, 0)
+        form.addWidget(self._custom_name, 3, 1)
+        form.addWidget(_muted("series name for the VOD lines, e.g. Immortal Fight Night {n}"), 3, 2)
+        form.addWidget(QtWidgets.QLabel("Abbrev:"), 4, 0)
         self._custom_abbrev = QtWidgets.QLineEdit()
         self._custom_abbrev.setFixedWidth(120)
-        form.addWidget(self._custom_abbrev, 2, 1)
-        form.addWidget(_muted(f"optional — used when a match line exceeds {MAX_LINE_LEN} chars"), 2, 2)
-        form.addWidget(QtWidgets.QLabel("Event #:"), 3, 0)
+        form.addWidget(self._custom_abbrev, 4, 1)
+        form.addWidget(_muted(f"optional — used when a match line exceeds {MAX_LINE_LEN} chars"), 4, 2)
+        custom_num_lbl = QtWidgets.QLabel("Event #:")
+        custom_num_lbl.setToolTip("Optional -- it fills every {n} above. An "
+                                  "event whose URL and name have no {n} needs none.")
+        form.addWidget(custom_num_lbl, 5, 0)
         self._custom_num = _hline("", 60)
-        form.addWidget(self._custom_num, 3, 1)
+        self._custom_num.setToolTip(custom_num_lbl.toolTip())
+        form.addWidget(self._custom_num, 5, 1)
+        form.addWidget(_muted("optional — fills every {n} above"), 5, 2)
         save_fetch = QtWidgets.QPushButton("Save & Fetch VOD Names")
         save_fetch.clicked.connect(self._fetch_custom_sets)
-        form.addWidget(save_fetch, 4, 1)
+        form.addWidget(save_fetch, 6, 1)
         form.setColumnStretch(3, 1)
         lay.addWidget(addbox)
         lay.addStretch(1)
+        self._refresh_custom_slug_hint()
+
+    def _refresh_custom_slug_hint(self, *_a):
+        """Say, as the user types, why a slug won't fetch — blank once it will."""
+        text = self._custom_slug.text().strip()
+        problem = _startgg_slug_problem(text) if text else ""
+        self._custom_slug_hint.setText(problem)
+        self._custom_slug_hint.setStyleSheet(
+            "color: #E5534B;" if problem else "")
+        self._custom_slug_hint.setVisible(bool(problem))
+
+    @staticmethod
+    def _custom_label(name_tmpl: str, slug_tmpl: str) -> str:
+        """The series name a saved event is listed under: its name without {n}."""
+        return (name_tmpl or slug_tmpl).replace(" {n}", "").replace("{n}", "").strip()
 
     def _build_saved_custom_rows(self):
         # Clear existing
@@ -1601,22 +1748,93 @@ class RivalsWindow(QtWidgets.QMainWindow):
             if w:
                 w.deleteLater()
         if not self._custom_events:
-            self._saved_custom_layout.addWidget(_muted("No saved custom tournaments"))
+            self._saved_custom_layout.addWidget(_muted("No saved events yet"))
             return
         for entry in self._custom_events:
             slug_tmpl = entry.get("slug_template", entry.get("slug", ""))
             if not slug_tmpl:
                 continue
             cbox = CollapsibleBox(entry.get("label", slug_tmpl), collapsed=entry.get("collapsed", False))
+
+            # A saved event is editable in place: a tournament renames a bracket
+            # or moves to a new slug, and deleting and re-adding the entry would
+            # take its abbreviation and Top 8 link with it.
+            rowu = QtWidgets.QHBoxLayout()
+            rowu.addWidget(QtWidgets.QLabel("Event URL:"))
+            slug_box = QtWidgets.QLineEdit(slug_tmpl)
+            slug_box.setMinimumWidth(340)
+            slug_box.setToolTip(
+                "The event's own start.gg URL or slug, ending in /event/<name>.\n"
+                "Put {n} where the event number goes.")
+            rowu.addWidget(slug_box)
+            rowu.addStretch(1)
+            cbox.addLayout(rowu)
+
+            rown = QtWidgets.QHBoxLayout()
+            rown.addWidget(QtWidgets.QLabel("Name:"))
+            name_box = QtWidgets.QLineEdit(entry.get("name_template", ""))
+            name_box.setMinimumWidth(250)
+            name_box.setToolTip("Names the VOD file and the generated event. "
+                                "{n} is replaced by the event number.")
+            rown.addWidget(name_box)
+            name_hint = _muted("renames the event everywhere it is listed")
+            name_hint.setWordWrap(False)
+            rown.addWidget(name_hint)
+            rown.addStretch(1)
+            cbox.addLayout(rown)
+
+            def _on_slug_text(text, e=entry):
+                e["slug_template"] = text.strip()
+                self._save_custom_events()
+
+            def _on_slug_done(box=slug_box, e=entry):
+                # Normalize a pasted URL, and say so if it names no event --
+                # the same check the Add form makes, applied to an edit.
+                norm = _normalize_startgg_slug(box.text().strip())
+                if norm != box.text():
+                    box.setText(norm)      # -> _on_slug_text
+                problem = _startgg_slug_problem(norm)
+                if problem:
+                    self._log(f"[{e.get('label', 'Saved event')}: {problem}]\n")
+
+            def _on_name_text(text, e=entry, box=cbox):
+                e["name_template"] = text.strip()
+                label = self._custom_label(e["name_template"], e.get("slug_template", ""))
+                if label:
+                    e["label"] = label
+                    e["top8_file"] = f"{label} Top 8 HTML.txt"
+                    box._toggle.setText(label)
+                self._save_custom_events()
+                # Deferred: this fires per keystroke, and refreshing the event
+                # lists reloads the Thumbnails tab's VOD file and config.
+                self._custom_refresh_timer.start()
+
+            slug_box.textChanged.connect(_on_slug_text)
+            slug_box.editingFinished.connect(_on_slug_done)
+            name_box.textChanged.connect(_on_name_text)
+
             row1 = QtWidgets.QHBoxLayout()
-            row1.addWidget(QtWidgets.QLabel("Event #:"))
+            num_lbl = QtWidgets.QLabel("Event #:")
+            num_lbl.setToolTip("Optional -- it fills every {n} in the URL and "
+                               "name above. An event whose name has no {n} "
+                               "needs none.")
+            row1.addWidget(num_lbl)
             num = _hline(entry.get("current_num", ""), 60)
+            num.setToolTip(num_lbl.toolTip())
             row1.addWidget(num)
+            row1.addWidget(_muted("optional"))
             row1.addSpacing(12)
-            row1.addWidget(QtWidgets.QLabel("Top 8 Link:"))
+            link_lbl = QtWidgets.QLabel("Link for Top 8 Graphic:")
+            link_tip = ("The short start.gg link printed on the Top 8 graphic "
+                        '(its "Event link" field), e.g. start.gg/UIFN274. '
+                        "Optional -- leave it blank and the graphic shows no link.")
+            link_lbl.setToolTip(link_tip)
+            row1.addWidget(link_lbl)
             link = QtWidgets.QLineEdit(entry.get("top8_link", ""))
             link.setMinimumWidth(260)
+            link.setToolTip(link_tip)
             row1.addWidget(link)
+            row1.addWidget(_muted("optional"))
             row1.addStretch(1)
             cbox.addLayout(row1)
 
@@ -1635,14 +1853,18 @@ class RivalsWindow(QtWidgets.QMainWindow):
                               f"{MAX_LINE_LEN} characters. The event number is "
                               "appended automatically.")
             rowa.addWidget(abbrev)
-            rowa.addWidget(_muted(f"used when a match line exceeds {MAX_LINE_LEN} chars"))
+            abbrev_hint = _muted(f"used when a match line exceeds {MAX_LINE_LEN} chars")
+            # One line: a QHBoxLayout gives a wrapping label its minimum width,
+            # which breaks a short hint into a narrow column.
+            abbrev_hint.setWordWrap(False)
+            rowa.addWidget(abbrev_hint)
             rowa.addStretch(1)
             cbox.addLayout(rowa)
 
             def _on_abbrev(text, e=entry):
                 e["abbrev"] = text
                 self._save_custom_events()
-                self._refresh_vod_len()
+                self._sync_abbrev_to_vod_file(e.get("label", ""))
 
             num.textChanged.connect(_on_num)
             link.textChanged.connect(_on_link)
@@ -1668,10 +1890,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._custom_slug.setText(slug_tmpl)  # normalize URL → slug in place
         name_tmpl = self._custom_name.text().strip()
         num = self._custom_num.text().strip()
-        if not slug_tmpl:
-            self._log("[Error: slug is required]\n")
+        problem = _startgg_slug_problem(slug_tmpl)
+        if problem:
+            self._log(f"[Error: {problem}]\n")
             return
-        label = (name_tmpl or slug_tmpl).replace(" {n}", "").replace("{n}", "").strip()
+        label = self._custom_label(name_tmpl, slug_tmpl)
         abbrev = self._custom_abbrev.text().strip()
         slug = slug_tmpl.replace("{n}", num)
         name = (name_tmpl or slug_tmpl).replace("{n}", num)
@@ -1782,17 +2005,31 @@ class RivalsWindow(QtWidgets.QMainWindow):
         refresh.clicked.connect(self._refresh_thumbnail_events)
         row1.addWidget(refresh)
         row1.addSpacing(12)
-        row1.addWidget(QtWidgets.QLabel("# / Suffix:"))
-        self._thumb_num = _hline("274", 80)
+        num_lbl = QtWidgets.QLabel("# / Label:")
+        num_tip = ("What replaces {n} in the series name -- an event number "
+                   "(274), or a word for a tournament's other brackets "
+                   "(Doubles, Crews).")
+        num_lbl.setToolTip(num_tip)
+        row1.addWidget(num_lbl)
+        self._thumb_num = _hline("274", 160)
+        self._thumb_num.setToolTip(num_tip)
         row1.addWidget(self._thumb_num)
         row1.addStretch(1)
         v.addLayout(row1)
 
         row2 = QtWidgets.QHBoxLayout()
         row2.addWidget(QtWidgets.QLabel("Event name:"))
-        self._thumb_event_name = QtWidgets.QLineEdit()
+        # A tournament can hold several events (a singles and a doubles bracket,
+        # say), which share a series and therefore differ only in this name. The
+        # dropdown lists the ones that already have a VOD file so one can be
+        # picked instead of typed; it stays editable for an event not fetched yet.
+        self._thumb_event_name = _EditableCombo()
         self._thumb_event_name.setMinimumWidth(320)
+        self._thumb_event_name.setToolTip(
+            "The event to generate. Picking one selects its VOD names file, "
+            "and picking a file here selects the event.")
         row2.addWidget(self._thumb_event_name)
+        self._thumb_event_name.activated.connect(self._on_thumb_event_pick)
         row2.addStretch(1)
         v.addLayout(row2)
         lay.addWidget(box)
@@ -2755,7 +2992,97 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
     def _update_thumb_name(self):
         template = self._thumb_event_map.get(self._thumb_series.currentText(), "{n}")
-        self._thumb_event_name.setText(template.format(n=self._thumb_num.text().strip()))
+        num = self._thumb_num.text().strip()
+        name = template.format(n=num)
+        if not num:
+            # No label: the event is the series itself, so drop the separator
+            # the label would have sat behind rather than leave it dangling.
+            name = re.sub(r"\s{2,}", " ", name).strip()
+        self._thumb_event_name.setText(name)
+        self._save_settings()
+
+    # ------------------------------------------------------------------ #
+    #  Event name <-> VOD file                                           #
+    # ------------------------------------------------------------------ #
+    # A run reads "{event} Names.txt", so the event name and the selected file
+    # are two spellings of one choice. These keep them in step: picking either
+    # one sets the other.
+    _NAMES_SUFFIX = " Names.txt"
+
+    @staticmethod
+    def _event_name_for_file(name: str) -> str:
+        """"Twist of Fate Doubles 3 Names.txt" -> "Twist of Fate Doubles 3"."""
+        if name.lower().endswith(RivalsWindow._NAMES_SUFFIX.lower()):
+            return name[:-len(RivalsWindow._NAMES_SUFFIX)]
+        return name[:-4] if name.lower().endswith(".txt") else name
+
+    def _file_for_event_name(self, event_name: str) -> str:
+        """The listed file this event reads, matched as Windows matches it."""
+        wanted = f"{event_name}{self._NAMES_SUFFIX}".lower()
+        for i in range(self._vod_file.count()):
+            if self._vod_file.itemText(i).lower() == wanted:
+                return self._vod_file.itemText(i)
+        return ""
+
+    def _label_for_event(self, event_name: str) -> str:
+        """The "# / Label" that rebuilds this event name from its series."""
+        template = self._thumb_event_map.get(self._thumb_series.currentText(), "{n}")
+        head, sep, tail = template.partition("{n}")
+        # The event that *is* the series -- a tournament's own singles bracket,
+        # beside its "... Doubles" and "... Crews" -- has no label at all. Its
+        # name matches the template only once the separator that would have come
+        # before the label is gone, so check that before anything else: falling
+        # through to the whole name would label "Twist of Fate" with "Twist of
+        # Fate" and spell the event "Twist of Fate Twist of Fate".
+        if event_name.strip() == (head + tail).strip():
+            return ""
+        if sep and event_name.startswith(head) and event_name.endswith(tail):
+            end = len(event_name) - len(tail) if tail else len(event_name)
+            return event_name[len(head):end]
+        return event_name
+
+    def _refresh_thumb_event_names(self, file_names: list):
+        """List the events that already have a names file, keeping the current one."""
+        events = [self._event_name_for_file(n) for n in file_names]
+        current = self._thumb_event_name.currentText()
+        self._thumb_event_name.blockSignals(True)
+        self._thumb_event_name.clear()
+        self._thumb_event_name.addItems(events)
+        self._thumb_event_name.setCurrentText(current)
+        self._thumb_event_name.blockSignals(False)
+        # With no number typed the name is just the series and a trailing space,
+        # which names no event at all -- take the loaded file's instead. Only
+        # then, so a number typed for an event not fetched yet is never lost.
+        if events and not self._thumb_num.text().strip():
+            loaded = self._vod_file.currentText()
+            event_name = self._event_name_for_file(loaded) if loaded else events[0]
+            self._thumb_num.setText(self._label_for_event(event_name))
+            self._thumb_event_name.setCurrentText(event_name)
+
+    def _on_thumb_event_pick(self, _index: int):
+        """User picked an event: point the label and the VOD file at it."""
+        event_name = self._thumb_event_name.currentText().strip()
+        if not event_name:
+            return
+        label = self._label_for_event(event_name)
+        if label != self._thumb_num.text().strip():
+            # _update_thumb_name rewrites the event name from the template,
+            # which this label reproduces exactly.
+            self._thumb_num.setText(label)
+        file_name = self._file_for_event_name(event_name)
+        if file_name and file_name != self._vod_file.currentText():
+            self._vod_file.setCurrentText(file_name)  # loads it
+        self._refresh_open_folder_btn()
+        self._save_settings()
+
+    def _on_vod_file_pick(self, _index: int):
+        """User picked a VOD file: name the event it holds."""
+        event_name = self._event_name_for_file(self._vod_file.currentText())
+        if not event_name or event_name == self._thumb_event_name.currentText().strip():
+            return
+        self._thumb_num.setText(self._label_for_event(event_name))  # -> _update_thumb_name
+        self._thumb_event_name.setCurrentText(event_name)
+        self._refresh_open_folder_btn()
         self._save_settings()
 
     def _generate_thumbnails(self):
@@ -2890,16 +3217,18 @@ class RivalsWindow(QtWidgets.QMainWindow):
         cc.clicked.connect(self._copy_vod_char)
         row2.addWidget(cc)
         row2.addSpacing(20)
-        self._import_skins_btn = QtWidgets.QPushButton("Add Missing Skins")
-        self._import_skins_btn.clicked.connect(self._import_missing_skins)
-        self._import_skins_btn.setEnabled(False)
-        row2.addWidget(self._import_skins_btn)
+        # Players first: a skin has nowhere to go until its player has a row,
+        # which is the order the two buttons are used in.
         self._import_players_btn = QtWidgets.QPushButton("Import Missing Players")
         self._import_players_btn.setToolTip(
             "Add players from these VOD lines who are not yet in the player database")
         self._import_players_btn.clicked.connect(self._import_missing_players)
         self._import_players_btn.setEnabled(False)
         row2.addWidget(self._import_players_btn)
+        self._import_skins_btn = QtWidgets.QPushButton("Add Missing Skins")
+        self._import_skins_btn.clicked.connect(self._import_missing_skins)
+        self._import_skins_btn.setEnabled(False)
+        row2.addWidget(self._import_skins_btn)
         row2.addStretch(1)
 
         # Filter bar. Built here but added directly above the table further
@@ -2962,6 +3291,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._vod_save_timer.setInterval(600)
         self._vod_save_timer.timeout.connect(self._auto_save_vod_file)
         self._vod_model.contentChanged.connect(self._schedule_vod_autosave)
+        self._vod_model.contentChanged.connect(self._sync_vod_abbrev_to_fetch)
         self._vod_proxy = QtCore.QSortFilterProxyModel()
         self._vod_proxy.setSourceModel(self._vod_model)
         self._vod_proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -3048,6 +3378,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         cbox.addLayout(rb2)
 
         self._vod_file.currentTextChanged.connect(self._load_vod_file)
+        # Only a user's own pick renames the event -- a programmatic refresh
+        # must not overwrite the event name it was called to follow.
+        self._vod_file.activated.connect(self._on_vod_file_pick)
 
     def _refresh_vod_char_picker(self):
         cur = self._vod_char_picker.currentText()
@@ -3340,9 +3673,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
                 self._vod_view.setCurrentIndex(proxy_idx)
                 self._vod_view.scrollTo(proxy_idx)
 
-    def _refresh_vod_files(self):
+    def _vod_files_for_series(self, series: str) -> list:
+        """Names files belonging to a series, newest first."""
         vod_dir = ROOT / "Vod_Names"
-        series = self._thumb_series.currentText()
         files = []
         if vod_dir.exists():
             for f in vod_dir.glob("*.txt"):
@@ -3357,7 +3690,10 @@ class RivalsWindow(QtWidgets.QMainWindow):
             return (tuple(-int(n) for n in nums) if nums else (0,), p.stem)
 
         files.sort(key=_key)
-        names = [f.name for f in files]
+        return [f.name for f in files]
+
+    def _refresh_vod_files(self):
+        names = self._vod_files_for_series(self._thumb_series.currentText())
         cur = self._vod_file.currentText()
         self._vod_file.blockSignals(True)
         self._vod_file.clear()
@@ -3365,6 +3701,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         if names:
             self._vod_file.setCurrentText(cur if cur in names else names[0])
         self._vod_file.blockSignals(False)
+        self._refresh_thumb_event_names(names)
         if names:
             self._load_vod_file()
         else:
@@ -3409,6 +3746,89 @@ class RivalsWindow(QtWidgets.QMainWindow):
         """Len depends on the abbreviation, which lives outside the model."""
         if hasattr(self, "_vod_model"):
             self._vod_model.refresh_len_column()
+
+    def _vod_header_abbrev(self) -> str:
+        """The abbreviation the loaded rows currently spell, '' if they have none."""
+        for r in range(self._vod_model.rowCount()):
+            text = self._vod_model.text_at(r).strip()
+            if text.upper().startswith("# ABBREV:"):
+                return text.split(":", 1)[1].strip()
+        return ""
+
+    def _abbrev_base(self, header: str, event_name: str) -> str:
+        """'IFN 291' -> 'IFN': the header without this event's own label.
+
+        The inverse of the join in :meth:`_abbrev_for_event`, since the Fetch
+        tab's field holds the series part only.
+        """
+        label = self._label_for_event(event_name)
+        if label and header.endswith(label) and header != label:
+            return header[:-len(label)].strip()
+        return re.sub(r"\s+\S*\d\S*$", "", header).strip() or header.strip()
+
+    def _sync_vod_abbrev_to_fetch(self):
+        """The other direction: an edited '# ABBREV:' row updates the Fetch tab.
+
+        The header is an ordinary row, so it can be typed over (or deleted) in
+        the VOD table -- and the field it came from has to follow, or the next
+        edit of that field would quietly put the old value back.
+        """
+        if getattr(self, "_abbrev_syncing", False) or not hasattr(self, "_thumb_series"):
+            return
+        header = self._vod_header_abbrev()
+        if header == getattr(self, "_vod_abbrev", ""):
+            return
+        self._vod_abbrev = header
+        series = self._thumb_series.currentText()
+        name = self._vod_loaded_name or self._vod_file.currentText()
+        event_name = getattr(self, "_vod_event_name", "") or self._event_name_for_file(name)
+        base = self._abbrev_base(header, event_name) if header else ""
+        self._abbrev_syncing = True
+        try:
+            w = self._fetch_widgets.get(series, {})
+            if "abbrev" in w:
+                if w["abbrev"].text().strip() != base:
+                    w["abbrev"].setText(base)   # -> _save_settings
+            else:
+                entry = next((e for e in self._custom_events
+                              if e.get("label") == series), None)
+                if entry is not None and str(entry.get("abbrev", "")).strip() != base:
+                    entry["abbrev"] = base
+                    self._save_custom_events()
+                    self._build_saved_custom_rows()
+        finally:
+            self._abbrev_syncing = False
+        self._refresh_vod_len()
+
+    def _sync_abbrev_to_vod_file(self, series: str):
+        """Push a Fetch-tab abbreviation edit into the loaded VOD file.
+
+        The file carries its own '# ABBREV:' header, and that header is what the
+        generator reads and what wins in :meth:`_abbrev_for_event` -- so without
+        this, editing the field left the file (and every run from it) on the old
+        abbreviation. Only the file loaded in Generate Thumbnails is rewritten:
+        it is the one on screen, and a series can own hundreds of others.
+        """
+        if not hasattr(self, "_vod_model") or not hasattr(self, "_thumb_series"):
+            return
+        # Re-entrancy: the field may be being written *by* the reverse sync, and
+        # rebuilding the header from it would overwrite a hand-typed one.
+        if getattr(self, "_abbrev_syncing", False):
+            return
+        if series != self._thumb_series.currentText():
+            return
+        name = self._vod_loaded_name or self._vod_file.currentText()
+        if not name:
+            return
+        event_name = getattr(self, "_vod_event_name", "") or self._event_name_for_file(name)
+        if not event_name:
+            return
+        header = self._abbrev_for_event(event_name, use_header=False)
+        self._vod_abbrev = header
+        # Silent, like the VOD editor's own autosave -- this runs per keystroke,
+        # and the Len column repainting is the visible feedback.
+        self._vod_model.set_abbrev_header(header)
+        self._refresh_vod_len()
 
     def _refresh_vod_count(self):
         """'41 sets', or '12 of 41 sets' while a filter is narrowing the view."""
@@ -3461,21 +3881,32 @@ class RivalsWindow(QtWidgets.QMainWindow):
         # Second: the character lists.
         return _strip_char_lists(text)
 
-    def _abbrev_for_event(self, event_name: str) -> str:
+    def _abbrev_for_event(self, event_name: str, use_header: bool = True) -> str:
         """'Straight Into The Abyss 63' -> 'SITA 63'.
 
         The file's own '# ABBREV:' header wins, but only for the event that
         header belongs to. Otherwise the series abbreviation from the Fetch tab
         is joined to this event's own number -- on its own that field holds just
         'SITA', so using it raw dropped the number and produced 'SITA - ...'.
+
+        ``use_header=False`` ignores the header, which is what an edit to the
+        Fetch tab's field needs: it is rewriting that header, so reading it
+        first would just hand back the value being replaced.
         """
         header = getattr(self, "_vod_abbrev", "")
-        if header and getattr(self, "_vod_event_name", "") == event_name:
+        if use_header and header and getattr(self, "_vod_event_name", "") == event_name:
             return header
         series = self._thumb_series.currentText() if hasattr(self, "_thumb_series") else ""
         w = self._fetch_widgets.get(series, {}) if hasattr(self, "_fetch_widgets") else {}
         base = w["abbrev"].text().strip() if "abbrev" in w else ""
-        if not base and header:
+        if not base:
+            # A saved custom event keeps its abbreviation in the JSON entry
+            # rather than in a _fetch_widgets row.
+            custom = next((e for e in getattr(self, "_custom_events", [])
+                           if e.get("label") == series), None)
+            if custom:
+                base = str(custom.get("abbrev", "")).strip()
+        if not base and use_header and header:
             base = re.sub(r"\s+\S*\d\S*$", "", header).strip()
         if not base:
             return ""
@@ -4398,8 +4829,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
         rb.clicked.connect(self._refresh_posts_events)
         row1.addWidget(rb)
         row1.addSpacing(12)
-        row1.addWidget(QtWidgets.QLabel("# / Suffix:"))
-        self._posts_num = _hline("", 80)
+        posts_num_lbl = QtWidgets.QLabel("# / Label:")
+        posts_num_lbl.setToolTip("What replaces {n} in the series name -- an "
+                                 "event number, or a word such as Doubles.")
+        row1.addWidget(posts_num_lbl)
+        self._posts_num = _hline("", 160)
         row1.addWidget(self._posts_num)
         row1.addStretch(1)
         v.addLayout(row1)
@@ -4644,7 +5078,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
     def _update_posts_name(self):
         template = self._posts_event_map.get(self._posts_series.currentText(), "{n}")
-        self._posts_event_name.setText(template.format(n=self._posts_num.text().strip()))
+        num = self._posts_num.text().strip()
+        name = template.format(n=num)
+        if not num:  # see _update_thumb_name
+            name = re.sub(r"\s{2,}", " ", name).strip()
+        self._posts_event_name.setText(name)
         self._posts_load_file()
         self._load_notes()
 
