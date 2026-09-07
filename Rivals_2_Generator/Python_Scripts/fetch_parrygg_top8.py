@@ -71,7 +71,22 @@ def parry_post_required(endpoint: str, body: dict, api_key: str) -> dict:
     return result
 
 
+def normalize_slug(value: str) -> str:
+    """Reduce a pasted parry.gg URL to the bare tournament slug.
+
+    A copied bracket URL carries extra path segments after the slug
+    ("<slug>/bracket/main"), and the tournament lookup matches on the slug
+    alone -- with the suffix attached, custom_slug misses, the trailing-hex
+    strip cannot fire (it is anchored to the end of the string), and the
+    name fallback searches for 'Bracket Main'.
+    """
+    slug = re.sub(r"^https?://(?:www[.])?parry[.]gg/", "", value.strip())
+    slug = slug.split("?")[0].strip("/")
+    return slug.split("/")[0]
+
+
 def get_tournament(slug: str, api_key: str) -> dict:
+    slug = normalize_slug(slug)
     slugs_to_try = [slug]
     stripped = re.sub(r"-[0-9a-f]{8}$", "", slug)
     if stripped != slug:
@@ -125,6 +140,31 @@ def get_all_matches(event_id: str, api_key: str) -> list:
         if not cursor:
             break
     return all_matches
+
+
+def bracket_ids_from_event(event: dict, bracket_slug: str = "") -> list:
+    """Bracket UUIDs the event object already carries, in phase order.
+
+    The event comes back from GetTournaments with its phases and their brackets
+    already populated, so the id needed for GetBracketPlacements is in hand
+    before any extra call -- and, unlike the slug lookup below, it cannot be
+    wrong about what the bracket is called. A real bracket's slug is "bracket",
+    not the "main" this used to assume, so the slug lookup failed and every
+    tournament silently fell through to deriving standings from match results.
+
+    Pass `bracket_slug` to pick one bracket out of several; empty means "all of
+    them, in order".
+    """
+    ids = []
+    for phase in (event.get("phases") or []):
+        for bracket in (phase.get("brackets") or []):
+            bid = bracket.get("id")
+            if not bid:
+                continue
+            if bracket_slug and (bracket.get("slug") or "") != bracket_slug:
+                continue
+            ids.append(bid)
+    return ids
 
 
 def get_bracket_id(tournament_slug: str, bracket_slug: str, api_key: str) -> Optional[str]:
@@ -201,6 +241,24 @@ def slug_to_name(slug: str) -> str:
     return slug.replace("-", " ").title()
 
 
+def character_name(char_obj: dict) -> str:
+    """The display name of a character entry on a match game.
+
+    parry.gg returns the whole Character here -- {"name": "Ranno", "slug":
+    "ranno", ...} -- so "name" is authoritative and already cased the way the
+    character database spells it. Reading only characterSlug (the older, flatter
+    shape) matched nothing against the current API, so characters silently never
+    appeared. Kept identical to fetch_parrygg_sets.character_name.
+    """
+    name = (char_obj.get("name") or "").strip()
+    if name:
+        return name
+    slug = (char_obj.get("slug")
+            or char_obj.get("characterSlug")
+            or char_obj.get("character_slug") or "").strip()
+    return slug_to_name(slug) if slug else ""
+
+
 def build_char_counts(match_contexts: list, seed_map: dict) -> dict:
     """Return {tag: Counter of character names} from parry.gg game-by-game data."""
     counts = {}
@@ -224,13 +282,9 @@ def build_char_counts(match_contexts: list, seed_map: dict) -> dict:
                     continue
                 for participant in (game_slots[i].get("participants") or []):
                     for char_obj in (participant.get("characters") or []):
-                        cslug = (
-                            char_obj.get("characterSlug")
-                            or char_obj.get("character_slug")
-                            or ""
-                        )
-                        if cslug:
-                            counts[tag][slug_to_name(cslug)] += 1
+                        cname = character_name(char_obj)
+                        if cname:
+                            counts[tag][cname] += 1
     return counts
 
 
@@ -509,9 +563,31 @@ def derive_standings_from_bracket(match_contexts: list, seed_map: dict, top: int
 def parse_bracket_placements(entries: list, seed_map: dict) -> list:
     """Parse GetBracketPlacements response into (place_int, seed_id_or_tag) tuples.
 
-    The API returns one entry per match played, so deduplicate by keeping the best
-    (lowest) placement per player.
+    A placement entry looks like::
+
+        {"placement": 1, "seed": 1, "wins": 5, "losses": 1,
+         "eventEntrant": {"entrant": {"users": [{"gamerTag": "meo2000"}]}}}
+
+    Note ``seed`` is the seed *number*, not a Seed object -- reading ``.get("id")``
+    off it raised AttributeError and took the whole authoritative path down, which
+    is part of why standings were coming from the derivation fallback instead.
+    The player is identified by ``eventEntrant`` at the top level.
+
+    The key returned is the **seed id** wherever the tag can be matched back to
+    one, because the caller reads the sponsor out of ``seed_map`` with it; a tag
+    that matches nothing is returned as-is and simply carries no sponsor.
+
+    The API is documented as returning one entry per match played, so the best
+    (lowest) placement per player is kept.
     """
+    # tag -> seed_id, so a placement can be tied back to the sponsor and the
+    # characters collected from the match data.
+    tag_to_seed = {}
+    for sid, info in seed_map.items():
+        tag = (info[0] or "").strip()
+        if tag and tag != "?":
+            tag_to_seed.setdefault(tag.lower(), sid)
+
     best = {}  # player_key -> (place, player_key)
     for entry in entries:
         place = entry.get("placement") or entry.get("place")
@@ -521,20 +597,17 @@ def parse_bracket_placements(entries: list, seed_map: dict) -> list:
             place = int(place)
         except (TypeError, ValueError):
             continue
-        seed = entry.get("seed") or {}
+
+        seed = entry.get("seed")
+        seed = seed if isinstance(seed, dict) else {}
         seed_id = seed.get("id") or ""
         if seed_id and seed_id in seed_map:
             key = seed_id
         else:
-            event_entrant = entry.get("eventEntrant") or seed.get("eventEntrant") or {}
-            entrant = event_entrant.get("entrant") or {}
-            users = entrant.get("users") or []
-            tag = ""
-            if users:
-                tag = (users[0].get("gamerTag") or "").strip()
-            if not tag:
-                tag = event_entrant.get("name") or "?"
-            key = tag
+            tag, _sponsor = extract_seed_info(
+                entry if entry.get("eventEntrant") else seed)
+            key = tag_to_seed.get(tag.lower(), tag)
+
         cur = best.get(key)
         if cur is None or place < cur[0]:
             best[key] = (place, key)
@@ -546,14 +619,28 @@ def parse_bracket_placements(entries: list, seed_map: dict) -> list:
 # ---------------------------------------------------------------------------
 
 def format_date(ts) -> str:
+    """M/D/YYYY from an ISO 8601 string or a unix timestamp.
+
+    parry.gg sends ISO strings ("2026-09-06T00:30:00Z"); float() rejects those,
+    so this used to fall through to returning the raw string and the graphic
+    showed a timestamp instead of a date. Unset dates come back as the epoch
+    rather than as null, so 1970 is treated as "no date" -- printing 1/1/1970
+    on a Top 8 graphic is worse than printing nothing.
+    """
     if not ts:
         return ""
     from datetime import datetime, timezone
+    dt = None
     try:
         dt = datetime.fromtimestamp(float(ts), tz=timezone.utc)
-        return f"{dt.month}/{dt.day}/{dt.year}"
-    except Exception:
-        return str(ts)
+    except (TypeError, ValueError):
+        try:
+            dt = datetime.fromisoformat(str(ts).strip().replace("Z", "+00:00"))
+        except ValueError:
+            return ""
+    if dt is None or dt.year <= 1970:
+        return ""
+    return f"{dt.month}/{dt.day}/{dt.year}"
 
 
 # ---------------------------------------------------------------------------
@@ -574,8 +661,10 @@ def main():
     parser.add_argument("--out", "-o", default="", help="Output file path (default: stdout)")
     parser.add_argument("--props", default=PROPS_FILE,
                         help=f"Path to app.properties (default: {PROPS_FILE})")
-    parser.add_argument("--bracket", "-b", default=DEFAULT_BRACKET_SLUG,
-                        help=f"Bracket slug (default: {DEFAULT_BRACKET_SLUG!r})")
+    parser.add_argument("--bracket", "-b", default="",
+                        help="Bracket slug to pull standings from. Default: "
+                             "whichever brackets the event itself lists, in "
+                             "order -- only name one when an event has several")
     parser.add_argument("--debug", action="store_true",
                         help="Dump raw match JSON to stderr")
     args = parser.parse_args()
@@ -613,11 +702,17 @@ def main():
         event.get("numEntrants") or event.get("num_entrants")
         or event.get("entrantCount") or 0
     )
-    start_at = (
-        event.get("startAt") or event.get("start_at")
-        or tournament.get("startAt") or tournament.get("start_at")
-    )
-    date_str = format_date(start_at)
+    # startDate is the field parry.gg actually sends; an event's is often the
+    # unset epoch, so the tournament's is the real fallback. format_date drops
+    # 1970 values, hence checking each candidate rather than the first non-empty.
+    date_str = ""
+    for source in (event, tournament):
+        for field in ("startDate", "start_date", "startAt", "start_at"):
+            date_str = format_date(source.get(field))
+            if date_str:
+                break
+        if date_str:
+            break
 
     print(f"Event: {event.get('slug')}  |  ID: {event_id}", file=sys.stderr)
     print("Fetching matches...", file=sys.stderr)
@@ -645,17 +740,30 @@ def main():
     print("Fetching standings...", file=sys.stderr)
     placements = None
 
-    bracket_id = get_bracket_id(args.slug, args.bracket, api_key)
-    if bracket_id:
+    # The event's own brackets first -- their ids are already in hand and carry
+    # the real slug. The slug lookup is kept as a fallback for a response that
+    # somehow arrives without phases.
+    candidate_ids = bracket_ids_from_event(event, args.bracket)
+    if not candidate_ids and args.bracket:
+        # An explicit --bracket that matched nothing: fall back to every bracket
+        # rather than reporting no standings at all.
+        candidate_ids = bracket_ids_from_event(event)
+    if not candidate_ids:
+        fallback_id = get_bracket_id(args.slug, args.bracket or DEFAULT_BRACKET_SLUG, api_key)
+        candidate_ids = [fallback_id] if fallback_id else []
+
+    for bracket_id in candidate_ids:
         print(f"Bracket ID: {bracket_id}", file=sys.stderr)
         raw_placements = get_bracket_placements(bracket_id, api_key)
         if raw_placements:
             print(f"Got {len(raw_placements)} placements from BracketService/GetBracketPlacements", file=sys.stderr)
             placements = parse_bracket_placements(raw_placements, seed_map)[:args.top]
+            if placements:
+                break
         else:
-            print("GetBracketPlacements returned empty — deriving from bracket.", file=sys.stderr)
-    else:
-        print("Bracket ID lookup failed — deriving from bracket.", file=sys.stderr)
+            print(f"GetBracketPlacements returned nothing for {bracket_id}.", file=sys.stderr)
+    if not placements:
+        print("No bracket placements — deriving from match results instead.", file=sys.stderr)
 
     if not placements:
         placements = derive_standings_from_bracket(match_contexts, seed_map, args.top)

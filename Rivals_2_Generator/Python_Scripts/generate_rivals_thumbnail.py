@@ -32,6 +32,14 @@ _char_default_skin = {}  # char_upper -> default wiki filename stem (T_{Abbrev}_
 # Dictionary for global properties
 _properties = dict()
 
+#: How many of a side's characters the layout can draw. createCharacterWindow
+#: has arrangements for one, two and three; a 3v3 fits exactly, and a team that
+#: counterpicks does not. Characters past this are still parsed, still looked up
+#: against the databases and still reported in the log, and the title keeps every
+#: one of them -- only the renders stop, because resolving a fourth would fail
+#: the whole run over an image nothing ever draws.
+MAX_RENDER_CHARS = 3
+
 
 class Match:
     def __init__(self, _title, _event, _round, _player1, _char1, _player2, _char2,
@@ -413,6 +421,11 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
                         if a_skin_request not in skin_not_found[key]:
                             skin_not_found[key].append(a_skin_request)
 
+                # Everything above this point runs for every character, so a
+                # fourth still reports its missing player, character or skin.
+                # Only the render is capped -- see MAX_RENDER_CHARS.
+                if char_index >= MAX_RENDER_CHARS:
+                    continue
                 # Check if char file exists at render location
                 #  Render type must be specified, Render type 2 & 3 need not be
                 if _properties['render_type'] is None:
@@ -627,7 +640,7 @@ def createCharacterWindow(char_list, win_size, right_bool=False, single_bool=Fal
                 if only_one:
                     return canvas_list
         # end of loop
-    elif num_chars >= 3:  # 2.3 Three characters (or more, only take first three)
+    elif num_chars >= 3:  # 2.3 Three characters (createMatches caps the list at MAX_RENDER_CHARS)
         # Grab center shifts from properties
         center_shift_3_1 = _properties['center_shift_3_1']
         center_shift_3_2 = _properties['center_shift_3_2']

@@ -1,19 +1,33 @@
 #!/usr/bin/env python3
 """
 Fetch completed sets from a parry.gg event and print them in the VOD naming format:
-  {Tournament} {Round} - {Player1} ({Chars}) Vs {Player2} ({Chars}) - {Game}
+  {Tournament} - {Round} - {Player1} ({Chars}) Vs {Player2} ({Chars}) - {Game}
+
+Output matches fetch_sets.py exactly, `# ABBREV:` header included, so a VOD file
+is handled identically downstream whichever site it came from.
 
 Usage:
-  python fetch_parrygg_sets.py <tournament-slug> [--event 0] [--name "My Tournament"] [--out sets.txt]
+  python fetch_parrygg_sets.py <tournament-slug> [--event 0] [--name "My Tournament"]
+                               [--abbrev "MT 3"] [--out sets.txt]
+
+Unlike start.gg, the slug names a *tournament*; --event picks the event inside it
+by 0-based index (or by event slug).
 
 Slug example:
   immortal-fight-night-274
 """
 import sys
+import re
 import argparse
 import requests
 from pathlib import Path
 from typing import Optional
+
+import team_utils
+
+# Mirrors MAX_LINE_LEN in fetch_sets.py and the GUI: the length past which
+# a copied VOD line gets the abbreviation swapped in.
+MAX_LINE_LEN = 100
 
 BASE_URL = "https://grpcweb.parry.gg"
 REQUEST_TIMEOUT = 20.0
@@ -52,10 +66,24 @@ def parry_post(endpoint: str, body: dict, api_key: str) -> dict:
     return {}
 
 
+def normalize_slug(value: str) -> str:
+    """Reduce a pasted parry.gg URL to the bare tournament slug.
+
+    A copied bracket URL carries extra path segments after the slug
+    ("<slug>/bracket/main"), and the tournament lookup matches on the slug
+    alone -- with the suffix attached, custom_slug misses, the trailing-hex
+    strip cannot fire (it is anchored to the end of the string), and the
+    name fallback searches for 'Bracket Main'.
+    """
+    slug = re.sub(r"^https?://(?:www[.])?parry[.]gg/", "", value.strip())
+    slug = slug.split("?")[0].strip("/")
+    return slug.split("/")[0]
+
+
 def get_tournament(slug: str, api_key: str) -> dict:
+    slug = normalize_slug(slug)
     # Try the slug as-is first, then without any trailing hex ID (e.g. "-019c9aeb")
     slugs_to_try = [slug]
-    import re
     stripped = re.sub(r"-[0-9a-f]{8}$", "", slug)
     if stripped != slug:
         slugs_to_try.append(stripped)
@@ -123,16 +151,39 @@ def strip_sponsor(name: str) -> str:
     return name
 
 
+def format_entrant(name: str, count=None) -> str:
+    """Strip each team member's sponsor tag and rejoin the team with a comma.
+
+    ``count`` is how many users the entrant actually has, which is what keeps a
+    lone player whose tag contains a separator from being read as a team -- see
+    team_utils.split_entrant.
+    """
+    members = team_utils.split_entrant(name, count)
+    cleaned = [team_utils.drop_separators(strip_sponsor(m)) for m in members]
+    return team_utils.join_team(cleaned) or team_utils.drop_separators(
+        strip_sponsor(name))
+
+
 def build_seed_map(seeds: list) -> dict:
-    """Map seed_id -> player display name."""
+    """Map seed_id -> (display name, [(user_id, gamer_tag), ...]).
+
+    ``Entrant.users`` is documented as "1 for singles, 2+ for teams", so a team
+    of any size -- doubles, 3v3 -- comes back the same way and is joined with a
+    comma to survive into the VOD line (see team_utils). The members are kept
+    alongside the name because their order *is* the character order: the game
+    data reports characters per user id, and character *i* must end up belonging
+    to member *i*.
+    """
     result = {}
     for seed in seeds:
         seed_id = seed.get("id") or ""
         entrant = ((seed.get("eventEntrant") or {}).get("entrant") or {})
         users = entrant.get("users") or []
-        name = users[0].get("gamerTag", "?").strip() if users else "?"
+        members = [((u.get("id") or "").strip(), (u.get("gamerTag") or "").strip())
+                   for u in users]
+        name = team_utils.join_team(tag for _, tag in members) or "?"
         if seed_id:
-            result[seed_id] = name
+            result[seed_id] = (name, members)
     return result
 
 
@@ -141,22 +192,58 @@ def slug_to_name(slug: str) -> str:
     return slug.replace("-", " ").title()
 
 
-def get_chars_for_slot(slot_index: int, games: list) -> list:
-    """Collect unique characters played by the player in slot_index across all games."""
-    chars = []
+def character_name(char_obj: dict) -> str:
+    """The display name of a character entry on a match game.
+
+    parry.gg returns the whole Character here -- ``{"name": "Ranno", "slug":
+    "ranno", ...}`` -- so ``name`` is authoritative and already cased the way the
+    character database spells it. Reading only ``characterSlug`` (the older,
+    flatter shape this used to expect) matched nothing against the current API,
+    which is why every parry line came back with empty parentheses even for a
+    tournament whose organiser had reported game data. The slug is kept as a
+    fallback, and title-casing it is a last resort for a name we were not given.
+    """
+    name = (char_obj.get("name") or "").strip()
+    if name:
+        return name
+    slug = (char_obj.get("slug")
+            or char_obj.get("characterSlug")
+            or char_obj.get("character_slug") or "").strip()
+    return slug_to_name(slug) if slug else ""
+
+
+def get_chars_for_slot(slot_index: int, games: list, members=()) -> list:
+    """Characters played in this slot, grouped per team member and in their order.
+
+    ``members`` is what :func:`build_seed_map` recorded for the entrant --
+    ``[(user_id, gamer_tag), ...]``. A singles entrant has one, so the result is
+    the flat list it always was; a team of any size gets one group per member.
+
+    Grouping matters because the characters cannot simply be pooled and
+    deduplicated: two teammates on the same character would collapse to one
+    entry, and a teammate counterpicking would append a character the line then
+    attributes to whoever holds the last slot. ``MatchGameParticipant.user_id``
+    is what ties a participant back to a member; when it is missing (older data)
+    the participant's position in the slot is used instead.
+    """
+    groups = {}
+    order = []
     for game in games:
         game_slots = game.get("slots") or []
         if slot_index >= len(game_slots):
             continue
         participants = game_slots[slot_index].get("participants") or []
-        for participant in participants:
+        for position, participant in enumerate(participants):
+            user_id = (participant.get("userId") or participant.get("user_id") or "").strip()
+            key = user_id or "#%d" % position
+            if key not in groups:
+                groups[key] = (user_id, "", [])
+                order.append(key)
             for char_obj in (participant.get("characters") or []):
-                # API returns characterSlug (camelCase) per proto CharacterSelection
-                slug = char_obj.get("characterSlug") or char_obj.get("character_slug") or ""
-                char_name = slug_to_name(slug) if slug else ""
-                if char_name and char_name not in chars:
-                    chars.append(char_name)
-    return chars
+                char_name = character_name(char_obj)
+                if char_name:
+                    groups[key][2].append(char_name)
+    return team_utils.order_chars_by_member(list(members), [groups[k] for k in order])
 
 
 def abbreviate_round(label: str) -> str:
@@ -186,8 +273,11 @@ def format_match(match_ctx: dict, tournament_name: str, game_name: str) -> Optio
     players = []
     for i, slot in enumerate(slots[:2]):
         seed_id = slot.get("seedId") or ""
-        player_name = strip_sponsor(seed_map.get(seed_id, "?"))
-        chars = get_chars_for_slot(i, games)
+        entrant_name, members = seed_map.get(seed_id, ("?", []))
+        # Entrant.users is one entry per player, so its length is authoritative
+        # -- no need to infer team-ness from the punctuation in the name.
+        player_name = format_entrant(entrant_name, len(members) or None)
+        chars = get_chars_for_slot(i, games, members)
         char_str = ", ".join(chars) if chars else ""
         players.append(f"{player_name} ({char_str})")
 
@@ -213,6 +303,12 @@ def main():
         help="Tournament short name override (default: tournament name from API)",
     )
     parser.add_argument(
+        "--abbrev", "-a", default="",
+        help="Abbreviated tournament name. Recorded in the '# ABBREV:' header "
+             f"and used by the GUI when copying a line longer than {MAX_LINE_LEN} "
+             "characters; the lines themselves always spell the event out in full",
+    )
+    parser.add_argument(
         "--out", "-o", default="",
         help="Write output to this file instead of stdout",
     )
@@ -225,9 +321,6 @@ def main():
     api_key = load_api_key(args.props)
     if not api_key:
         print(f"WARNING: No parrygg.api.key found in {args.props}", file=sys.stderr)
-
-    if not api_key:
-        print("WARNING: No parrygg.api.key found in app.properties", file=sys.stderr)
     print(f"Fetching tournament: {args.slug}", file=sys.stderr)
     tournament = get_tournament(args.slug, api_key)
     tournament_name = args.name or tournament.get("name", "")
@@ -274,13 +367,19 @@ def main():
 
     print(f"Formatted sets: {len(lines)}", file=sys.stderr)
 
+    # Record the abbreviation as a header comment. It is what the GUI shortens
+    # a copied line with, and what lets the generator recognise an abbreviated
+    # line as the same event. Same contract as fetch_sets.py -- a VOD file must
+    # look identical whichever provider it came from.
+    header = f"# ABBREV: {args.abbrev}\n" if args.abbrev else ""
+
     output = "\n".join(lines)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
-            f.write(output + "\n")
+            f.write(header + output + "\n")
         print(f"Wrote to {args.out}", file=sys.stderr)
     else:
-        print(output)
+        print(header + output)
 
 
 if __name__ == "__main__":

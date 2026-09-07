@@ -32,7 +32,7 @@ query FetchSets($slug: String!, $page: Int!) {
   event(slug: $slug) {
     name
     videogame { name }
-    sets(page: $page, perPage: 50, sortType: RECENT) {
+    sets(page: $page, perPage: 40, sortType: RECENT) {
       pageInfo { totalPages }
       nodes {
         id
@@ -42,11 +42,12 @@ query FetchSets($slug: String!, $page: Int!) {
         phaseGroup { bracketType }
         station { number }
         slots {
-          entrant { name }
+          entrant { name participants { id } }
         }
         games {
           selections {
             entrant { id name }
+            participant { gamerTag }
             character { name }
           }
         }
@@ -102,30 +103,76 @@ def strip_sponsor(name: str) -> str:
     return name
 
 
-def format_entrant(name: str) -> str:
+def member_count(entrant: dict):
+    """How many players an entrant fields, or None when start.gg doesn't say.
+
+    ``Entrant.participants`` is one entry per player, so its length separates a
+    doubles team from a singles player whose tag merely contains a separator.
+    """
+    participants = (entrant or {}).get("participants")
+    return len(participants) if isinstance(participants, list) else None
+
+
+def format_entrant(name: str, count=None) -> str:
     """Clean up an entrant name, singles or doubles.
 
     start.gg writes a doubles entrant as "Sponsor | shane / Other | pizza": the
     members are slash separated and each carries its own sponsor tag. Every
     member is stripped, and the team is rejoined with a comma -- a slash cannot
     be part of the thumbnail filename the title turns into.
+
+    A *singles* entrant can carry a slash too, in its sponsor rather than
+    between players: "NG/POA | Azul" is one player sponsored by two orgs.
+    Splitting that on the slash invented a player called "NG" and put the real
+    tag in the second slot, so the members come from `split_entrant`, which
+    trusts start.gg's own participant count over the punctuation. The sponsor
+    goes with the strip; any separator left inside a lone player's own tag is
+    removed, since it cannot survive into a filename either way.
     """
-    return team_utils.join_team(
-        strip_sponsor(member) for member in team_utils.split_team(name)
-    ) or strip_sponsor(name)
+    members = team_utils.split_entrant(name, count)
+    cleaned = [team_utils.drop_separators(strip_sponsor(m)) for m in members]
+    return team_utils.join_team(cleaned) or team_utils.drop_separators(
+        strip_sponsor(name))
 
 
-def build_entrant_characters(games: list) -> dict[str, list[str]]:
-    """Collect unique characters per entrant across all games, in first-appearance order."""
-    entrant_chars: dict[str, list[str]] = {}
+def build_entrant_characters(games: list, counts: dict) -> dict[str, list[str]]:
+    """Collect the characters per entrant, in member order, across all games.
+
+    A selection belongs to a *participant*, not to an entrant: a doubles or 3v3
+    entrant reports one participant per member, and the line needs their
+    characters grouped that way so that character *i* belongs to member *i*.
+    Pooling them into one deduplicated list instead loses a shared pick (both
+    teammates on Ranno) and misattributes a counterpick, which is what the
+    generator then resolves the wrong player's skin from.
+
+    Members come from the entrant's own name -- "Sponsor | A / Other | B"
+    sponsor-stripped -- so the character order always follows the name as the
+    line spells it, and the participant's gamerTag is what matches them up.
+    Singles is a one-member team here, so its behaviour is unchanged.
+    """
+    # entrant name -> (participant key order, {key: (id, gamerTag, [char, ...])})
+    per_entrant: dict[str, tuple[list, dict]] = {}
     for game in games:
         for sel in (game.get("selections") or []):
             entrant = (sel.get("entrant") or {}).get("name") or "?"
             char = (sel.get("character") or {}).get("name") or "?"
-            if entrant not in entrant_chars:
-                entrant_chars[entrant] = []
-            if char not in entrant_chars[entrant]:
-                entrant_chars[entrant].append(char)
+            tag = ((sel.get("participant") or {}).get("gamerTag") or "").strip()
+            order, groups = per_entrant.setdefault(entrant, ([], {}))
+            # No participant on the selection (older sets, or a game start.gg
+            # reports without one): pool them under a single key, which is the
+            # flat deduplicated list this used to produce for everyone.
+            key = tag.upper() or "#"
+            if key not in groups:
+                groups[key] = ("", tag, [])
+                order.append(key)
+            groups[key][2].append(char)
+
+    entrant_chars: dict[str, list[str]] = {}
+    for entrant, (order, groups) in per_entrant.items():
+        members = [("", strip_sponsor(m))
+                   for m in team_utils.split_entrant(entrant, counts.get(entrant))]
+        entrant_chars[entrant] = team_utils.order_chars_by_member(
+            members, [groups[k] for k in order])
     return entrant_chars
 
 
@@ -133,13 +180,24 @@ MAX_LINE_LEN = 100
 
 
 def format_set(set_node: dict, tournament_name: str, game_name: str) -> Optional[str]:
+    # Member counts come from the slots, not the game selections: the slots
+    # carry them even for a set with no reported characters, and asking for
+    # them per selection as well pushed the query past start.gg's complexity
+    # limit ("a maximum of 1000 objects may be returned by each request").
+    counts = {}
+    for slot in (set_node.get("slots") or []):
+        entrant_obj = slot.get("entrant") or {}
+        name = entrant_obj.get("name")
+        if name:
+            counts[name] = member_count(entrant_obj)
+
     games = set_node.get("games") or []
-    entrant_chars = build_entrant_characters(games)
+    entrant_chars = build_entrant_characters(games, counts)
 
     if len(entrant_chars) >= 2:
         entrants = list(entrant_chars.keys())
-        p1 = f"{format_entrant(entrants[0])} ({', '.join(entrant_chars[entrants[0]])})"
-        p2 = f"{format_entrant(entrants[1])} ({', '.join(entrant_chars[entrants[1]])})"
+        p1 = f"{format_entrant(entrants[0], counts.get(entrants[0]))} ({', '.join(entrant_chars[entrants[0]])})"
+        p2 = f"{format_entrant(entrants[1], counts.get(entrants[1]))} ({', '.join(entrant_chars[entrants[1]])})"
     else:
         # Fall back to slot entrant names when game data is absent
         slots = [
@@ -149,8 +207,8 @@ def format_set(set_node: dict, tournament_name: str, game_name: str) -> Optional
         ]
         if len(slots) < 2:
             return None
-        p1 = f"{format_entrant(slots[0])} ()"
-        p2 = f"{format_entrant(slots[1])} ()"
+        p1 = f"{format_entrant(slots[0], counts.get(slots[0]))} ()"
+        p2 = f"{format_entrant(slots[1], counts.get(slots[1]))} ()"
 
     matchup = f"{p1} Vs {p2}"
 

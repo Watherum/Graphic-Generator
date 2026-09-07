@@ -47,6 +47,40 @@ def join_team(members) -> str:
     return TEAM_SEPARATOR.join(m.strip() for m in members if m and m.strip())
 
 
+def drop_separators(name: str) -> str:
+    """Strip separator characters out of a single player's name.
+
+    A name reaches a thumbnail filename, so a ``/`` in it is a path separator on
+    Windows, and a ``,`` would read back as a second team member. Neither can be
+    kept, and this is only ever applied to a name already known to be *one*
+    player, so nothing is being flattened away.
+    """
+    if not name:
+        return name
+    cleaned = _SPLIT_RE.sub(" ", name.strip())
+    return " ".join(cleaned.split())
+
+
+def split_entrant(name: str, member_count=None) -> list[str]:
+    """The members of an entrant, preferring the bracket software's own count.
+
+    Punctuation alone cannot tell a doubles team from a singles player whose
+    *sponsor* carries a slash: start.gg reports a real entrant as
+    ``"NG/POA | Azul"``, and reading that as a team invents a player called
+    "NG" and attributes half the set to them. When the source says how many
+    participants an entrant has -- start.gg's ``Entrant.participants``,
+    parry.gg's ``Entrant.users`` -- that count decides, because one participant
+    is one player whatever the tag looks like.
+
+    ``member_count`` of ``None`` means "not known", and falls back to splitting
+    on the separator, which is what a hand-typed VOD line still needs.
+    """
+    if member_count is not None and member_count < 2:
+        stripped = (name or "").strip()
+        return [stripped] if stripped else []
+    return split_team(name)
+
+
 def is_team(name: str) -> bool:
     return len(split_team(name)) > 1
 
@@ -77,3 +111,63 @@ def member_for_index(name: str, index: int) -> str:
     if index < len(members):
         return members[index]
     return members[-1]
+
+
+def order_chars_by_member(members, groups):
+    """Flatten per-participant character lists into one list in member order.
+
+    A team's characters are reported by the bracket software per *participant*,
+    in whatever order it happens to list them. The VOD line needs them in the
+    order the team name spells its members out, because character *i* belongs to
+    member *i* -- that is the rule the generator's ``resolvePlayerForChar`` and
+    the GUI's ``_expand_team`` both resolve a doubles line by.
+
+    ``members`` is ``[(member_id, member_name), ...]`` in the order the name
+    lists them; either half may be empty when the source does not supply it.
+    ``groups`` is ``[(participant_id, participant_name, [char, ...]), ...]`` in
+    API order. A group is claimed by id first, then by name (case-insensitively),
+    and failing both by position -- so a source that supplies neither still
+    yields API order, which is what singles has always done.
+
+    Characters are deduplicated **within** a member and never across the team:
+    two members who both pick Ranno must produce two Rannos, or every character
+    after them belongs to the wrong member. A member the API said nothing about
+    contributes nothing, so the positions shift; the generator recovers from that
+    by falling back to whichever member's database row owns the character.
+
+    Team size is not fixed at two anywhere here -- a 3v3 flattens the same way.
+    """
+    groups = [(gid or "", gname or "", list(chars)) for gid, gname, chars in groups]
+    claimed = [False] * len(groups)
+    ordered = []
+
+    def _claim(match):
+        for i, group in enumerate(groups):
+            if not claimed[i] and match(group):
+                claimed[i] = True
+                return group
+        return None
+
+    for member_id, member_name in members:
+        group = None
+        if member_id:
+            group = _claim(lambda g, k=member_id: g[0] == k)
+        if group is None and member_name:
+            key = member_name.strip().upper()
+            group = _claim(lambda g, k=key: g[1].strip().upper() == k)
+        if group is None:
+            group = _claim(lambda g: True)
+        if group is not None:
+            ordered.append(group)
+    # A participant matching no member is still someone who played: keep them at
+    # the end rather than dropping their characters off the line entirely.
+    ordered.extend(g for i, g in enumerate(groups) if not claimed[i])
+
+    out = []
+    for _, _, chars in ordered:
+        seen = set()
+        for a_char in chars:
+            if a_char and a_char.upper() not in seen:
+                seen.add(a_char.upper())
+                out.append(a_char)
+    return out

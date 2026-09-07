@@ -55,6 +55,11 @@ CHAR_DB_PATH = ROOT / "Resources" / "Character_database.csv"
 SETTINGS_PATH = ROOT / "rivals_gui_settings.json"
 CUSTOM_EVENTS_PATH = ROOT / "rivals_custom_events.json"
 EVENT_CONFIGS_PATH = ROOT / "rivals_event_configs.json"
+# parry.gg needs an API key; the fetchers read it from the Graphic Generator
+# root (gitignored, so a fresh clone has none). Kept in step with PROPS_FILE
+# in fetch_parrygg_sets.py / fetch_parrygg_top8.py.
+APP_PROPERTIES_PATH = ROOT.parent / "app.properties"
+PARRYGG_API_KEY = "parrygg.api.key"
 
 
 # Dark palette
@@ -73,9 +78,21 @@ _SYN_STRING = "#ce9178"
 _SYN_TAG = "#569cd6"
 _SYN_NUMBER = "#b5cea8"
 
-# Events that support start.gg fetching
+# The tournament sites data can be pulled from. Everything provider-specific --
+# which script to run, how a slug is shaped, whether an API key is needed --
+# is looked up here rather than branched on inline, so adding a third site is
+# a new entry plus its two fetch scripts.
+#
+# Ordered: the first key is the default selection.
+STARTGG = "startgg"
+PARRYGG = "parrygg"
+DEFAULT_PROVIDER = STARTGG
+
+# Events that ship with the GUI. All start.gg; a provider key is written on
+# every entry so nothing has to infer it from the slug shape.
 FETCH_EVENTS = [
     {
+        "provider": STARTGG,
         "label": "Immortal Fight Night",
         "slug_template": "tournament/ultimate-immortal-fight-night-{n}/event/rivals-2-singles",
         "name_template": "Immortal Fight Night {n}",
@@ -86,6 +103,7 @@ FETCH_EVENTS = [
         "tweet_link": "https://start.gg/UIFN",
     },
     {
+        "provider": STARTGG,
         "label": "Straight Into The Abyss",
         "slug_template": "tournament/straight-into-the-abyss-{n}/event/rivals-2-singles",
         "name_template": "Straight Into The Abyss {n}",
@@ -798,6 +816,116 @@ def _startgg_slug_problem(value: str) -> str:
     if slug.split("/event/", 1)[1].strip("/") == "":
         return "The slug ends at /event/ — it needs the event name after it."
     return ""
+
+_PARRYGG_URL_RE = re.compile(r'^https?://(?:www\.)?parry\.gg/')
+
+
+def _normalize_parrygg_slug(value: str) -> str:
+    """Strip a parry.gg URL prefix, leaving just the tournament slug.
+
+    parry.gg identifies a *tournament*, not an event -- the event is picked
+    separately by index. A copied bracket URL carries extra path segments
+    ("<slug>/bracket/main") which the tournament lookup does not strip, so the
+    slug has to arrive bare.
+    """
+    slug = _PARRYGG_URL_RE.sub("", value).strip().strip("/").split("?")[0]
+    return slug.split("/")[0]
+
+
+def _parrygg_slug_problem(value: str) -> str:
+    """Explain why a parry.gg slug won't fetch, or "" if it looks usable."""
+    # Tested before normalizing: normalizing keeps only the first path segment,
+    # which would reduce "tournament/x/event/y" to a plausible-looking slug.
+    raw = _STARTGG_URL_RE.sub("", value).strip().strip("/")
+    if raw.startswith("tournament/") or "/event/" in raw:
+        return ("That is a start.gg event slug, not a parry.gg one. Switch the "
+                "provider above to start.gg, or paste the parry.gg URL -- its "
+                "slug is the single path segment after https://parry.gg/.")
+    slug = _normalize_parrygg_slug(value)
+    if not slug:
+        return "Enter the tournament slug (or paste the tournament's parry.gg URL)."
+    return ""
+
+
+def _parrygg_api_key_problem() -> str:
+    """Explain a missing parry.gg API key, or "" when one is present.
+
+    The fetchers warn on stderr too, but only once a fetch has been run and
+    failed; saying so as soon as the provider is picked is the cheaper answer.
+    """
+    try:
+        text = APP_PROPERTIES_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return (f"parry.gg needs an API key. Create {APP_PROPERTIES_PATH.name} in "
+                f"{APP_PROPERTIES_PATH.parent} with a line reading "
+                f"{PARRYGG_API_KEY}=<your key>.")
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(PARRYGG_API_KEY):
+            _, _, val = line.partition("=")
+            if val.strip():
+                return ""
+    return (f"{APP_PROPERTIES_PATH} has no {PARRYGG_API_KEY} value. parry.gg "
+            f"fetches will fail until one is added.")
+
+
+# Per-provider behaviour. "slug_kind" is what the positional argument names:
+# start.gg addresses one event directly, parry.gg addresses a tournament and
+# picks the event by index, which is why only parry rows show an Event box.
+PROVIDERS = {
+    STARTGG: {
+        "label": "start.gg",
+        "sets_script": "fetch_sets.py",
+        "top8_script": "fetch_startgg_top8.py",
+        "normalize": _normalize_startgg_slug,
+        "problem": _startgg_slug_problem,
+        "needs_event_index": False,
+        "supports_posts": True,
+        "api_key_problem": None,
+        "slug_label": "Event URL:",
+        "slug_placeholder": "start.gg/tournament/my-tournament-{n}/event/rivals-2-singles",
+        "slug_tooltip": ("The event's own start.gg URL or slug, ending in /event/<name>.\n"
+                         "Put {n} where the event number goes so the entry can be "
+                         "reused week to week."),
+        "slug_hint": "event URL or slug, ending in /event/\u2026  \u00b7  use {n} for the event number",
+        "intro": ("Adds one event from a tournament \u2014 the Rivals 2 singles bracket, "
+                  "say \u2014 not the whole tournament. Open that event's page on "
+                  "start.gg and paste its URL below; a tournament with several "
+                  "events needs one entry each."),
+    },
+    PARRYGG: {
+        "label": "parry.gg",
+        "sets_script": "fetch_parrygg_sets.py",
+        "top8_script": "fetch_parrygg_top8.py",
+        "normalize": _normalize_parrygg_slug,
+        "problem": _parrygg_slug_problem,
+        "needs_event_index": True,
+        "supports_posts": False,
+        "api_key_problem": _parrygg_api_key_problem,
+        "slug_label": "Tournament URL:",
+        "slug_placeholder": "parry.gg/my-tournament-3-14-2026-019c9aeb",
+        "slug_tooltip": ("The tournament's parry.gg URL, or just its slug -- the "
+                         "single path segment after https://parry.gg/.\n"
+                         "Put {n} where an event number goes if the slug carries one."),
+        "slug_hint": "tournament URL or slug  \u00b7  the event within it is picked below",
+        "intro": ("parry.gg addresses a whole tournament, then picks one event "
+                  "inside it by number \u2014 so paste the tournament URL and set "
+                  "Event to 0 for its first event, 1 for its second, and so on. "
+                  "Needs an API key in app.properties."),
+    },
+}
+
+
+def provider_of(entry: dict) -> str:
+    """The provider an event belongs to, defaulting to start.gg.
+
+    Every saved event predates the provider key, and all of them are start.gg,
+    so an absent key reads as start.gg and rivals_custom_events.json needs no
+    migration.
+    """
+    provider = entry.get("provider") or DEFAULT_PROVIDER
+    return provider if provider in PROVIDERS else DEFAULT_PROVIDER
+
 
 def _vod_missing_chars(text: str) -> bool:
     """True when a match line has a Vs but is missing or has empty character parens."""
@@ -1554,6 +1682,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
             "posts_cfg": posts_cfg,
             "last_update_tree": self._settings.get("last_update_tree", ""),
             "fetch_collapsed": self._settings.get("fetch_collapsed", {}),
+            "fetch_provider": getattr(self, "_fetch_provider", DEFAULT_PROVIDER),
         }
         self._settings = data
         SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -1593,8 +1722,35 @@ class RivalsWindow(QtWidgets.QMainWindow):
     #  Tab: Fetch from start.gg                                          #
     # ================================================================== #
     def _build_fetch_tab(self):
-        lay = self._scroll_tab("Fetch From Start.gg")
+        lay = self._scroll_tab("Fetch Data")
         self._fetch_widgets: dict[str, dict] = {}
+        # label -> the CollapsibleBox for a built-in event. Built-ins are built
+        # for every provider and only hidden when one does not match: their
+        # widgets are what _save_settings reads back the event numbers and
+        # abbreviations from, so destroying them would wipe both.
+        self._fetch_boxes: dict[str, QtWidgets.QWidget] = {}
+
+        saved_provider = self._settings.get("fetch_provider", DEFAULT_PROVIDER)
+        self._fetch_provider = (saved_provider if saved_provider in PROVIDERS
+                                else DEFAULT_PROVIDER)
+
+        prow = QtWidgets.QHBoxLayout()
+        prow.addWidget(QtWidgets.QLabel("Fetch from:"))
+        self._provider_combo = _NoWheelComboBox()
+        for key in PROVIDERS:
+            self._provider_combo.addItem(PROVIDERS[key]["label"], key)
+        self._provider_combo.setCurrentIndex(
+            self._provider_combo.findData(self._fetch_provider))
+        self._provider_combo.setToolTip(
+            "The tournament site to pull match data from. Only the events "
+            "belonging to the selected site are listed below.")
+        self._provider_combo.currentIndexChanged.connect(self._on_provider_change)
+        prow.addWidget(self._provider_combo)
+        prow.addSpacing(12)
+        self._provider_key_hint = _muted("")
+        self._provider_key_hint.setWordWrap(True)
+        prow.addWidget(self._provider_key_hint, 1)
+        lay.addLayout(prow)
 
         fetch_collapsed = self._settings.get("fetch_collapsed", {})
         for cfg in FETCH_EVENTS:
@@ -1604,8 +1760,17 @@ class RivalsWindow(QtWidgets.QMainWindow):
             saved_num = self._settings.get("last_event_nums", {}).get(label, cfg["default_num"])
 
             row1 = QtWidgets.QHBoxLayout()
-            row1.addWidget(QtWidgets.QLabel("Event #:"))
+            # "Tournament #", not "Event #": the number identifies which
+            # instalment of the series this is (IFN 274), while an *event* is
+            # one bracket inside it -- the distinction the Add form's own copy
+            # already draws, and the one parry.gg rows depend on.
+            num_lbl = QtWidgets.QLabel("Tournament #:")
+            num_lbl.setToolTip("The series instalment number, e.g. 274 for "
+                               "Immortal Fight Night 274. It fills every {n} "
+                               "in the event's URL and name.")
+            row1.addWidget(num_lbl)
             num = _hline(saved_num, 60)
+            num.setToolTip(num_lbl.toolTip())
             row1.addWidget(num)
             row1.addSpacing(12)
             link_lbl = QtWidgets.QLabel("Link for Top 8 Graphic:")
@@ -1663,6 +1828,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
             cbox._toggle.clicked.connect(lambda checked, lbl=label: self._on_fetch_collapsed(lbl, checked))
             lay.addWidget(cbox)
             self._fetch_widgets[label] = {"num": num, "link": link, "abbrev": abbrev}
+            self._fetch_boxes[label] = cbox
 
         # Renaming a saved event refreshes the event lists, which reloads the
         # Thumbnails tab -- too much to do on every keystroke, so it is deferred.
@@ -1675,27 +1841,21 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._saved_custom_box = QtWidgets.QGroupBox("Saved Events")
         self._saved_custom_layout = QtWidgets.QVBoxLayout(self._saved_custom_box)
         lay.addWidget(self._saved_custom_box)
-        self._build_saved_custom_rows()
+        # Populated by _apply_provider() below, once the provider is known.
 
         # Add new custom
-        addbox = QtWidgets.QGroupBox("Add A Tournament's Event")
-        form = QtWidgets.QGridLayout(addbox)
-        intro = _muted(
-            "Adds one event from a tournament — the Rivals 2 singles bracket, say — "
-            "not the whole tournament. Open that event's page on start.gg and paste "
-            "its URL below; a tournament with several events needs one entry each.")
-        form.addWidget(intro, 0, 0, 1, 4)
-        form.addWidget(QtWidgets.QLabel("Event URL:"), 1, 0)
+        self._custom_addbox = QtWidgets.QGroupBox("Add A Tournament's Event")
+        form = QtWidgets.QGridLayout(self._custom_addbox)
+        self._custom_intro = _muted("")
+        self._custom_intro.setWordWrap(True)
+        form.addWidget(self._custom_intro, 0, 0, 1, 4)
+        self._custom_slug_label = QtWidgets.QLabel("Event URL:")
+        form.addWidget(self._custom_slug_label, 1, 0)
         self._custom_slug = QtWidgets.QLineEdit()
         self._custom_slug.setFixedWidth(360)
-        self._custom_slug.setPlaceholderText(
-            "start.gg/tournament/my-tournament-{n}/event/rivals-2-singles")
-        self._custom_slug.setToolTip(
-            "The event's own start.gg URL or slug, ending in /event/<name>.\n"
-            "Put {n} where the event number goes so the entry can be reused "
-            "week to week.")
         form.addWidget(self._custom_slug, 1, 1)
-        form.addWidget(_muted("event URL or slug, ending in /event/…  ·  use {n} for the event number"), 1, 2)
+        self._custom_slug_note = _muted("")
+        form.addWidget(self._custom_slug_note, 1, 2)
         self._custom_slug_hint = _muted("")
         self._custom_slug_hint.setWordWrap(True)
         form.addWidget(self._custom_slug_hint, 2, 1, 1, 3)
@@ -1710,26 +1870,88 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._custom_abbrev.setFixedWidth(120)
         form.addWidget(self._custom_abbrev, 4, 1)
         form.addWidget(_muted(f"optional — used when a match line exceeds {MAX_LINE_LEN} chars"), 4, 2)
-        custom_num_lbl = QtWidgets.QLabel("Event #:")
-        custom_num_lbl.setToolTip("Optional -- it fills every {n} above. An "
-                                  "event whose URL and name have no {n} needs none.")
+        custom_num_lbl = QtWidgets.QLabel("Tournament #:")
+        custom_num_lbl.setToolTip(
+            "Optional -- the series instalment number (274 for Immortal Fight "
+            "Night 274). It fills every {n} above; a tournament whose URL and "
+            "name have no {n} needs none.")
         form.addWidget(custom_num_lbl, 5, 0)
         self._custom_num = _hline("", 60)
         self._custom_num.setToolTip(custom_num_lbl.toolTip())
         form.addWidget(self._custom_num, 5, 1)
         form.addWidget(_muted("optional — fills every {n} above"), 5, 2)
+        # parry.gg only: its slug names a tournament, so which event inside it
+        # to pull is a separate choice. Hidden for start.gg, whose URL names the
+        # event already. Deliberately not called "Event #" -- that is the
+        # tournament's number, and two fields named Event read as the same one.
+        self._custom_event_label = QtWidgets.QLabel("Event:")
+        self._custom_event_label.setToolTip(
+            "Which bracket inside the tournament to pull: 0 is its first event, "
+            "1 the second, and so on. An event slug works here too.\n"
+            "This is not the tournament number above -- it chooses singles vs "
+            "doubles, not which week.")
+        form.addWidget(self._custom_event_label, 6, 0)
+        self._custom_event = _hline("0", 60)
+        self._custom_event.setToolTip(self._custom_event_label.toolTip())
+        form.addWidget(self._custom_event, 6, 1)
+        self._custom_event_note = _muted(
+            "which bracket in the tournament — 0 = the first (e.g. singles), 1 = the next")
+        form.addWidget(self._custom_event_note, 6, 2)
         save_fetch = QtWidgets.QPushButton("Save & Fetch VOD Names")
         save_fetch.clicked.connect(self._fetch_custom_sets)
-        form.addWidget(save_fetch, 6, 1)
+        form.addWidget(save_fetch, 7, 1)
         form.setColumnStretch(3, 1)
-        lay.addWidget(addbox)
+        lay.addWidget(self._custom_addbox)
         lay.addStretch(1)
+        self._apply_provider()
+
+    # ------------------------------------------------------------------ #
+    #  Provider selection                                                 #
+    # ------------------------------------------------------------------ #
+    def _provider_cfg(self, provider: str = "") -> dict:
+        return PROVIDERS[provider or self._fetch_provider]
+
+    def _on_provider_change(self, *_a):
+        self._fetch_provider = (self._provider_combo.currentData()
+                                or DEFAULT_PROVIDER)
+        self._save_settings()
+        self._apply_provider()
+
+    def _apply_provider(self):
+        """Show only the selected provider's events and relabel the Add form.
+
+        Built-in rows are hidden rather than destroyed -- _save_settings reads
+        the event numbers and abbreviations back out of their widgets, so a
+        provider switch must not take them with it.
+        """
+        cfg = self._provider_cfg()
+
+        for label, box in self._fetch_boxes.items():
+            entry = next((c for c in FETCH_EVENTS if c["label"] == label), {})
+            box.setVisible(provider_of(entry) == self._fetch_provider)
+
+        self._custom_slug_label.setText(cfg["slug_label"])
+        self._custom_slug.setPlaceholderText(cfg["slug_placeholder"])
+        self._custom_slug.setToolTip(cfg["slug_tooltip"])
+        self._custom_slug_note.setText(cfg["slug_hint"])
+        self._custom_intro.setText(cfg["intro"])
+        for w in (self._custom_event_label, self._custom_event,
+                  self._custom_event_note):
+            w.setVisible(cfg["needs_event_index"])
+
+        problem_fn = cfg.get("api_key_problem")
+        problem = problem_fn() if problem_fn else ""
+        self._provider_key_hint.setText(problem)
+        self._provider_key_hint.setStyleSheet("color: #E5534B;" if problem else "")
+        self._provider_key_hint.setVisible(bool(problem))
+
+        self._build_saved_custom_rows()
         self._refresh_custom_slug_hint()
 
     def _refresh_custom_slug_hint(self, *_a):
         """Say, as the user types, why a slug won't fetch — blank once it will."""
         text = self._custom_slug.text().strip()
-        problem = _startgg_slug_problem(text) if text else ""
+        problem = self._provider_cfg()["problem"](text) if text else ""
         self._custom_slug_hint.setText(problem)
         self._custom_slug_hint.setStyleSheet(
             "color: #E5534B;" if problem else "")
@@ -1747,26 +1969,49 @@ class RivalsWindow(QtWidgets.QMainWindow):
             w = item.widget()
             if w:
                 w.deleteLater()
-        if not self._custom_events:
-            self._saved_custom_layout.addWidget(_muted("No saved events yet"))
+        # Only this provider's events. The filter is the Fetch tab's alone --
+        # the Thumbnails, Top 8 and Posts tabs still list every saved event,
+        # since a fetched VOD file is handled the same whatever pulled it.
+        provider_cfg = self._provider_cfg()
+        shown = [e for e in self._custom_events
+                 if provider_of(e) == self._fetch_provider
+                 and e.get("slug_template", e.get("slug", ""))]
+        if not shown:
+            self._saved_custom_layout.addWidget(_muted(
+                f"No saved {provider_cfg['label']} events yet — add one below"))
             return
-        for entry in self._custom_events:
+        for entry in shown:
             slug_tmpl = entry.get("slug_template", entry.get("slug", ""))
-            if not slug_tmpl:
-                continue
             cbox = CollapsibleBox(entry.get("label", slug_tmpl), collapsed=entry.get("collapsed", False))
 
             # A saved event is editable in place: a tournament renames a bracket
             # or moves to a new slug, and deleting and re-adding the entry would
             # take its abbreviation and Top 8 link with it.
             rowu = QtWidgets.QHBoxLayout()
-            rowu.addWidget(QtWidgets.QLabel("Event URL:"))
+            rowu.addWidget(QtWidgets.QLabel(provider_cfg["slug_label"]))
             slug_box = QtWidgets.QLineEdit(slug_tmpl)
             slug_box.setMinimumWidth(340)
-            slug_box.setToolTip(
-                "The event's own start.gg URL or slug, ending in /event/<name>.\n"
-                "Put {n} where the event number goes.")
+            slug_box.setToolTip(provider_cfg["slug_tooltip"])
             rowu.addWidget(slug_box)
+            if provider_cfg["needs_event_index"]:
+                # parry.gg picks the event inside the tournament by index; a
+                # tournament running both singles and doubles needs one saved
+                # entry per bracket, differing only here.
+                event_lbl = QtWidgets.QLabel("Event:")
+                event_lbl.setToolTip(
+                    "Which bracket inside the tournament to pull: 0 is its "
+                    "first event, 1 the second, and so on. An event slug works "
+                    "too.\nThis is not the tournament number below -- it "
+                    "chooses singles vs doubles, not which week.")
+                rowu.addWidget(event_lbl)
+                event_box = _hline(str(entry.get("event", "0")), 60)
+                event_box.setToolTip(event_lbl.toolTip())
+
+                def _on_event(text, e=entry):
+                    e["event"] = text.strip()
+                    self._save_custom_events()
+                event_box.textChanged.connect(_on_event)
+                rowu.addWidget(event_box)
             rowu.addStretch(1)
             cbox.addLayout(rowu)
 
@@ -1789,11 +2034,16 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
             def _on_slug_done(box=slug_box, e=entry):
                 # Normalize a pasted URL, and say so if it names no event --
-                # the same check the Add form makes, applied to an edit.
-                norm = _normalize_startgg_slug(box.text().strip())
+                # the same check the Add form makes, applied to an edit, and
+                # through the provider the entry belongs to.
+                cfg = self._provider_cfg(provider_of(e))
+                # Checked before normalizing, for the reason given in
+                # _fetch_custom_sets: normalizing can hide a wrong-provider slug.
+                raw = box.text().strip()
+                problem = cfg["problem"](raw)
+                norm = cfg["normalize"](raw)
                 if norm != box.text():
                     box.setText(norm)      # -> _on_slug_text
-                problem = _startgg_slug_problem(norm)
                 if problem:
                     self._log(f"[{e.get('label', 'Saved event')}: {problem}]\n")
 
@@ -1814,10 +2064,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
             name_box.textChanged.connect(_on_name_text)
 
             row1 = QtWidgets.QHBoxLayout()
-            num_lbl = QtWidgets.QLabel("Event #:")
-            num_lbl.setToolTip("Optional -- it fills every {n} in the URL and "
-                               "name above. An event whose name has no {n} "
-                               "needs none.")
+            num_lbl = QtWidgets.QLabel("Tournament #:")
+            num_lbl.setToolTip("Optional -- the series instalment number (274 "
+                               "for Immortal Fight Night 274). It fills every "
+                               "{n} in the URL and name above; a tournament "
+                               "whose name has no {n} needs none.")
             row1.addWidget(num_lbl)
             num = _hline(entry.get("current_num", ""), 60)
             num.setToolTip(num_lbl.toolTip())
@@ -1885,27 +2136,66 @@ class RivalsWindow(QtWidgets.QMainWindow):
             cbox._toggle.clicked.connect(lambda checked, e=entry: self._on_custom_fetch_collapsed(e, checked))
             self._saved_custom_layout.addWidget(cbox)
 
+    # ------------------------------------------------------------------ #
+    #  Fetch command builders                                             #
+    # ------------------------------------------------------------------ #
+    #  The two providers differ only in which script runs and whether the
+    #  event is named by the slug or picked by index beside it, so both
+    #  commands are assembled in one place and every caller goes through it.
+
+    def _sets_cmd(self, entry: dict, slug: str, name: str, out: str,
+                  abbrev: str, num: str) -> list:
+        cfg = self._provider_cfg(provider_of(entry))
+        cmd = [PYTHON, str(ROOT / "Python_Scripts" / cfg["sets_script"]),
+               slug, "--name", name, "--out", out]
+        if cfg["needs_event_index"]:
+            cmd += ["--event", str(entry.get("event", "0")).strip() or "0"]
+        if abbrev:
+            cmd += ["--abbrev", f"{abbrev} {num}".strip()]
+        return cmd
+
+    def _top8_cmd(self, entry: dict, slug: str, name: str, out: str,
+                  link: str) -> list:
+        cfg = self._provider_cfg(provider_of(entry))
+        cmd = [PYTHON, str(ROOT / "Python_Scripts" / cfg["top8_script"]),
+               slug, "--name", name, "--out", out]
+        if cfg["needs_event_index"]:
+            cmd += ["--event", str(entry.get("event", "0")).strip() or "0"]
+        if link:
+            cmd += ["--link", link]
+        return cmd
+
     def _fetch_custom_sets(self):
-        slug_tmpl = _normalize_startgg_slug(self._custom_slug.text().strip())
-        self._custom_slug.setText(slug_tmpl)  # normalize URL → slug in place
-        name_tmpl = self._custom_name.text().strip()
-        num = self._custom_num.text().strip()
-        problem = _startgg_slug_problem(slug_tmpl)
+        provider = self._fetch_provider
+        cfg = self._provider_cfg(provider)
+        # Validate what was typed, not what normalizing leaves behind: the
+        # parry normalizer keeps only the first path segment, so a start.gg
+        # slug pasted here would survive as a plausible-looking "tournament".
+        # Both validators normalize internally anyway.
+        raw = self._custom_slug.text().strip()
+        problem = cfg["problem"](raw)
         if problem:
             self._log(f"[Error: {problem}]\n")
             return
+        slug_tmpl = cfg["normalize"](raw)
+        self._custom_slug.setText(slug_tmpl)  # normalize URL → slug in place
+        name_tmpl = self._custom_name.text().strip()
+        num = self._custom_num.text().strip()
         label = self._custom_label(name_tmpl, slug_tmpl)
         abbrev = self._custom_abbrev.text().strip()
         slug = slug_tmpl.replace("{n}", num)
         name = (name_tmpl or slug_tmpl).replace("{n}", num)
         out = str(ROOT / "Vod_Names" / f"{name} Names.txt")
         entry = {
+            "provider": provider,
             "label": label, "slug_template": slug_tmpl,
             "name_template": name_tmpl or slug_tmpl,
             "abbrev": abbrev,
             "top8_file": f"{label} Top 8 HTML.txt",
             "current_num": num, "top8_link": "",
         }
+        if cfg["needs_event_index"]:
+            entry["event"] = self._custom_event.text().strip() or "0"
         idx = next((i for i, e in enumerate(self._custom_events) if e.get("slug_template") == slug_tmpl), None)
         if idx is not None:
             entry["top8_link"] = self._custom_events[idx].get("top8_link", "")
@@ -1915,20 +2205,14 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._save_custom_events()
         self._build_saved_custom_rows()
         self._refresh_thumbnail_events()
-        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out]
-        if abbrev:
-            cmd += ["--abbrev", f"{abbrev} {num}".strip()]
-        self._run(cmd)
+        self._run(self._sets_cmd(entry, slug, name, out, abbrev, num))
 
     def _fetch_saved_custom(self, entry: dict, num: str):
         slug = entry["slug_template"].replace("{n}", num)
         name = entry["name_template"].replace("{n}", num)
         out = str(ROOT / "Vod_Names" / f"{name} Names.txt")
-        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out]
         abbrev = entry.get("abbrev", "").strip()
-        if abbrev:
-            cmd += ["--abbrev", f"{abbrev} {num}".strip()]
-        self._run(cmd)
+        self._run(self._sets_cmd(entry, slug, name, out, abbrev, num))
 
     def _fetch_saved_custom_top8(self, entry: dict, num: str, link: str):
         slug = entry["slug_template"].replace("{n}", num)
@@ -1937,9 +2221,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         out_path = ROOT / "Top_8_Texts" / top8_file
         if not out_path.exists():
             out_path.touch()
-        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_startgg_top8.py"), slug, "--name", name, "--out", str(out_path)]
-        if link:
-            cmd += ["--link", link]
+        cmd = self._top8_cmd(entry, slug, name, str(out_path), link)
 
         def _done():
             try:
@@ -1960,10 +2242,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         name = cfg["name_template"].format(n=n)
         slug = cfg["slug_template"].format(n=n)
         out = str(ROOT / "Vod_Names" / f"{name} Names.txt")
-        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_sets.py"), slug, "--name", name, "--out", out]
-        if abbrev:
-            cmd += ["--abbrev", f"{abbrev} {n}".strip()]
-        self._run(cmd)
+        self._run(self._sets_cmd(cfg, slug, name, out, abbrev, n))
 
     def _fetch_top8(self, cfg: dict, n: str, link: str):
         name = cfg["name_template"].format(n=n)
@@ -1976,8 +2255,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
             self._select_top8_event(cfg["label"], n)
-        self._run([PYTHON, str(ROOT / "Python_Scripts" / "fetch_startgg_top8.py"),
-                   slug, "--name", name, "--link", link, "--out", str(out)], on_done=_done)
+        self._run(self._top8_cmd(cfg, slug, name, str(out), link), on_done=_done)
 
     def _select_top8_event(self, label: str, num: str = ""):
         # `num` is accepted for caller compatibility but no longer used — the
@@ -5115,7 +5393,16 @@ class RivalsWindow(QtWidgets.QMainWindow):
             if not custom:
                 self._log("[Error: no slug found for this event series]\n")
                 return
+            cfg = custom
             slug = custom["slug_template"].replace("{n}", n)
+        # fetch_results_tweet.py reads the players' socials out of start.gg's
+        # `authorizations` query; no other provider exposes them, so the slug
+        # would just be handed to the wrong API and fail obscurely.
+        provider = provider_of(cfg)
+        if not self._provider_cfg(provider)["supports_posts"]:
+            self._log(f"[Results posts are start.gg only — {series} is a "
+                      f"{self._provider_cfg(provider)['label']} event]\n")
+            return
         out_path = ROOT / "Results_Posts" / f"{event_name} {platform.capitalize()} Post.txt"
         self._posts_active_file = out_path
         cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_results_tweet.py"),

@@ -33,6 +33,7 @@ Melee_Generator/Top_8_Texts/*
 Ultimate_Generator/Top_8_Infos/*
 Ultimate_Generator/Top_8_Texts/*
 app.properties
+Rivals_2_Generator/rivals_custom_events.json
 
 # Keep folder markers even inside ignored directories
 !.gitkeep
