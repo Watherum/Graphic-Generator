@@ -33,6 +33,13 @@ Melee_Generator/Top_8_Texts/*
 Ultimate_Generator/Top_8_Infos/*
 Ultimate_Generator/Top_8_Texts/*
 app.properties
+# Cached Challonge OAuth access token, minted from the client credentials
+# in app.properties. A bearer credential, so it is never committed.
+.challonge_token.json
+
+# Working notes from the Challonge API investigation -- a scratch record of
+# what was tried and rejected, useful locally but not part of the project.
+Rivals_2_Generator/CHALLONGE_API_NOTES.md
 Rivals_2_Generator/rivals_custom_events.json
 
 # Keep folder markers even inside ignored directories

@@ -55,11 +55,19 @@ CHAR_DB_PATH = ROOT / "Resources" / "Character_database.csv"
 SETTINGS_PATH = ROOT / "rivals_gui_settings.json"
 CUSTOM_EVENTS_PATH = ROOT / "rivals_custom_events.json"
 EVENT_CONFIGS_PATH = ROOT / "rivals_event_configs.json"
-# parry.gg needs an API key; the fetchers read it from the Graphic Generator
-# root (gitignored, so a fresh clone has none). Kept in step with PROPS_FILE
-# in fetch_parrygg_sets.py / fetch_parrygg_top8.py.
+# parry.gg and Challonge each need an API key; the fetchers read them from the
+# Graphic Generator root (gitignored, so a fresh clone has none). Kept in step
+# with PROPS_FILE in fetch_parrygg_sets.py / fetch_parrygg_top8.py and with
+# challonge_api.PROPS_FILE.
 APP_PROPERTIES_PATH = ROOT.parent / "app.properties"
 PARRYGG_API_KEY = "parrygg.api.key"
+# Challonge issues an OAuth application rather than a bare key; the legacy key
+# is still honoured for accounts that were issued one before the portal changed.
+# Kept in step with challonge_api.py.
+CHALLONGE_CLIENT_ID = "challonge.client.id"
+CHALLONGE_CLIENT_SECRET = "challonge.client.secret"
+CHALLONGE_API_KEY = "challonge.api.key"
+CHALLONGE_PORTAL = "https://challonge.com/settings/developer"
 
 
 # Dark palette
@@ -86,6 +94,7 @@ _SYN_NUMBER = "#b5cea8"
 # Ordered: the first key is the default selection.
 STARTGG = "startgg"
 PARRYGG = "parrygg"
+CHALLONGE = "challonge"
 DEFAULT_PROVIDER = STARTGG
 
 # Events that ship with the GUI. All start.gg; a provider key is written on
@@ -847,31 +856,150 @@ def _parrygg_slug_problem(value: str) -> str:
     return ""
 
 
-def _parrygg_api_key_problem() -> str:
-    """Explain a missing parry.gg API key, or "" when one is present.
+def _api_key_problem(prop: str, label: str, where: str = "") -> str:
+    """Explain a missing API key, or "" when one is present.
 
     The fetchers warn on stderr too, but only once a fetch has been run and
     failed; saying so as soon as the provider is picked is the cheaper answer.
+    ``where`` names the page the key is issued from, when there is one.
     """
+    from_where = f" Get one from {where}." if where else ""
     try:
         text = APP_PROPERTIES_PATH.read_text(encoding="utf-8")
     except OSError:
-        return (f"parry.gg needs an API key. Create {APP_PROPERTIES_PATH.name} in "
+        return (f"{label} needs an API key. Create {APP_PROPERTIES_PATH.name} in "
                 f"{APP_PROPERTIES_PATH.parent} with a line reading "
-                f"{PARRYGG_API_KEY}=<your key>.")
+                f"{prop}=<your key>.{from_where}")
     for line in text.splitlines():
         line = line.strip()
-        if line.startswith(PARRYGG_API_KEY):
+        if line.startswith(prop):
             _, _, val = line.partition("=")
             if val.strip():
                 return ""
-    return (f"{APP_PROPERTIES_PATH} has no {PARRYGG_API_KEY} value. parry.gg "
-            f"fetches will fail until one is added.")
+    return (f"{APP_PROPERTIES_PATH} has no {prop} value. {label} "
+            f"fetches will fail until one is added.{from_where}")
 
 
-# Per-provider behaviour. "slug_kind" is what the positional argument names:
-# start.gg addresses one event directly, parry.gg addresses a tournament and
-# picks the event by index, which is why only parry rows show an Event box.
+def _parrygg_api_key_problem() -> str:
+    return _api_key_problem(PARRYGG_API_KEY, "parry.gg")
+
+
+def _challonge_api_key_problem() -> str:
+    """Explain missing Challonge credentials, or "" when they are present.
+
+    Challonge is not one value like the other two. Its developer portal no
+    longer issues bare v1 keys -- it issues an application, so the normal setup
+    is a client id *and* secret, authorized through the OAuth client-credentials
+    flow. An account that still has a v1 key may use that instead, which is why
+    either is accepted; naming only one of the two would send a user with the
+    other kind hunting for a setting that no longer exists.
+    """
+    props = {}
+    try:
+        for line in APP_PROPERTIES_PATH.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, sep, val = line.partition("=")
+            if sep:
+                props[key.strip()] = val.strip()
+    except OSError:
+        return (f"Challonge needs credentials. Create {APP_PROPERTIES_PATH.name} "
+                f"in {APP_PROPERTIES_PATH.parent} with {CHALLONGE_CLIENT_ID} "
+                f"and {CHALLONGE_CLIENT_SECRET} from {CHALLONGE_PORTAL}.")
+    if props.get(CHALLONGE_API_KEY):
+        return ""
+    if props.get(CHALLONGE_CLIENT_ID) and props.get(CHALLONGE_CLIENT_SECRET):
+        return ""
+    if props.get(CHALLONGE_CLIENT_ID) or props.get(CHALLONGE_CLIENT_SECRET):
+        missing = (CHALLONGE_CLIENT_SECRET if props.get(CHALLONGE_CLIENT_ID)
+                   else CHALLONGE_CLIENT_ID)
+        return (f"{APP_PROPERTIES_PATH} is missing {missing}. Challonge needs "
+                f"both the client id and the client secret.")
+    return (f"{APP_PROPERTIES_PATH} has no Challonge credentials. Create an "
+            f"application at {CHALLONGE_PORTAL}, then set {CHALLONGE_CLIENT_ID} "
+            f"and {CHALLONGE_CLIENT_SECRET}.")
+
+
+#: Any Challonge URL, scheme optional, community subdomain captured. Kept in
+#: step with challonge_api.normalize_slug, which the fetchers use.
+_CHALLONGE_URL_RE = re.compile(
+    r'^(?:https?://)?(?:(?P<sub>[A-Za-z0-9_-]+)\.)?challonge\.com/', re.I)
+
+#: Bracket *view* pages a copied URL tends to end in. The segment after the
+#: slug is only a community name when it is not one of these.
+_CHALLONGE_VIEW_SEGMENTS = {
+    "module", "standings", "log", "matches", "participants", "groups",
+    "settings", "edit", "bracket", "brackets", "teams", "predictions",
+}
+
+
+def _normalize_challonge_slug(value: str) -> str:
+    """Reduce a pasted Challonge URL to the identifier v2.1 addresses.
+
+    Challonge addresses a *tournament*, like parry.gg. A tournament under a
+    community lives at both ``myorg.challonge.com/slug`` and
+    ``challonge.com/myorg/slug``, and the API joins the two with a hyphen:
+    ``myorg-slug``.
+
+    This mirrors ``challonge_api.normalize_slug`` deliberately -- the GUI must
+    not import the fetchers (they pull in ``requests`` and are run as separate
+    processes), and the two are small enough that keeping them in step is
+    cheaper than a shared import.
+    """
+    text = (value or "").strip()
+    match = _CHALLONGE_URL_RE.match(text)
+    subdomain = ""
+    if match:
+        text = text[match.end():]
+        sub = (match.group("sub") or "").lower()
+        if sub and sub != "www":
+            subdomain = sub
+    text = text.split("?")[0].split("#")[0].strip("/")
+    if not text:
+        return ""
+    parts = [p for p in text.split("/") if p]
+    if subdomain:
+        return f"{subdomain}-{parts[0]}"
+    if len(parts) >= 2 and parts[1].lower() not in _CHALLONGE_VIEW_SEGMENTS:
+        return f"{parts[0]}-{parts[1]}"
+    return parts[0]
+
+
+def _challonge_slug_problem(value: str) -> str:
+    """Explain why a Challonge slug won't fetch, or "" if it looks usable."""
+    # Tested before normalizing, for the parry.gg reason: normalizing keeps only
+    # the leading path segments, so a start.gg event slug pasted here would
+    # survive as a plausible-looking "tournament-foo" and save silently.
+    raw = _STARTGG_URL_RE.sub("", value).strip().strip("/")
+    if raw.startswith("tournament/") or "/event/" in raw:
+        return ("That is a start.gg event slug, not a Challonge one. Switch the "
+                "provider above to start.gg, or paste the Challonge URL -- its "
+                "slug is the path segment after https://challonge.com/.")
+    if _PARRYGG_URL_RE.match(value.strip()):
+        return ("That is a parry.gg URL. Switch the provider above to parry.gg, "
+                "or paste the Challonge URL instead.")
+    slug = _normalize_challonge_slug(value)
+    if not slug:
+        return "Enter the tournament slug (or paste the tournament's Challonge URL)."
+    return ""
+
+
+# Per-provider behaviour. The positional argument names different things per
+# site: start.gg addresses one event directly, while parry.gg and Challonge
+# address a tournament -- parry then picks the event inside it by index, which
+# is why only parry rows show an Event box.
+#
+# "note" is a standing caveat about the provider itself, shown under the
+# dropdown whether or not anything is wrong. It is where Challonge's hard
+# limits live, since neither is a transient error a fetch could report.
+#
+# "posts_platforms" drives the buttons on the Generate Posts tab, because
+# what a results post can say depends on what the site knows about players:
+# start.gg and parry.gg can both name handles, so they get a button each for
+# Twitter and Discord, while Challonge has no social accounts at all and gets
+# a single "Generate Post" that writes plain tags. "posts_note" says so on the
+# tab, so an empty-looking post reads as a limit of the site rather than a bug.
 PROVIDERS = {
     STARTGG: {
         "label": "start.gg",
@@ -880,7 +1008,10 @@ PROVIDERS = {
         "normalize": _normalize_startgg_slug,
         "problem": _startgg_slug_problem,
         "needs_event_index": False,
-        "supports_posts": True,
+        "posts_script": "fetch_results_tweet.py",
+        "posts_platforms": [("twitter", "Fetch Twitter"),
+                            ("discord", "Fetch Discord")],
+        "posts_note": "",
         "api_key_problem": None,
         "slug_label": "Event URL:",
         "slug_placeholder": "start.gg/tournament/my-tournament-{n}/event/rivals-2-singles",
@@ -892,6 +1023,7 @@ PROVIDERS = {
                   "say \u2014 not the whole tournament. Open that event's page on "
                   "start.gg and paste its URL below; a tournament with several "
                   "events needs one entry each."),
+        "note": "",
     },
     PARRYGG: {
         "label": "parry.gg",
@@ -900,7 +1032,14 @@ PROVIDERS = {
         "normalize": _normalize_parrygg_slug,
         "problem": _parrygg_slug_problem,
         "needs_event_index": True,
-        "supports_posts": False,
+        "posts_script": "fetch_parrygg_post.py",
+        "posts_platforms": [("twitter", "Fetch Twitter"),
+                            ("discord", "Fetch Discord")],
+        "posts_note": ("Discord handles come from each player's linked "
+                       "account. parry.gg stores no Twitter accounts of its "
+                       "own, so a Twitter post reads the handle off the "
+                       "player's linked start.gg account instead; anyone who "
+                       "linked neither is listed by tag."),
         "api_key_problem": _parrygg_api_key_problem,
         "slug_label": "Tournament URL:",
         "slug_placeholder": "parry.gg/my-tournament-3-14-2026-019c9aeb",
@@ -912,6 +1051,48 @@ PROVIDERS = {
                   "inside it by number \u2014 so paste the tournament URL and set "
                   "Event to 0 for its first event, 1 for its second, and so on. "
                   "Needs an API key in app.properties."),
+        "note": "",
+    },
+    CHALLONGE: {
+        "label": "Challonge",
+        "sets_script": "fetch_challonge_sets.py",
+        "top8_script": "fetch_challonge_top8.py",
+        "normalize": _normalize_challonge_slug,
+        "problem": _challonge_slug_problem,
+        "needs_event_index": False,
+        "posts_script": "fetch_challonge_post.py",
+        "posts_platforms": [("generic", "Generate Post")],
+        "posts_note": ("Challonge stores no social accounts of any kind, so "
+                       "the post lists plain tags. Standings need the bracket "
+                       "to be finalized on challonge.com."),
+        "api_key_problem": _challonge_api_key_problem,
+        "slug_label": "Tournament URL:",
+        "slug_placeholder": "challonge.com/my-weekly-{n}",
+        "slug_tooltip": ("The tournament's Challonge URL, or just its slug -- the "
+                         "path segment after https://challonge.com/.\n"
+                         "A community bracket (myorg.challonge.com/my-weekly) "
+                         "works too; the API addresses it as myorg-my-weekly, "
+                         "which is what this box will be rewritten to.\n"
+                         "Put {n} where the tournament number goes so the entry "
+                         "can be reused week to week."),
+        "slug_hint": "tournament URL or slug  ·  use {n} for the tournament number",
+        "intro": ("Challonge addresses a whole tournament — paste its URL "
+                  "below. A community bracket at myorg.challonge.com/my-weekly "
+                  "works as well. Needs challonge.client.id and "
+                  "challonge.client.secret in app.properties — create an "
+                  "application at challonge.com/settings/developer to get "
+                  "them."),
+        # Neither limit is a transient failure a fetch could report, so both are
+        # said up front rather than after a fetch has produced odd-looking output.
+        "note": ("Challonge reports no character data at all, so every VOD line "
+                 "arrives with empty ( ) — fill them in on the Generate "
+                 "Thumbnails tab. It also reports no round names and no "
+                 "participant counts: round names are worked out from the "
+                 "bracket's shape, and a doubles team may not split correctly, "
+                 "so check any team line by hand. Results posts are start.gg "
+                 "only. The free tier allows 500 API requests a month; a "
+                 "fetch spends a few of them (more for a large bracket), so "
+                 "the budget is generous but not unlimited."),
     },
 }
 
@@ -1752,6 +1933,16 @@ class RivalsWindow(QtWidgets.QMainWindow):
         prow.addWidget(self._provider_key_hint, 1)
         lay.addLayout(prow)
 
+        # A standing caveat about the selected site -- what it cannot report,
+        # rather than what has gone wrong. Only Challonge has one, so the label
+        # is hidden entirely for the other providers.
+        self._provider_note = _muted("")
+        self._provider_note.setWordWrap(True)
+        # Amber, the Len column's "something was given up" colour -- a caveat
+        # to read rather than the red of something that has gone wrong.
+        self._provider_note.setStyleSheet("color: #ffd166;")
+        lay.addWidget(self._provider_note)
+
         fetch_collapsed = self._settings.get("fetch_collapsed", {})
         for cfg in FETCH_EVENTS:
             label = cfg["label"]
@@ -1938,6 +2129,10 @@ class RivalsWindow(QtWidgets.QMainWindow):
         for w in (self._custom_event_label, self._custom_event,
                   self._custom_event_note):
             w.setVisible(cfg["needs_event_index"])
+
+        note = cfg.get("note") or ""
+        self._provider_note.setText(note)
+        self._provider_note.setVisible(bool(note))
 
         problem_fn = cfg.get("api_key_problem")
         problem = problem_fn() if problem_fn else ""
@@ -5156,12 +5351,12 @@ class RivalsWindow(QtWidgets.QMainWindow):
         cv.addLayout(rv)
 
         rb2 = QtWidgets.QHBoxLayout()
-        ft = QtWidgets.QPushButton("Fetch Twitter")
-        ft.clicked.connect(lambda: self._run_fetch_post("twitter"))
-        rb2.addWidget(ft)
-        fd = QtWidgets.QPushButton("Fetch Discord")
-        fd.clicked.connect(lambda: self._run_fetch_post("discord"))
-        rb2.addWidget(fd)
+        # Which fetch buttons exist depends on the provider, so they live in
+        # their own container that _rebuild_posts_buttons() repopulates.
+        self._posts_btns = QtWidgets.QWidget()
+        self._posts_btns_lay = QtWidgets.QHBoxLayout(self._posts_btns)
+        self._posts_btns_lay.setContentsMargins(0, 0, 0, 0)
+        rb2.addWidget(self._posts_btns)
         rb2.addSpacing(16)
         sv = QtWidgets.QPushButton("Save")
         sv.clicked.connect(self._save_post_file)
@@ -5171,6 +5366,9 @@ class RivalsWindow(QtWidgets.QMainWindow):
         rb2.addWidget(cp)
         rb2.addStretch(1)
         cv.addLayout(rb2)
+        self._posts_provider_note = _muted("")
+        self._posts_provider_note.setVisible(False)
+        cv.addWidget(self._posts_provider_note)
         lay.addWidget(cfgbox)
 
         ctext = CollapsibleBox("Post Text", collapsed=False)
@@ -5300,6 +5498,36 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._posts_date.setEnabled(en)
         self._posts_next_link.setEnabled(en)
 
+    def _posts_entry(self):
+        """``(entry, provider)`` for the selected posts series.
+
+        The Posts tab lists every saved event whatever fetched it, so the
+        provider has to be read off the entry rather than from the Fetch
+        tab's dropdown. A built-in row is always start.gg.
+        """
+        series = self._posts_series.currentText()
+        entry = next((c for c in FETCH_EVENTS if c["label"] == series), None)
+        if entry is None:
+            entry = next((e for e in self._custom_events
+                          if e.get("label") == series), None)
+        return entry, provider_of(entry or {})
+
+    def _rebuild_posts_buttons(self):
+        """Fit the fetch buttons to what the selected series' site can do."""
+        cfg = self._provider_cfg(self._posts_entry()[1])
+        while self._posts_btns_lay.count():
+            w = self._posts_btns_lay.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        for platform, label in cfg["posts_platforms"]:
+            b = QtWidgets.QPushButton(label)
+            b.clicked.connect(
+                lambda _=False, pf=platform: self._run_fetch_post(pf))
+            self._posts_btns_lay.addWidget(b)
+        note = cfg.get("posts_note", "")
+        self._posts_provider_note.setText(note)
+        self._posts_provider_note.setVisible(bool(note))
+
     def _refresh_posts_events(self):
         events = load_thumbnail_events()
         self._posts_event_map = {name: tmpl for name, tmpl in events}
@@ -5351,6 +5579,7 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._posts_has_next.setChecked(saved_cfg.get("has_next", True))
         self._update_posts_next_state()
         self._loading = False
+        self._rebuild_posts_buttons()
         self._update_posts_name()
         self._save_settings()
 
@@ -5369,8 +5598,11 @@ class RivalsWindow(QtWidgets.QMainWindow):
         if not event_name:
             return
         folder = ROOT / "Results_Posts"
-        for platform in ("twitter", "discord"):
-            path = folder / f"{event_name} {platform.capitalize()} Post.txt"
+        # "" is the generic (no-socials) post, whose file carries no
+        # platform in its name -- a Challonge series only ever writes that one.
+        for platform in ("twitter", "discord", ""):
+            stem = (event_name + " " + platform.capitalize()).strip()
+            path = folder / (stem + " Post.txt")
             if path.exists():
                 self._posts_active_file = path
                 self._posts_text.setPlainText(path.read_text(encoding="utf-8").rstrip())
@@ -5379,34 +5611,33 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._posts_text.clear()
 
     def _run_fetch_post(self, platform: str):
-        series = self._posts_series.currentText()
         n = self._posts_num.text().strip()
         event_name = self._posts_event_name.text().strip()
         if not event_name:
-            self._log("[Error: no event selected]\n")
+            self._log("[Error: no event selected]" + chr(10))
             return
-        cfg = next((c for c in FETCH_EVENTS if c["label"] == series), None)
-        if cfg:
-            slug = cfg["slug_template"].format(n=n)
+        entry, provider = self._posts_entry()
+        if not entry:
+            self._log("[Error: no slug found for this event series]" + chr(10))
+            return
+        if entry in FETCH_EVENTS:
+            slug = entry["slug_template"].format(n=n)
         else:
-            custom = next((e for e in self._custom_events if e.get("label") == series), None)
-            if not custom:
-                self._log("[Error: no slug found for this event series]\n")
-                return
-            cfg = custom
-            slug = custom["slug_template"].replace("{n}", n)
-        # fetch_results_tweet.py reads the players' socials out of start.gg's
-        # `authorizations` query; no other provider exposes them, so the slug
-        # would just be handed to the wrong API and fail obscurely.
-        provider = provider_of(cfg)
-        if not self._provider_cfg(provider)["supports_posts"]:
-            self._log(f"[Results posts are start.gg only — {series} is a "
-                      f"{self._provider_cfg(provider)['label']} event]\n")
-            return
-        out_path = ROOT / "Results_Posts" / f"{event_name} {platform.capitalize()} Post.txt"
+            slug = entry["slug_template"].replace("{n}", n)
+        pcfg = self._provider_cfg(provider)
+        # "generic" is the no-socials post: one button, no --platform flag,
+        # and a filename without a platform in it.
+        suffix = "Post" if platform == "generic" else (
+            platform.capitalize() + " Post")
+        out_path = ROOT / "Results_Posts" / (event_name + " " + suffix + ".txt")
         self._posts_active_file = out_path
-        cmd = [PYTHON, str(ROOT / "Python_Scripts" / "fetch_results_tweet.py"),
-               slug, "--name", event_name, "--platform", platform, "--out", str(out_path)]
+        cmd = [PYTHON,
+               str(ROOT / "Python_Scripts" / pcfg["posts_script"]),
+               slug, "--name", event_name, "--out", str(out_path)]
+        if platform != "generic":
+            cmd += ["--platform", platform]
+        if pcfg["needs_event_index"]:
+            cmd += ["--event", str(entry.get("event", "0")).strip() or "0"]
         if self._posts_has_next.isChecked():
             next_link = self._posts_next_link.text().strip()
             if next_link:
@@ -5420,7 +5651,8 @@ class RivalsWindow(QtWidgets.QMainWindow):
 
         def _done():
             if out_path.exists():
-                self._posts_text.setPlainText(out_path.read_text(encoding="utf-8").rstrip())
+                self._posts_text.setPlainText(
+                    out_path.read_text(encoding="utf-8").rstrip())
         self._run(cmd, on_done=_done)
 
     def _save_post_file(self):

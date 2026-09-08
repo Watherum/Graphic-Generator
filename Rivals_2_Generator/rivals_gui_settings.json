@@ -8,7 +8,7 @@
     "Straight Into The Abyss": "SITA"
   },
   "last_thumb_series": "Twist of Fate",
-  "last_posts_series": "Straight Into The Abyss",
+  "last_posts_series": "Fan The Flames",
   "posts_cfg": {
     "Straight Into The Abyss": {
       "next_date": "2026-09-09",
@@ -38,6 +38,60 @@
       "next_link": "",
       "vods": "",
       "has_next": false
+    },
+    "Fan The Flames": {
+      "next_date": "2026-09-09",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
+    },
+    "Immoral Fight Night": {
+      "next_date": "2026-09-09",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
+    },
+    "Clip It": {
+      "next_date": "2026-09-09",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
+    },
+    "CR Clash": {
+      "next_date": "2026-09-09",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
+    },
+    "CR Arcadian": {
+      "next_date": "2026-09-09",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
+    },
+    "Quarantainment": {
+      "next_date": "2026-09-09",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
+    },
+    "EVO 2026": {
+      "next_date": "2026-09-09",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
+    },
+    "Twist of Fate Doubles": {
+      "next_date": "2026-09-09",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
+    },
+    "Twist of Fate Crews": {
+      "next_date": "2026-09-09",
+      "next_link": "",
+      "vods": "",
+      "has_next": true
     }
   },
   "last_update_tree": "",
@@ -45,5 +99,5 @@
     "Straight Into The Abyss": false,
     "Immortal Fight Night": false
   },
-  "fetch_provider": "startgg"
+  "fetch_provider": "challonge"
 }
