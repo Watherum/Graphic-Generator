@@ -8,7 +8,7 @@
     "Straight Into The Abyss": "SITA"
   },
   "last_thumb_series": "Twist of Fate",
-  "last_posts_series": "Fan The Flames",
+  "last_posts_series": "Straight Into The Abyss",
   "posts_cfg": {
     "Straight Into The Abyss": {
       "next_date": "2026-09-09",
@@ -99,5 +99,5 @@
     "Straight Into The Abyss": false,
     "Immortal Fight Night": false
   },
-  "fetch_provider": "challonge"
+  "fetch_provider": "startgg"
 }

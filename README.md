@@ -1,11 +1,32 @@
 # Graphic Generator
 
-Batch image generator for Rivals 2 esports — creates YouTube thumbnails, Top 8 bracket graphics, and results posts for weekly events. Originally based on work by CR_Jetstream; now primarily focused on Rivals 2. Ultimate and Melee generators are also included and share the same Qt GUI and feature set.
+Batch image generator for Rivals 2 esports — creates YouTube thumbnails, Top 8 bracket graphics, and results posts for weekly events, from brackets run on **start.gg**, **parry.gg** or **Challonge**. Singles and doubles are both supported. Originally based on work by CR_Jetstream; now primarily focused on Rivals 2. Ultimate and Melee generators are also included and share the same Qt GUI and feature set.
 
 ## Requirements
 
 - **Python 3.12** — install from [python.org](https://www.python.org/downloads/) if not already present
 - Run `requirments_install.cmd` once to install Python dependencies
+
+### API credentials (optional)
+
+Match data can be pulled from **start.gg**, **parry.gg** or **Challonge**. start.gg needs
+nothing; the other two need credentials. Copy `app.example.properties` to
+`app.properties` in the repo root and fill in what you use — `app.properties` is
+gitignored, so your keys are never committed.
+
+| Site | What to set | Where to get it |
+|---|---|---|
+| start.gg | nothing | — the queries used are public |
+| parry.gg | `parrygg.api.key` | your parry.gg account |
+| Challonge | `challonge.client.id` + `challonge.client.secret` | create an application at [challonge.com/settings/developer](https://challonge.com/settings/developer) |
+
+Challonge's developer portal no longer issues bare v1 API keys, so the generator uses an
+OAuth application instead — it exchanges the id and secret for a token itself, with no
+browser step, and caches it in `.challonge_token.json` beside `app.properties`. An older
+`challonge.api.key` is still honoured and takes precedence if you have one.
+
+Selecting a provider on the **Fetch Data** tab with its credentials missing shows a red
+hint beside the dropdown rather than failing later on a fetch.
 
 ## Updating
 
@@ -28,44 +49,84 @@ Melee_Generator\Launch_Melee_GUI.vbs
 ```
 
 The **Ultimate** and **Melee** generators have the same Qt GUI, the same tabs and the
-same features — including per-set costume overrides, the preferred-costume marker, the
-live thumbnail preview in Thumbnail Config, and the embedded Top 8 preview with its PNG
+same features — including all three fetch providers, doubles support, per-set costume
+overrides, the preferred-costume marker, the per-VOD-file thumbnail configs, the live
+thumbnail preview in Thumbnail Config, and the embedded Top 8 preview with its PNG
 export. The remaining game-specific differences:
 
 - Costumes are **numbered 1–8** (rather than Rivals' named skins) everywhere they appear:
-  in the Player Database, the costume pickers, and the `Character:Alt` override syntax
+  in the Player Database, the costume pickers, and the `Character:Alt` override syntax —
+  where the field is labelled **Costume**
 - The **Character Database** is a two-column `alias → render filename` mapping rather than a single-column name list
 - The **Character Renders** tab simply opens the full render folder (the dragdown.wiki downloader is Rivals-only)
 - Per-event thumbnail overrides save to `ultimate_event_configs.json` / `melee_event_configs.json` respectively
-- **Rivals-only:** the dragdown.wiki render downloader and the parry.gg fetchers
+- **Rivals-only:** the dragdown.wiki render downloader, and the named-skin model
 
 The Rivals 2 GUI has eight tabs:
 
 ---
 
-### 1. Fetch From Start.gg
+### 1. Fetch Data
 
-Pull match data and top 8 standings directly from start.gg.
+Pull match data and top 8 standings from **start.gg**, **parry.gg** or **Challonge**,
+picked with the **Fetch from** dropdown at the top of the tab. The choice is remembered
+between sessions, and only that site's saved events are listed below it.
 
-Each tournament series is shown in a **collapsible panel** — click the header to expand/collapse it. Collapsed/expanded state is remembered between sessions.
+#### How the three sites differ
 
-**Preset Tournaments** (Immortal Fight Night, Straight Into The Abyss)
-- Enter the event number and top 8 link
+|  | start.gg | parry.gg | Challonge |
+|---|---|---|---|
+| What the URL names | an **event** (one bracket) | a **tournament** | a **tournament** |
+| Picking the event | baked into the URL | the **Event:** box — `0` is the first bracket, `1` the next | n/a — a tournament *is* the bracket |
+| Credentials | none | `parrygg.api.key` | OAuth client id + secret |
+| Characters | yes | yes, when the TO reported games | **never** — Challonge has no game model |
+| Round names | as reported | as reported | **derived** from the bracket shape (`Wnrs Semi`, `Grand Final`, …) |
+| Results posts | Twitter + Discord handles | Twitter + Discord (Twitter via the player's linked start.gg account) | plain tags — no socials exist |
+
+Challonge's two limits are permanent facts about its API rather than a failed fetch, so
+they're shown as a standing amber note under the dropdown. Its Top 8 fetch falls back to
+each player's main from `Player_database.csv` for the missing characters, and its
+standings need the bracket to be **finalized** — an unfinished one is reported rather
+than guessed at.
+
+**The provider filters this tab only.** The Thumbnails, Top 8 and Posts tabs list every
+saved event whatever pulled it — a parry-fetched VOD file generates exactly like a
+start.gg one.
+
+Each event is shown in a **collapsible panel** — click the header to expand/collapse it.
+Collapsed/expanded state is remembered between sessions.
+
+**Preset events** (Immortal Fight Night, Straight Into The Abyss)
+- Enter the **Tournament #** and top 8 link
 - Optionally set an **Abbrev** (e.g. `IFN`) — see *Tournament abbreviations* below
 - Click **Fetch VOD Names** or **Fetch Top 8**
-- Event numbers, links, and abbreviations are saved automatically between sessions
+- Tournament numbers, links, and abbreviations are saved automatically between sessions
 
-**Saved Custom Tournaments**
-- Custom tournaments you've previously added appear here as their own sections
-- Each shows an Event # field, Top 8 Link field, an **Abbrev** field, and **Fetch VOD Names** / **Fetch Top 8** / **Delete** buttons
-- Event numbers, top 8 links, and abbreviations are saved automatically between sessions
+**Saved Events**
+- Events you've previously added appear here as their own panels, filtered to the selected provider
+- Every field is **editable in place** — Event URL, Name, Tournament #, Top 8 link, Abbrev
+  (plus parry's Event index). A tournament that renames a bracket or moves to a new URL is
+  fixed by editing it rather than deleting and re-adding, which would take its abbreviation
+  and Top 8 link with it
+- Editing the **Name** renames the event everywhere it's listed — Thumbnails, Top 8 and Posts follow
+- A pasted URL is normalized when you leave the box, and a URL belonging to a *different*
+  site is called out in the console rather than saved as a plausible-looking slug
+- **Fetch VOD Names** / **Fetch Top 8** / **Delete** buttons on each panel
 
-**Add New Custom Tournament**
-- Enter a slug template (use `{n}` as a placeholder for the event number, e.g. `tournament/my-event-{n}/event/rivals-2-singles`) — pasting a full start.gg URL is also accepted and automatically trimmed down to the slug
-- Enter a series name (e.g. `My Weekly`)
-- Optionally enter an **Abbrev** for the series
-- Enter a starting event number
-- Click **Save & Fetch VOD Names** — the tournament is saved and will appear in Saved Custom Tournaments on future boots
+**Add A Tournament's Event**
+- **Event URL** — paste the event's URL, or a slug template using `{n}` as a placeholder
+  for the tournament number (e.g. `tournament/my-event-{n}/event/rivals-2-singles`). The
+  form's wording, placeholder and validation follow the selected provider
+- **Name** — the series name for the VOD lines, e.g. `Immortal Fight Night {n}`
+- **Abbrev** — optional, see below
+- **Tournament #** — optional; it fills every `{n}` above. A tournament whose URL and name
+  contain no `{n}` needs none
+- **Event:** — parry.gg only: which bracket inside the tournament to pull (`0` = the first)
+- Click **Save & Fetch VOD Names** — the event is saved and appears under Saved Events on future boots
+
+> **Tournament #** vs **Event**: the number identifies the instalment of a series (274 for
+> *Immortal Fight Night 274*); an *event* is one bracket inside that tournament. A
+> tournament running both singles and doubles needs one saved entry per bracket.
 
 > **Fetch Top 8** always writes to both the event-specific text file and `Top_8_Texts/Default Top 8 HTML.txt`, keeping the default template in sync with the latest event.
 
@@ -73,19 +134,44 @@ Each tournament series is shown in a **collapsible panel** — click the header 
 
 YouTube limits video titles to 100 characters. Each VOD match line begins with the full tournament name, and long names plus long player tags can push a line over that limit.
 
-Set a short **Abbrev** for a series (e.g. `IFN` for *Immortal Fight Night*) and the event number is appended automatically (`IFN 274`). When fetching VOD names, any line that would exceed 100 characters has its tournament name swapped for the abbreviation; lines that already fit keep the full name. Thumbnails still generate correctly from abbreviated lines — the abbreviation only shortens the title, and the full series name is still drawn on the graphic.
+Set a short **Abbrev** for a series (e.g. `IFN` for *Immortal Fight Night*) and the event
+number is appended automatically (`IFN 274`).
+
+**Abbreviating happens when you copy, not when you fetch.** A VOD file always spells the
+event name out in full; the fetchers only record the abbreviation in a `# ABBREV:` header
+at the top of the file. The **Copy** button in the VOD table is what applies it, so the
+editor never shows two spellings of one event and nothing on disk is rewritten. See the
+**Len** column below for what a line actually becomes on the clipboard.
 
 ---
 
 ### 2. Generate Thumbnails
 
 **Event selector**
-- Choose a series from the dropdown (includes preset and saved custom tournaments)
-- Enter the event number/suffix — the full event name is built automatically
+- Choose a **Series** from the dropdown (includes preset and saved events)
+- **# / Label** is what replaces `{n}` in the series name — an event number (`274`), or a
+  word for a tournament's other brackets (`Doubles`, `Crews`)
+- **Event name** shows the full name that gets generated. It's a dropdown of the events
+  that already have a VOD file, so one tournament's several brackets can be picked rather
+  than typed, and it stays editable for an event not fetched yet. Picking an event selects
+  its VOD names file, and picking a file selects the event
 
 **Thumbnail Config** *(collapsible, starts collapsed)*
 
-Configure rendering for the selected series. Settings are saved per-series to `rivals_event_configs.json` and applied at generation time on top of any hardcoded defaults.
+Configure rendering for the selected series. Settings are saved to
+`rivals_event_configs.json` and applied at generation time on top of any hardcoded defaults.
+
+**Applies to** at the top of the box chooses what the form edits:
+
+- **Series** — every event whose name starts with the series
+- **VOD file** — just the names file selected in the VOD Names section
+
+A file config overrides the series config, which is how two brackets of one tournament —
+`Twist of Fate` and `Twist of Fate Doubles`, which share a series name — can look
+completely different. In file scope the form loads *series + file* settings, since a file
+entry layers on top rather than replacing everything, and **Clear Config** drops just the
+file entry and reloads the series one. A warning under the picker appears if the selected
+file isn't the one the event name will actually read.
 
 | Field | Description |
 |---|---|
@@ -138,11 +224,19 @@ View and edit match data files without leaving the GUI.
 - Edit lines directly in the table — **edits auto-save** a moment after you stop typing
   (`[Auto-saved: …]` appears in the console); a manual **Save** button is still there
 - The **Len** column shows the exact length of what the **Copy** button would put on the
-  clipboard — measured *after* skins are stripped and the series abbreviation is applied.
-  It turns red only when a line is still over 100 characters even once abbreviated, which
-  is the only case that needs action. **Blue italic** means the abbreviation is what brought
-  the line under — the row still shows the full tournament name, so the count would
-  otherwise look wrong for the text beside it; hover for the exact line that gets copied
+  clipboard — measured *after* skins are stripped and the shortening strategies below are
+  applied, so it's what would be published rather than what the row happens to contain.
+  Its colour says how much had to be given up to get there:
+
+  | Colour | Meaning |
+  |---|---|
+  | none | fits as written |
+  | blue | the series abbreviation was enough |
+  | amber | the character lists had to go as well |
+  | red | still over 100 even then — the line itself needs work |
+
+  Only red asks for action. Hover for the exact line that gets copied and what ran to
+  produce it
 - Each row has its own **Copy** button and **↑ / ↓** buttons to reorder lines (clear the
   filter first — reordering a filtered view is blocked)
 - Right-click a row for **Copy line**, **Set skins…** and **Delete line**
@@ -188,6 +282,52 @@ Immortal Fight Night 290 - Grand Final - Average Alex (Ranno:Abyss Midnight) Vs 
 count and the generated filenames — `:` isn't even legal in a Windows filename.
 
 The same override works in the Top 8 placement data; see *Generate Top 8s* below.
+
+#### Shortening long titles
+
+Two strategies run in order when copying a line, each only if the line is *still* over
+100 characters:
+
+1. The series **abbreviation** replaces the event name
+2. The `(characters)` after each player is dropped — the one part of a title that
+   describes the renders rather than the set
+
+Nothing beyond those two is ever cut: a line still over the limit is copied as it is,
+because what to give up next is your call. Only the player section is touched, so
+parentheses in an event name (`Some Event (Online) 12`) or a round (`Pools (A) Wnrs Rd 2`)
+survive. **The line in the table and on disk is never modified** — every strategy runs on
+the way to the clipboard only.
+
+#### Doubles
+
+Doubles brackets generate thumbnails. A team entrant is written with a **comma** between
+the members:
+
+```
+Twist of Fate Doubles - Lsrs Final - shane,THE PIZZA GUY (Ranno:Goo Green, Kragg:Salaryman Green) Vs Bowler,ybm (Clairen:Samurai Blue, Wrastor:Parrot Blue) - RoA II
+```
+
+- start.gg reports a team as `shane / THE PIZZA GUY`, but the match title becomes the
+  output **filename** and `/` isn't legal in a Windows one — so the fetchers write the
+  comma form, and an older file with a slash in it is normalized as it's read
+- **A team has no row of its own** in `Player_database.csv`; each member keeps theirs, and
+  character *i* belongs to member *i*. If a member has no row, the character falls back to
+  whichever member's row has it, and the missing-entries log names a player rather than a team
+- **Any team size works** — a 3v3 writes `A,B,C` and reads back the same. Each set's
+  characters are grouped per member, so two teammates on the same character don't collapse
+  into one and a counterpick isn't misattributed
+- **The thumbnail draws the first three characters per side** (the layouts have
+  arrangements for one, two and three); the title keeps them all, and the database lookups
+  still run for every one
+- **Long labels shrink to fit** rather than running off the canvas — a team name is about
+  twice the length of a singles tag. Text that already fits is drawn at its configured size
+- A slash doesn't by itself mean a team: a sponsored singles entrant like `NG/POA | Azul`
+  is one player, and the fetchers use the *source's own participant count* to decide.
+  Challonge reports no count, so it guesses from punctuation and lists every split it made
+  on the console — pass `--no-teams` for a singles bracket whose tags contain separators
+
+Top 8 doubles is deliberately unsupported — those data files are comma separated, so a
+team name can't be written into one.
 
 ---
 
@@ -282,13 +422,27 @@ A live render of the selected HTML file, at a size worth looking at.
 
 ### 4. Generate Posts
 
-Fetch and edit results posts for Twitter/X or Discord from start.gg results.
+Fetch and edit results posts for Twitter/X or Discord. All three providers generate one.
 
-- Select a series and event number
+- Select a series and **# / Label** — the same event picker the Thumbnails tab uses
 - Toggle **Next Event** to include the next event's **Date**, **Link** and **Vods link** in the post
 - Click **Fetch Twitter** or **Fetch Discord** to pull standings with the matching social handles
 - The generated post text appears in the editable text area
 - Click **Save** to write changes back to `Results_Posts/{Event Name} {Platform} Post.txt`, or **Copy** to copy it to the clipboard
+
+**The buttons change to suit the provider**, and a note under them explains what that site
+can and cannot supply — so a post full of plain tags reads as a limit of the site rather
+than a failed fetch:
+
+| Provider | Buttons | Handles come from |
+|---|---|---|
+| start.gg | Fetch Twitter, Fetch Discord | each player's connected accounts |
+| parry.gg | Fetch Twitter, Fetch Discord | linked accounts — Discord directly, Twitter *bridged* through the player's linked start.gg account |
+| Challonge | **Generate Post** | nothing; a participant is just a name the organiser typed, so everyone is listed by tag |
+
+Expect a modest hit rate on parry's Twitter side — many players link neither account, and
+anyone who linked neither is listed by tag. Challonge posts are written to
+`Results_Posts/{Event Name} Post.txt`, with no platform in the name.
 
 **Notes** *(collapsible)*
 
@@ -379,6 +533,8 @@ Requires the project to be a Git checkout (cloned, not a downloaded ZIP). Detect
 
 ## CLI Usage
 
+### Generating, and start.gg
+
 ```bash
 # Generate thumbnails (run from inside Rivals_2_Generator/)
 python "Python_Scripts\generate_rivals_thumbnail.py" -e "Straight Into The Abyss 41"
@@ -389,7 +545,8 @@ python "Python_Scripts\generate_rivals_thumbnail.py" -e "Straight Into The Abyss
 # Fetch match data from start.gg
 python "Python_Scripts\fetch_sets.py" tournament/straight-into-the-abyss-41/event/rivals-2-singles --name "Straight Into The Abyss 41" --out "Vod_Names\Straight Into The Abyss 41 Names.txt"
 
-# ...add --abbrev to shorten lines over 100 chars (writes an "# ABBREV:" header the generator reads)
+# ...add --abbrev to record an "# ABBREV:" header; the GUI applies it when copying a
+# line over 100 chars. The lines themselves always spell the event out in full.
 python "Python_Scripts\fetch_sets.py" tournament/straight-into-the-abyss-41/event/rivals-2-singles --name "Straight Into The Abyss 41" --abbrev "SITA 41" --out "Vod_Names\Straight Into The Abyss 41 Names.txt"
 
 # Fetch top 8 bracket data
@@ -404,15 +561,59 @@ python "Python_Scripts\download_rivals_renders.py" --characters Ranno Clairen --
 CLI flags for `generate_rivals_thumbnail.py`:
 - `-e, --event` — Event name string (required; must match a series in `populate_rivals_globals.py`)
 - `-o, --output_file` — File to log missing player/character entries (omit to print to console)
+- `-v, --vod-file` — Read match lines from this file instead of `{event} Names.txt`
+- `-c, --config-file` — Names file whose per-file thumbnail config to apply (used with `-v`)
 
-**parry.gg** events are supported by their own fetchers, `fetch_parrygg_sets.py` and
-`fetch_parrygg_top8.py` (wrapped by `CMD_Scripts\Fetch_Parrygg_Sets.cmd` /
-`Fetch_Parrygg_Top8.cmd`). They write the same file formats as the start.gg fetchers, so
-everything downstream — thumbnails, Top 8 graphics — works identically. They are not yet
-wired into the GUI.
+### parry.gg
 
-`CMD_Scripts/` and `Event_Generation/` hold ready-made batch wrappers for the established
-series, if you prefer double-clicking to typing.
+Addresses a **tournament**, so the bracket inside it is picked with `--event` (0-based
+index, or an event slug). Needs `parrygg.api.key` in `app.properties`.
+
+```bash
+python "Python_Scripts\fetch_parrygg_sets.py" fan-the-flames-2-01a02b45 --event 0 --name "Fan The Flames 2" --abbrev "FTF 2" --out "Vod_Names\Fan The Flames 2 Names.txt"
+python "Python_Scripts\fetch_parrygg_top8.py" fan-the-flames-2-01a02b45 --event 0 --name "Fan The Flames 2" --link "https://parry.gg/..." --out "Top_8_Texts\Fan The Flames Top 8 HTML.txt"
+python "Python_Scripts\fetch_parrygg_post.py" fan-the-flames-2-01a02b45 --platform twitter
+```
+
+### Challonge
+
+Addresses a **tournament** — a bracket URL in either `myorg.challonge.com/my-weekly` or
+`challonge.com/myorg/my-weekly` form is accepted and normalized. Needs
+`challonge.client.id` / `.secret` in `app.properties`.
+
+```bash
+python "Python_Scripts\fetch_challonge_sets.py" myorg-my-weekly --name "My Weekly 42" --out "Vod_Names\My Weekly 42 Names.txt"
+python "Python_Scripts\fetch_challonge_top8.py" myorg-my-weekly --name "My Weekly 42" --out "Top_8_Texts\My Weekly Top 8 HTML.txt"
+python "Python_Scripts\fetch_challonge_post.py" myorg-my-weekly
+
+# Check credentials on their own — token minted, scope granted, tournament readable
+python "Python_Scripts\challonge_api.py"
+python "Python_Scripts\challonge_api.py" myorg-my-weekly
+```
+
+Useful extras: `--debug` on either fetcher dumps the raw tournament, participant and match
+when a field comes back empty; `--no-teams` on the sets fetcher stops `/` in a tag being
+read as a doubles team; `--all` includes matches that aren't complete yet.
+
+Every fetcher writes the same file formats, so everything downstream — thumbnails, Top 8
+graphics, results posts — works identically whichever site the bracket ran on.
+`CMD_Scripts/` holds ready-made wrappers for the parry.gg and Challonge fetchers. Each
+takes the tournament slug and an optional event name, and prints a usage line if run with
+no arguments:
+
+```
+Fetch_Challonge_Sets.cmd my-weekly-42 "My Weekly 42"
+Fetch_Challonge_Top8.cmd my-weekly-42 "My Weekly 42"
+Fetch_Parrygg_Sets.cmd   my-tournament-019c9aeb "My Tournament 5"
+Fetch_Parrygg_Top8.cmd   my-tournament-019c9aeb "My Tournament 5" "https://parry.gg/my-tournament-019c9aeb"
+```
+
+The name defaults to the slug if you leave it off, and `Fetch_Parrygg_Top8.cmd` takes an
+optional third argument — the link printed on the Top 8 graphic. For a tournament's second
+bracket, add `--event N` inside the wrapper or call the script directly.
+
+`Event_Generation/` holds batch wrappers for generating each established series'
+thumbnails, if you prefer double-clicking to typing.
 
 ---
 
@@ -420,9 +621,13 @@ series, if you prefer double-clicking to typing.
 
 ### Via GUI (no Python required)
 
-1. Add the tournament in the **Fetch From Start.gg** tab → Add New Custom Tournament
+1. Add the event in the **Fetch Data** tab → Add A Tournament's Event (pick the site it
+   runs on first)
 2. Configure overlays, fonts, and positions in the **Generate Thumbnails** tab → Thumbnail Config
 3. Settings are saved to `rivals_event_configs.json` automatically
+4. For a second bracket of the same tournament (a doubles alongside the singles), save a
+   second event pointing at that bracket, then set **Applies to → VOD file** in Thumbnail
+   Config so the two can be laid out differently
 
 ### Via Code
 
@@ -458,6 +663,8 @@ if weekly_event.startswith("My Event"):
 | Add new characters | GUI → Character Database tab, or edit `Resources/Character_database.csv` directly |
 | Add/update players | GUI → Player Database tab |
 | Add overlay images | Place in `Resources/Overlays/` or use Browse in Thumbnail Config |
+| Lay out one bracket differently | GUI → Thumbnail Config → **Applies to: VOD file**, then Save Config |
+| Fetch from parry.gg or Challonge | Set credentials in `app.properties`, then pick the site in **Fetch Data → Fetch from** |
 | Sync renders from dragdown.wiki | GUI → Character Renders tab → Download Renders |
 
 ---
@@ -469,18 +676,27 @@ Rivals_2_Generator/
 ├── Launch_Rivals_GUI.vbs          # GUI entry point
 ├── rivals_gui_settings.json       # Persisted GUI state (event numbers, etc.)
 ├── rivals_custom_events.json      # User-added custom tournament series
-├── rivals_event_configs.json      # Per-series thumbnail config overrides
+├── rivals_event_configs.json      # Per-series thumbnail config overrides (plus a
+│                                  #   "__files__" section for per-VOD-file overrides)
 │
 ├── Python_Scripts/
 │   ├── rivals_gui.py              # PySide6 (Qt) GUI
 │   ├── generate_rivals_thumbnail.py  # Thumbnail pipeline
 │   ├── populate_rivals_globals.py    # Per-series config & dispatcher
 │   ├── skin_utils.py              # Shared skin/render helpers (labels, preferred skins)
+│   ├── team_utils.py              # Shared doubles helpers (splitting, per-member chars)
+│   ├── results_post.py            # Shared post shaping (emoji, intro, footers)
 │   ├── fetch_sets.py              # start.gg match data fetcher
 │   ├── fetch_startgg_top8.py      # start.gg top 8 fetcher
+│   ├── fetch_results_tweet.py     # start.gg results post
 │   ├── fetch_parrygg_sets.py      # parry.gg match data fetcher
 │   ├── fetch_parrygg_top8.py      # parry.gg top 8 fetcher
-│   ├── fetch_results_tweet.py     # Results post generator
+│   ├── fetch_parrygg_post.py      # parry.gg results post
+│   ├── challonge_api.py           # Challonge OAuth + shared API access
+│   ├── challonge_rounds.py        # Challonge round-name derivation
+│   ├── fetch_challonge_sets.py    # Challonge match data fetcher
+│   ├── fetch_challonge_top8.py    # Challonge top 8 fetcher
+│   ├── fetch_challonge_post.py    # Challonge results post
 │   ├── download_rivals_renders.py # dragdown.wiki render downloader
 │   ├── copy_rivals_renders_to_full.py
 │   └── helper.py                  # PIL utilities

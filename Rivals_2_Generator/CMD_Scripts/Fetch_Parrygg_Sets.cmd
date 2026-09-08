@@ -1,7 +1,17 @@
-﻿@REM Usage:
-@REM   py -3.12 fetch_parrygg_sets.py <tournament-slug> [--event 0] [--name "My Tournament"] [--out sets.txt]
+@REM Usage:
+@REM   Fetch_Parrygg_Sets.cmd <tournament-slug> ["Tournament Name"]  (add --event N for a tournament's second bracket)
+@REM
+@REM The GUI's Fetch Data tab is the usual way in; this wrapper is for a
+@REM one-off fetch from the command line.
 
 @echo off
 cd /d "%~dp0.."
-py -3.12 "Python_Scripts\fetch_parrygg_sets.py" al-rivals-2-4-2-2026-019d4e84 --name "AL Rivals 2 2-26-2026" --out "Vod_Names\AL Rivals 2 2-26-2026 Names (Parrygg).txt"
+if "%~1"=="" (
+  echo Usage: %~nx0 my-tournament-019c9aeb "My Tournament 5"
+  pause
+  exit /b 1
+)
+set "EVENT_NAME=%~2"
+if "%EVENT_NAME%"=="" set "EVENT_NAME=%~1"
+py -3.12 "Python_Scripts\fetch_parrygg_sets.py" %1 --name "%EVENT_NAME%" --out "Vod_Names\%EVENT_NAME% Names.txt"
 pause
