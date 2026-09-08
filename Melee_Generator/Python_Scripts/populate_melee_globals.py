@@ -44,6 +44,13 @@ def readCharDatabase(filename, deliminator=','):
     return char_database
 
 
+#: Reserved key in the event-configs JSON holding per-VOD-file overrides, keyed
+#: by the names file's basename. It lives beside the series keys rather than in
+#: a second file so one save writes one place, and it can never be mistaken for
+#: a series because no event name starts with "__".
+FILE_CONFIG_KEY = "__files__"
+
+
 def readPlayerDatabase(filename, deliminator=',', char_database=None):
     """
     Open and read player database from a file.

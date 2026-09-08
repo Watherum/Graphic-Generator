@@ -12,11 +12,11 @@ Usage:
 import sys
 import argparse
 import requests
-from pathlib import Path
 
-# Force UTF-8 output so emoji characters don't crash on Windows consoles
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+import results_post
+from results_post import strip_sponsor
+
+results_post.force_utf8_stdout()
 
 API_URL = "https://www.start.gg/api/-/gql"
 REQUEST_TIMEOUT = 20.0
@@ -89,18 +89,6 @@ query FetchStandingsPlain($slug: String!, $top: Int!) {
 }
 """
 
-# Standard double-elim top 8: 5th/6th both show 5th, 7th/8th both show 7th.
-PLACEMENT_EMOJIS = {
-    1: "🥇",
-    2: "🥈",
-    3: "🥉",
-    4: "4️⃣",
-    5: "5️⃣",
-    6: "5️⃣",
-    7: "7️⃣",
-    8: "7️⃣",
-}
-
 PLATFORM_QUERY = {
     "twitter": ("FetchStandingsTwitter", STANDINGS_QUERY_TWITTER),
     "discord": ("FetchStandingsDiscord", STANDINGS_QUERY_DISCORD),
@@ -150,12 +138,6 @@ def fetch_standings(slug: str, top: int, platform: str) -> tuple[str, list]:
     return ev.get("name", ""), nodes
 
 
-def strip_sponsor(name: str) -> str:
-    if " | " in name:
-        return name.split(" | ", 1)[1]
-    return name
-
-
 def get_social_handle(entrant_node: dict, platform: str) -> str:
     """Return '@handle' if the player has linked the platform account; otherwise empty string."""
     entrant = entrant_node.get("entrant") or {}
@@ -168,41 +150,18 @@ def get_social_handle(entrant_node: dict, platform: str) -> str:
     return ""
 
 
-def placement_emoji(rank: int) -> str:
-    return PLACEMENT_EMOJIS.get(rank, f"{rank}.")
-
-
 def build_post(tournament_name: str, nodes: list, platform: str,
-               intro_tmpl: str, next_date: str, series_link: str, vods_link: str) -> str:
-    lines = []
-
-    intro = intro_tmpl.replace("{name}", tournament_name)
-    lines.append(intro)
-    lines.append("")
-
-    nodes_sorted = sorted(nodes, key=lambda n: n.get("placement", 999))
-    for node in nodes_sorted:
-        rank = node.get("placement", 0)
+               intro_tmpl: str, next_date: str, series_link: str,
+               vods_link: str) -> str:
+    """Adapt start.gg standings nodes to the shared post builder."""
+    entries = []
+    for node in nodes:
         raw_name = (node.get("entrant") or {}).get("name") or "?"
-        player = strip_sponsor(raw_name)
         handle = get_social_handle(node, platform)
-        display = handle if handle else player
-        emoji = placement_emoji(rank)
-        lines.append(f"{emoji} {display}")
-
-    lines.append("")
-    if next_date and series_link:
-        lines.append(f"The next bracket is {next_date}! {series_link}")
-    elif next_date:
-        lines.append(f"The next bracket is {next_date}!")
-    elif series_link:
-        lines.append(series_link)
-
-    if vods_link:
-        lines.append("")
-        lines.append(f"Vods: {vods_link}")
-
-    return "\n".join(lines)
+        entries.append((node.get("placement", 0),
+                        handle if handle else strip_sponsor(raw_name)))
+    return results_post.build_post(tournament_name, entries, intro_tmpl,
+                                   next_date, series_link, vods_link)
 
 
 def main():
@@ -235,16 +194,7 @@ def main():
     post = build_post(tournament_name, nodes, args.platform,
                       args.intro, args.next, args.link, args.vods)
 
-    if args.out:
-        out_path = Path(args.out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(post + "\n", encoding="utf-8")
-        print(f"Wrote to {args.out}", file=sys.stderr)
-
-    # Always print post to stdout so it appears in GUI console
-    print(f"\n--- Results Post ({args.platform}) ---")
-    print(post)
-    print("-------------------------------")
+    results_post.emit(post, args.out, args.platform)
 
 
 if __name__ == "__main__":
