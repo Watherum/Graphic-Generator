@@ -777,6 +777,19 @@ def _is_set_line(text: str) -> bool:
     return bool(t) and not t.startswith("#")
 
 
+ABBREV_PREFIX = "# ABBREV:"
+
+
+def _is_abbrev_line(text: str) -> bool:
+    """The '# ABBREV:' header row -- the one comment with a meaning."""
+    return text.strip().upper().startswith(ABBREV_PREFIX)
+
+
+def _abbrev_of_line(text: str) -> str:
+    """'# ABBREV: SITA 65' -> 'SITA 65'."""
+    return text.split(":", 1)[1].strip() if ":" in text else ""
+
+
 def _muted(text: str) -> QtWidgets.QLabel:
     lbl = QtWidgets.QLabel(text)
     lbl.setObjectName("muted")
@@ -1163,8 +1176,12 @@ def _vod_shorten_flags(plain: str, copied: str) -> tuple[bool, bool]:
     """(abbreviated, characters dropped) for a copied line.
 
     Skins coming off is neither -- they are never part of a title, so nothing was
-    given up by removing them.
+    given up by removing them. Nor is the '# ABBREV:' header shedding its prefix:
+    copying it hands back the abbreviation it exists to carry, which is the whole
+    value rather than a shortened one.
     """
+    if _is_abbrev_line(plain):
+        return (False, False)
     return (plain.split(" - ")[0] != copied.split(" - ")[0],
             "(" in plain and "(" not in copied)
 
@@ -1306,8 +1323,11 @@ class VodModel(QtCore.QAbstractTableModel):
             plain = strip_skins(row["text"]).strip()
             copied = self.copy_text(row["text"]).strip()
             length = len(copied)
+            # The header is not a title, so neither the shortening colours nor
+            # the length limit apply to it.
+            header = _is_abbrev_line(row["text"])
             abbreviated, dropped = _vod_shorten_flags(plain, copied)
-            over = length > MAX_LINE_LEN
+            over = length > MAX_LINE_LEN and not header
             if role == Qt.ItemDataRole.DisplayRole:
                 return f"{length}/{MAX_LINE_LEN}"
             if role == Qt.ItemDataRole.TextAlignmentRole:
@@ -1333,6 +1353,9 @@ class VodModel(QtCore.QAbstractTableModel):
                 if abbreviated:
                     return (f"{len(plain)} characters as written, abbreviated to {length} "
                             f"on copy:\n{copied}")
+                if header:
+                    return (f"The abbreviation this file's lines are shortened with.\n"
+                            f"Copies as: {copied}")
                 return ("Length of this line as a YouTube title. Per-set skins are "
                         "not counted — they are stripped before copying")
         if col == 1 and role == Qt.ItemDataRole.ToolTipRole:
@@ -1401,8 +1424,18 @@ class VodModel(QtCore.QAbstractTableModel):
         self.dataChanged.emit(self.index(0, 0),
                               self.index(len(self._rows) - 1, 5))
 
-    def delete_marked(self) -> int:
-        keep = [r for r in self._rows if not r["checked"]]
+    def _delete_rows(self, doomed) -> int:
+        """Drop every row *doomed* selects, except the '# ABBREV:' header.
+
+        That header is file bookkeeping rather than a set, and losing it takes
+        the abbreviation away from every line left behind, so neither bulk
+        delete may take it whatever its check-mark says. Deleting it on purpose
+        is still possible -- right-click Delete line, or clear the series'
+        Abbreviation field, which rewrites the header through
+        :meth:`set_abbrev_header`.
+        """
+        keep = [r for r in self._rows
+                if not doomed(r) or _is_abbrev_line(r["text"])]
         removed = len(self._rows) - len(keep)
         if removed:
             self.beginResetModel()
@@ -1411,15 +1444,11 @@ class VodModel(QtCore.QAbstractTableModel):
             self.contentChanged.emit()
         return removed
 
+    def delete_marked(self) -> int:
+        return self._delete_rows(lambda r: r["checked"])
+
     def delete_unmarked(self) -> int:
-        keep = [r for r in self._rows if r["checked"]]
-        removed = len(self._rows) - len(keep)
-        if removed:
-            self.beginResetModel()
-            self._rows = keep
-            self.endResetModel()
-            self.contentChanged.emit()
-        return removed
+        return self._delete_rows(lambda r: not r["checked"])
 
     def delete_row(self, r: int):
         if 0 <= r < len(self._rows):
@@ -1453,7 +1482,7 @@ class VodModel(QtCore.QAbstractTableModel):
         """
         line = f"# ABBREV: {header}".rstrip() if header else ""
         for r, row in enumerate(self._rows):
-            if row["text"].strip().upper().startswith("# ABBREV:"):
+            if _is_abbrev_line(row["text"]):
                 if row["text"] == line:
                     return False
                 if line:
@@ -4202,8 +4231,8 @@ class RivalsWindow(QtWidgets.QMainWindow):
         self._vod_event_name = ""
         for raw in content.splitlines():
             stripped = raw.strip()
-            if stripped.startswith("# ABBREV:"):
-                self._vod_abbrev = stripped[len("# ABBREV:"):].strip()
+            if _is_abbrev_line(stripped):
+                self._vod_abbrev = _abbrev_of_line(stripped)
             elif stripped and not stripped.startswith("#") and " - " in stripped:
                 self._vod_event_name = stripped.split(" - ")[0].strip()
                 break
@@ -4224,8 +4253,8 @@ class RivalsWindow(QtWidgets.QMainWindow):
         """The abbreviation the loaded rows currently spell, '' if they have none."""
         for r in range(self._vod_model.rowCount()):
             text = self._vod_model.text_at(r).strip()
-            if text.upper().startswith("# ABBREV:"):
-                return text.split(":", 1)[1].strip()
+            if _is_abbrev_line(text):
+                return _abbrev_of_line(text)
         return ""
 
     def _abbrev_base(self, header: str, event_name: str) -> str:
@@ -4333,6 +4362,10 @@ class RivalsWindow(QtWidgets.QMainWindow):
         is copied as it is and flagged yellow in the Len column -- what to give
         up next is the user's call.
         """
+        if _is_abbrev_line(text):
+            # The header exists to carry the abbreviation, so copying that row
+            # is asking for the value, not for the bookkeeping around it.
+            return _abbrev_of_line(text)
         text = strip_skins(text)
         if len(text) <= MAX_LINE_LEN:
             return text

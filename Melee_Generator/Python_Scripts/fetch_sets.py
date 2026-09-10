@@ -28,11 +28,11 @@ HEADERS = {
 }
 
 QUERY = """
-query FetchSets($slug: String!, $page: Int!) {
+query FetchSets($slug: String!, $page: Int!, $perPage: Int!) {
   event(slug: $slug) {
     name
     videogame { name }
-    sets(page: $page, perPage: 40, sortType: RECENT) {
+    sets(page: $page, perPage: $perPage, sortType: RECENT) {
       pageInfo { totalPages }
       nodes {
         id
@@ -58,7 +58,15 @@ query FetchSets($slug: String!, $page: Int!) {
 """
 
 
-def fetch_all_sets(slug: str) -> tuple[dict, list]:
+class _ComplexityError(RuntimeError):
+    """start.gg refused the page because it would return too many objects."""
+
+
+def _is_complexity_error(errors) -> bool:
+    return any("complexity" in str((e or {}).get("message", "")).lower() for e in (errors or []))
+
+
+def _fetch_sets_at(slug: str, per_page: int) -> tuple[dict, list]:
     all_nodes = []
     event_info = {}
     page = 1
@@ -67,7 +75,7 @@ def fetch_all_sets(slug: str) -> tuple[dict, list]:
     while page <= total_pages:
         payload = {
             "operationName": "FetchSets",
-            "variables": {"slug": slug, "page": page},
+            "variables": {"slug": slug, "page": page, "perPage": per_page},
             "query": QUERY,
         }
         for attempt in range(5):
@@ -78,6 +86,8 @@ def fetch_all_sets(slug: str) -> tuple[dict, list]:
                 continue
             out = r.json()
             if out.get("errors"):
+                if _is_complexity_error(out["errors"]):
+                    raise _ComplexityError(str(out["errors"]))
                 raise RuntimeError("GraphQL error: " + str(out["errors"]))
             ev = (out.get("data") or {}).get("event")
             if not ev:
@@ -94,6 +104,26 @@ def fetch_all_sets(slug: str) -> tuple[dict, list]:
         page += 1
 
     return event_info, all_nodes
+
+
+# A page's cost depends on the sets in it -- how many games each has, and how many
+# players each entrant fields -- so no fixed perPage is safe for every bracket.
+# A big doubles bracket blows the 1000-object ceiling at 40, so back off and retry.
+PER_PAGE_STEPS = (40, 25, 15, 8, 4, 2, 1)
+
+
+def fetch_all_sets(slug: str) -> tuple[dict, list]:
+    last = None
+    for per_page in PER_PAGE_STEPS:
+        try:
+            return _fetch_sets_at(slug, per_page)
+        except _ComplexityError as exc:
+            last = exc
+            print(
+                f"Query too complex at perPage={per_page}; retrying smaller...",
+                file=sys.stderr,
+            )
+    raise RuntimeError("GraphQL error: " + str(last))
 
 
 def strip_sponsor(name: str) -> str:

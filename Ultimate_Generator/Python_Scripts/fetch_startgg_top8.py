@@ -42,9 +42,9 @@ query FetchStandings($slug: String!, $top: Int!) {
 """
 
 SETS_QUERY = """
-query FetchSets($slug: String!, $page: Int!) {
+query FetchSets($slug: String!, $page: Int!, $perPage: Int!) {
   event(slug: $slug) {
-    sets(page: $page, perPage: 50, sortType: RECENT) {
+    sets(page: $page, perPage: $perPage, sortType: RECENT) {
       pageInfo { totalPages }
       nodes {
         slots {
@@ -63,12 +63,22 @@ query FetchSets($slug: String!, $page: Int!) {
 """
 
 
+class _ComplexityError(RuntimeError):
+    """start.gg refused the page because it would return too many objects."""
+
+
+def _is_complexity_error(errors) -> bool:
+    return any("complexity" in str((e or {}).get("message", "")).lower() for e in (errors or []))
+
+
 def gql_post(payload: dict) -> dict:
     for attempt in range(5):
         r = requests.post(API_URL, json=payload, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         if r.status_code == 200:
             out = r.json()
             if out.get("errors"):
+                if _is_complexity_error(out["errors"]):
+                    raise _ComplexityError(str(out["errors"]))
                 raise RuntimeError("GraphQL error: " + str(out["errors"]))
             return out
         if attempt == 4:
@@ -93,14 +103,14 @@ def fetch_standings(slug: str, top: int) -> tuple[dict, list]:
     return event_info, nodes
 
 
-def fetch_all_sets(slug: str) -> list:
+def _fetch_sets_at(slug: str, per_page: int) -> list:
     all_nodes = []
     page = 1
     total_pages = 1
     while page <= total_pages:
         payload = {
             "operationName": "FetchSets",
-            "variables": {"slug": slug, "page": page},
+            "variables": {"slug": slug, "page": page, "perPage": per_page},
             "query": SETS_QUERY,
         }
         out = gql_post(payload)
@@ -110,6 +120,26 @@ def fetch_all_sets(slug: str) -> list:
         all_nodes.extend(sets_block.get("nodes") or [])
         page += 1
     return all_nodes
+
+
+# A page's cost depends on the sets in it -- how many games each has, and how many
+# characters each reports -- so no fixed perPage is safe for every bracket. Back off
+# and retry rather than failing the run on start.gg's 1000-object ceiling.
+PER_PAGE_STEPS = (50, 30, 20, 10, 5, 2, 1)
+
+
+def fetch_all_sets(slug: str) -> list:
+    last = None
+    for per_page in PER_PAGE_STEPS:
+        try:
+            return _fetch_sets_at(slug, per_page)
+        except _ComplexityError as exc:
+            last = exc
+            print(
+                f"Query too complex at perPage={per_page}; retrying smaller...",
+                file=sys.stderr,
+            )
+    raise RuntimeError("GraphQL error: " + str(last))
 
 
 def strip_sponsor(name: str) -> str:

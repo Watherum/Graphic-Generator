@@ -1,13 +1,13 @@
 {
   "last_event_nums": {
-    "Immortal Fight Night": "291",
-    "Straight Into The Abyss": "64"
+    "Immortal Fight Night": "292",
+    "Straight Into The Abyss": "65"
   },
   "abbrevs": {
     "Immortal Fight Night": "IFN",
     "Straight Into The Abyss": "SITA"
   },
-  "last_thumb_series": "Twist of Fate",
+  "last_thumb_series": "Straight Into The Abyss",
   "last_posts_series": "Straight Into The Abyss",
   "posts_cfg": {
     "Straight Into The Abyss": {
@@ -99,5 +99,5 @@
     "Straight Into The Abyss": false,
     "Immortal Fight Night": false
   },
-  "fetch_provider": "parrygg"
+  "fetch_provider": "startgg"
 }
