@@ -93,7 +93,7 @@
         <!-- Character renders (sit between the box layers and the text overlay) -->
         <img id="place-1-render" class="render" style="top: 32%;  left: 3%;    height: 55%;" alt=""/>
         <img id="place-2-render" class="render" style="top: 27%;  left: 33%;   height: 37%;" alt=""/>
-        <img id="place-3-render" class="render" style="top: 28%;  left: 56.5%;   height: 36%;" alt=""/>
+        <img id="place-3-render" class="render" style="top: 28%;  left: 56%;   height: 36%;" alt=""/>
         <img id="place-4-render" class="render" style="top: 27%;  left: 77%;   height: 37%;" alt=""/>
         <img id="place-5-render" class="render" style="top: 66%;  left: 34%;   height: 26%;" alt=""/>
         <img id="place-6-render" class="render" style="top: 66%;  left: 50%;   height: 27%;" alt=""/>
@@ -123,10 +123,10 @@
         <!-- Player names -->
         <span id="place-1-name" class="label" style="top: 87%;   left: 17%;    font-size: 65px;"></span>
         <span id="place-2-name" class="label" style="top: 55.8%; left: 43.5%; font-size: 32px;"></span>
-        <span id="place-3-name" class="label" style="top: 55.8%; left: 65.6%; font-size: 40px;"></span>
+        <span id="place-3-name" class="label" style="top: 55.8%; left: 65.5%; font-size: 40px;"></span>
         <span id="place-4-name" class="label" style="top: 55.8%; left: 87.5%; font-size: 40px;"></span>
-        <span id="place-5-name" class="label" style="top: 89.5%;   left: 40.8%; font-size: 28px;"></span>
-        <span id="place-6-name" class="label" style="top: 89%;   left: 57.5%; font-size: 27px;"></span>
+        <span id="place-5-name" class="label" style="top: 88.5%;   left: 40.8%; font-size: 28px; white-space: normal;"></span>
+        <span id="place-6-name" class="label" style="top: 89%;   left: 57.5%; font-size: 35px;"></span>
         <span id="place-7-name" class="label" style="top: 89%;   left: 74%; font-size: 35px;"></span>
         <span id="place-8-name" class="label" style="top: 89%;   left: 90.5%; font-size: 35px;"></span>
 
@@ -136,8 +136,8 @@
         <span id="place-3-sponsor" class="label sponsor" style="top: 53.4%; left: 60%; font-size: 25px;"></span>
         <span id="place-4-sponsor" class="label sponsor" style="top: 53.4%; left: 81.6%; font-size: 25px;"></span>
         <span id="place-5-sponsor" class="label sponsor" style="top: 86.3%; left: 40%; font-size: 22px;"></span>
-        <span id="place-6-sponsor" class="label sponsor" style="top: 86.3%; left: 56%; font-size: 22px;"></span>
-        <span id="place-7-sponsor" class="label sponsor" style="top: 86.3%; left: 72%; font-size: 22px;"></span>
+        <span id="place-6-sponsor" class="label sponsor" style="top: 86.3%; left: 55%; font-size: 22px;"></span>
+        <span id="place-7-sponsor" class="label sponsor" style="top: 86.3%; left: 73%; font-size: 22px;"></span>
         <span id="place-8-sponsor" class="label sponsor" style="top: 86.3%; left: 89%; font-size: 22px;"></span>
     </div>
 
@@ -291,8 +291,15 @@
             const maxWidth   = canvas.offsetWidth  * maxWidthPct;
             const maxHeight  = canvas.offsetHeight * maxHeightPct;
 
+            // The per-slot Wrap checkbox writes white-space:normal inline. A
+            // label is absolutely positioned with no width, so its shrink-to-fit
+            // box is as wide as the canvas allows and that declaration on its own
+            // never broke a line. Ticking the box means "put this name on more
+            // than one line", so the break is forced regardless of the width budget.
+            const baseWs = el.dataset.fitBaseWs || '';
+            const forceWrap = baseWs === 'normal' || baseWs === 'pre-line' || baseWs === 'pre-wrap';
             let wrapped = false;
-            if (allowWrap && el.scrollWidth > maxWidth) {
+            if ((allowWrap && el.scrollWidth > maxWidth) || forceWrap) {
                 const spaceIdx = el.textContent.lastIndexOf(' ');
                 if (spaceIdx !== -1) {
                     const full = el.textContent;
@@ -310,7 +317,12 @@
             // once measuring was honest every name was pulled a few px under its
             // configured size no matter how short the tag was.
             let size = base;
-            while ((el.scrollWidth > maxWidth || (wrapped && el.scrollHeight > maxHeight))
+            // A wrap the user asked for is exempt from the height budget: that
+            // budget fits one line, so applying it to a deliberate two-line name
+            // shrinks it back down (28px -> 19px on the 5th slot) and undoes the
+            // very thing the checkbox was ticked for. The size is theirs to set.
+            while ((el.scrollWidth > maxWidth
+                    || (wrapped && !forceWrap && el.scrollHeight > maxHeight))
                    && size > 8) {
                 size -= 1;
                 el.style.fontSize = size + 'px';

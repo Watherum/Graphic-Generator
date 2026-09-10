@@ -295,8 +295,15 @@
             const maxWidth   = canvas.offsetWidth  * maxWidthPct;
             const maxHeight  = canvas.offsetHeight * maxHeightPct;
 
+            // The per-slot Wrap checkbox writes white-space:normal inline. A
+            // label is absolutely positioned with no width, so its shrink-to-fit
+            // box is as wide as the canvas allows and that declaration on its own
+            // never broke a line. Ticking the box means "put this name on more
+            // than one line", so the break is forced regardless of the width budget.
+            const baseWs = el.dataset.fitBaseWs || '';
+            const forceWrap = baseWs === 'normal' || baseWs === 'pre-line' || baseWs === 'pre-wrap';
             let wrapped = false;
-            if (allowWrap && el.scrollWidth > maxWidth) {
+            if ((allowWrap && el.scrollWidth > maxWidth) || forceWrap) {
                 const spaceIdx = el.textContent.lastIndexOf(' ');
                 if (spaceIdx !== -1) {
                     const full = el.textContent;
@@ -314,7 +321,12 @@
             // once measuring was honest every name was pulled a few px under its
             // configured size no matter how short the tag was.
             let size = base;
-            while ((el.scrollWidth > maxWidth || (wrapped && el.scrollHeight > maxHeight))
+            // A wrap the user asked for is exempt from the height budget: that
+            // budget fits one line, so applying it to a deliberate two-line name
+            // shrinks it back down (28px -> 19px on the 5th slot) and undoes the
+            // very thing the checkbox was ticked for. The size is theirs to set.
+            while ((el.scrollWidth > maxWidth
+                    || (wrapped && !forceWrap && el.scrollHeight > maxHeight))
                    && size > 8) {
                 size -= 1;
                 el.style.fontSize = size + 'px';
