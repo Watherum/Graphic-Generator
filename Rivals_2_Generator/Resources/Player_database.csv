@@ -5,8 +5,8 @@
 # Prefix an alt with * to mark it preferred (used when a VOD line names no skin).,,,,,,,,,,,,,,,,,,
 # With no * the first listed skin wins. Name a skin per set in the VOD line: Ranno:Abyss Midnight,,,,,,,,,,,,,,,,,,
 Watherum,Clairen,T_Cla_Default_Black_CSP,Galvan,T_Gal_Genesis_Red_CSP,Kragg,T_Kra_Default_Abyssal_CSP,Loxodont,T_Lox_DarkFuture_Neutral_CSP,Ranno,*T_Ran_Tuxedo_Neutral_CSP,Ranno,T_Ran_Abyss_Red_CSP,Ranno,T_Ran_Goo_Red_CSP,Zetterburn,T_Zet_Champion_Red_CSP
-Monocle Gentlesir,Maypul,T_May_Creator_Neutral_CSP,Clairen,T_Cla_Abyss_Green_CSP,La Reina,T_Lar_Hornet_Green_CSP,Kragg,T_Kra_Salaryman_Green_CSP
-Average Alex,Absa,T_Abs_Summer_Green_CSP,Clairen,*T_Cla_Leopard_Pink_CSP,Clairen,T_Cla_Default_Neutral_CSP,Etalus,T_Eta_Default_Green_CSP,Fleet,T_Fle_Ranger_Green_CSP,Forsburn,T_For_Default_Neutral_CSP,Galvan,*T_Gal_Champion_Green_CSP,Galvan,T_Gal_Default_Green_CSP,Galvan,T_Gal_Default_CoolBlue_CSP,Gouie,T_Gou_Louie_Neutral_CSP,Kragg,*T_Kra_Default_Neutral_CSP,La Reina,T_Lar_Default_Neutral_CSP,Loxodont,*T_Lox_Summer_Blue_CSP,Maypul,T_May_Primal_Orange_CSP,Olympia,T_Oly_Default_Neutral_CSP,Olympia,*T_Oly_PoolParty_White_CSP,Orcane,T_Orc_Prehistoric_CoolBlue_CSP,Random,T_Ran_Blue,Ranno,*T_Ran_Lovers_CoolBlue_CSP,Ranno,T_Ran_Lovers_Red_CSP,Slade,*T_Sla_Default_Neutral_CSP,Slade,T_Sla_Default_CoolBlue_CSP,Wrastor,T_Wra_Default_Neutral_CSP,Zetterburn,T_Zet_Default_Neutral_CSP,Ranno,T_Ran_Tuxedo_Neutral_CSP,Ranno,T_Ran_LowPoly_Neutral_CSP,Loxodont,T_Lox_Default_Neutral_CSP,Ranno,T_Ran_LowPoly_Red_CSP,Slade,T_Sla_PoolParty_Blue_CSP,Ranno,T_Ran_Default_Neutral_CSP,Kragg,T_Kra_LowPoly_Blue_CSP
+Monocle Gentlesir,Maypul,*T_May_Creator_Neutral_CSP,Clairen,T_Cla_Abyss_Green_CSP,La Reina,T_Lar_Hornet_Green_CSP,Kragg,T_Kra_Salaryman_Green_CSP,Maypul,T_May_Creator_Creator_CSP
+Average Alex,Absa,T_Abs_Summer_Green_CSP,Clairen,*T_Cla_Leopard_Pink_CSP,Clairen,T_Cla_Default_Neutral_CSP,Etalus,T_Eta_Default_Green_CSP,Fleet,T_Fle_Ranger_Green_CSP,Forsburn,T_For_Default_Neutral_CSP,Galvan,*T_Gal_Champion_Green_CSP,Galvan,T_Gal_Default_Green_CSP,Galvan,T_Gal_Default_CoolBlue_CSP,Gouie,T_Gou_Louie_Neutral_CSP,Kragg,*T_Kra_Default_Neutral_CSP,La Reina,T_Lar_Default_Neutral_CSP,Loxodont,*T_Lox_Summer_Blue_CSP,Maypul,T_May_Primal_Orange_CSP,Olympia,T_Oly_Default_Neutral_CSP,Olympia,*T_Oly_PoolParty_White_CSP,Orcane,T_Orc_Prehistoric_CoolBlue_CSP,Random,T_Ran_Blue,Ranno,*T_Ran_Lovers_CoolBlue_CSP,Ranno,T_Ran_Lovers_Red_CSP,Slade,*T_Sla_Default_Neutral_CSP,Slade,T_Sla_Default_CoolBlue_CSP,Wrastor,T_Wra_Default_Neutral_CSP,Zetterburn,T_Zet_Default_Neutral_CSP,Ranno,T_Ran_Tuxedo_Neutral_CSP,Ranno,T_Ran_LowPoly_Neutral_CSP,Loxodont,T_Lox_Default_Neutral_CSP,Ranno,T_Ran_LowPoly_Red_CSP,Slade,T_Sla_PoolParty_Blue_CSP,Ranno,T_Ran_Default_Neutral_CSP,Kragg,T_Kra_LowPoly_Blue_CSP,Clairen,T_Cla_Cyber_Red_CSP,Clairen,T_Cla_Cyber_Green_CSP
 ZeeBee,Kragg,T_Kra_Default_Blue_CSP,Random,T_Ran_Blue,Etalus,T_Eta_Default_Green_CSP,Clairen,T_Cla_Default_Blue_CSP,Zetterburn,T_Zet_Default_Red_CSP,Orcane,T_Orc_Default_Red_CSP,Slade,T_Sla_Abyss_Midnight_CSP,Loxodont,*T_Lox_Default_Black_CSP,Loxodont,T_Lox_Hockey_Blue_CSP,Ranno,T_Ran_Default_Blue_CSP
 Mars,Clairen,T_Cla_Default_Neutral_CSP
 Crowbar,Kragg,T_Kra_Soccer_Neutral_CSP,Zetterburn,T_Zet_Default_Blue_CSP,Random,T_Ran_Blue
@@ -53,7 +53,7 @@ Mkok,Zetterburn,T_Zet_Default_Neutral_CSP
 Virgo,Orcane,T_Orc_Clownfish_Green_CSP,Olympia,T_Oly_Lovers_Green_CSP
 Spyker,Zetterburn,T_Zet_Lovers_Neutral_CSP
 JuanSolo,Loxodont,T_Lox_Lovers_Mint_CSP
-BGunn,Clairen,T_Cla_Champion_Blue_CSP,Kragg,T_Kra_Easter_Neutral_CSP,Olympia,T_Oly_Opossum_Blue_CSP,Olympia,T_Oly_Evo_Blue_CSP,Olympia,T_Oly_PoolParty_Summer_CSP,Olympia,T_Oly_LowPoly_Blue_CSP,Olympia,*T_Oly_LowPoly_Black_CSP
+BGunn,Clairen,T_Cla_Champion_Blue_CSP,Kragg,T_Kra_Easter_Neutral_CSP,Olympia,T_Oly_Opossum_Blue_CSP,Olympia,T_Oly_Evo_Blue_CSP,Olympia,T_Oly_PoolParty_Summer_CSP,Olympia,T_Oly_LowPoly_Blue_CSP,Olympia,*T_Oly_LowPoly_Black_CSP,Olympia,T_Oly_Lovers_Neutral_CSP
 Sourkroutt,Clairen,T_Cla_Default_Black_CSP
 leggy145,Kragg,T_Kra_Rockstar_Neutral_CSP
 Godly,Ranno,T_Ran_Champion_Blue_CSP
@@ -145,7 +145,7 @@ Arbs,Kragg,T_Kra_Salaryman_Red_CSP
 LittleBoi,Kragg,T_Kra_LowPoly_Blue_CSP
 Goose,Ranno,T_Ran_Tuxedo_Neutral_CSP
 ProZ,Maypul,T_May_Retro_Red_CSP
-Geo,La Reina,T_Lar_Pajama_Blue_CSP
+Geo,La Reina,T_Lar_Pajama_Blue_CSP,La Reina,*T_Lar_Pajama_Siesta_CSP
 JGamer,Etalus,T_Eta_Champion_Blue_CSP
 LemonCake,Orcane,T_Orc_RootBeerFloat_Green_CSP,Slade,T_Sla_Abyss_Blue_CSP,Clairen,T_Cla_RainyDay_Red_CSP
 the problem causer,Orcane,T_Orc_Default_Brown_CSP
@@ -195,7 +195,7 @@ Jmac,Ranno,T_Ran_Dart_Green_CSP
 Odyssey,Clairen,T_Cla_Default_Black_CSP
 Chrysanthemum,Clairen,T_Cla_Default_CoolBlue_CSP
 Josh H,Fleet,T_Fle_Default_Neutral_CSP
-Phantom,Galvan,T_Gal_Genesis_Neutral_CSP,Galvan,*T_Gal_Genesis_Blue_CSP
+Phantom,Galvan,T_Gal_Genesis_Neutral_CSP,Galvan,*T_Gal_Genesis_Blue_CSP,Random,T_Ran_Blue
 Shnoopy,Ranno,T_Ran_Tuxedo_Pink_CSP
 Retrovel,Maypul,T_May_Sylvan_Green_CSP
 MVShirogane,Clairen,T_Cla_Default_Neutral_CSP
@@ -210,15 +210,17 @@ ZenEspy,Orcane,T_Orc_Axolotl_Blue_CSP
 Goljee,Absa,T_Abs_Default_Black_CSP
 SaintPat,Kragg,T_Kra_Mecha_Green_CSP
 GhostEchoH,Slade,T_Sla_PoolParty_Blue_CSP
-Jupiter,Orcane,*T_Orc_BlueTang_Blue_CSP,Wrastor,T_Wra_EarlyBird_Neutral_CSP,Orcane,T_Orc_LowPoly_Red_CSP,Orcane,T_Orc_Retro_Green_CSP
+Jupiter,Orcane,*T_Orc_BlueTang_Blue_CSP,Wrastor,T_Wra_EarlyBird_Neutral_CSP,Orcane,T_Orc_LowPoly_Red_CSP,Orcane,T_Orc_Retro_Green_CSP,Orcane,T_Orc_LowPoly_Blue_CSP,Orcane,T_Orc_LeopardShark_Neutral_CSP
 relyKD,Maypul,T_May_Pirate_Black_CSP
 CheesyPotato,Kragg,T_Kra_Default_Neutral_CSP
 Cptnyx,Olympia,T_Oly_LowPoly_Blue_CSP
 ShaffNizzle,Clairen,T_Cla_Default_Neutral_CSP,Ranno,T_Ran_Goo_Neutral_CSP
-Osky,La Reina,T_Lar_Lucha_Neutral_CSP
+Osky,La Reina,T_Lar_Lucha_Neutral_CSP,La Reina,*T_Lar_Evo_Neutral_CSP
 | SiX,Zetterburn,T_Zet_Panther_Neutral_CSP
 THE PIZZA GUY,Kragg,T_Kra_Salaryman_Red_CSP
 Cory,Gouie,T_Gou_Default_Pink_CSP
 Uncann,Absa,*T_Abs_Default_Neutral_CSP,Loxodont,*T_Lox_Default_Neutral_CSP,Loxodont,T_Lox_Lovers_White_CSP,Absa,T_Abs_Summer_Red_CSP
 32oz Big Gulp,Ranno,T_Ran_SnowDay_Black_CSP
 | Crowbar,Zetterburn,T_Zet_Default_Black_CSP
+ShockingToaster,Orcane,T_Orc_Default_Mint_CSP
+Oreo,Maypul,T_May_Retro_Neutral_CSP

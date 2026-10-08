@@ -195,13 +195,16 @@
                         chars[charKey] = alt;
                         if (isPreferred) pinned[charKey] = true;
                     }
-                    if (alt && alt.startsWith('T_') && !(charKey in charDefaults)) {
+                    if (alt && alt.startsWith('T_') && alt.endsWith('_CSP') && !(charKey in charDefaults)) {
                         const m = prefixRe.exec(alt);
                         if (m) charDefaults[charKey] = m[1] + '_Default_Neutral_CSP';
                     }
                 }
                 players[playerName.toLowerCase()] = chars;
             }
+            // Random's renders are T_Ran_<Colour> with no _CSP, sharing Ranno's prefix,
+            // so it gets a fixed default instead of a derived one.
+            if (!('random' in charDefaults)) charDefaults['random'] = 'T_Ran_Black';
             return { players, charDefaults };
         }
 
@@ -224,6 +227,8 @@
         function stemForLabel(characterName, label, playerDB, ownStem) {
             const text = (label || '').trim();
             if (/^T_/i.test(text)) return text;      // already a full stem
+            if (characterName.trim().toLowerCase() === 'random')
+                return `T_Ran_${text.replace(/\s+/g, '_')}`;
             const known = ownStem || playerDB.charDefaults[characterName.toLowerCase()] || '';
             const m = /^(T_[A-Za-z]+)_/.exec(known);
             let prefix = m ? m[1] : '';

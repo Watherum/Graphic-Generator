@@ -40,7 +40,7 @@ def char_abbrev(char_name: str) -> str:
 def get_skins_for_char(char_name: str) -> list[str]:
     if not RENDERS_DIR.exists():
         return []
-    if char_name == "Random":
+    if char_name.strip().lower() == "random":
         return sorted(
             f.stem for f in RENDERS_DIR.glob("T_Ran_*.png")
             if not f.stem.endswith("_CSP")
@@ -50,6 +50,13 @@ def get_skins_for_char(char_name: str) -> list[str]:
         f.stem for f in RENDERS_DIR.glob("T_*_CSP.png")
         if f.stem.lower().startswith(prefix)
     )
+
+
+def is_random_stem(stem: str) -> bool:
+    """Random's renders are ``T_Ran_<Colour>`` with no ``_CSP`` -- the only thing
+    telling them apart from Ranno's ``T_Ran_..._CSP``."""
+    stem = (stem or "").strip()
+    return stem.lower().startswith("t_ran_") and not stem.endswith("_CSP")
 
 
 def skin_label(stem: str) -> str:

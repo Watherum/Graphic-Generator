@@ -371,7 +371,8 @@ def createMatches(match_lines, log_file=None, event_name=None, event_short_name=
                 if a_char.upper() in _character_database.keys():
                     a_char = _character_database[a_char.upper()]
                 # Default to Default_Neutral skin; overridden by player database lookup below
-                char_file = _char_default_skin.get(a_char.upper(), a_char)
+                char_file = (_char_default_skin.get(a_char.upper())
+                             or skin_utils.neutral_skin_for(a_char) or a_char)
                 # Lookup character in player database for alt costume
                 if p1_flag:
                     player_name = a_match.p1
@@ -557,8 +558,10 @@ def createCharacterWindow(char_list, win_size, right_bool=False, single_bool=Fal
             # Check if not rgba image
             if a_char_image.mode != 'RGBA':
                 a_char_image = a_char_image.convert('RGBA')
-            # Mirror right-side characters so they face left (toward center)
-            if right_bool:
+            # Mirror right-side characters so they face left (toward center).
+            # Random is a "?" icon, not a character facing a direction, and
+            # mirroring it reverses the glyph.
+            if right_bool and not skin_utils.is_random_stem(a_char):
                 a_char_image = a_char_image.transpose(Image.FLIP_LEFT_RIGHT)
             # Fit to window for specific cases
             if a_render == "Rivals_2_Full_Renders":
@@ -922,7 +925,10 @@ def main(argv):
             if _char_upper in _char_default_skin:
                 continue
             for _skin_file, _ in _skin_entries:
-                if not _skin_file.startswith('T_'):
+                # Only CSP stems name a character's skin family: Random's
+                # T_Ran_Blue shares Ranno's T_Ran prefix, so deriving from it
+                # gave Random a Ranno render.
+                if not _skin_file.startswith('T_') or not _skin_file.endswith('_CSP'):
                     continue
                 _m = _wiki_prefix.match(_skin_file)
                 if _m:

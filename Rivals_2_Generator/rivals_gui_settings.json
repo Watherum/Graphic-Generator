@@ -1,7 +1,7 @@
 {
   "last_event_nums": {
-    "Immortal Fight Night": "295",
-    "Straight Into The Abyss": "68"
+    "Immortal Fight Night": "296",
+    "Straight Into The Abyss": "69"
   },
   "abbrevs": {
     "Immortal Fight Night": "IFN",
@@ -11,9 +11,9 @@
   "last_posts_series": "Straight Into The Abyss",
   "posts_cfg": {
     "Straight Into The Abyss": {
-      "next_date": "2026-10-07",
+      "next_date": "2026-10-14",
       "next_link": "https://start.gg/SITA",
-      "vods": "https://www.youtube.com/playlist?list=PLAA_UnszeIPU",
+      "vods": "https://www.youtube.com/playlist?list=PLKtV3YaK8yvM",
       "has_next": true
     },
     "Immortal Fight Night": {
